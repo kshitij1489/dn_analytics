@@ -1,0 +1,95 @@
+1048	Cup
+637	Waffle Cone
+165	Eggless Banoffee Ice Cream 200ml
+124	Coffee Mascarpone Ice Cream 200ml
+121	Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
+91	Eggless Strawberry Cream Cheese Ice Cream 200ml
+88	Butter Waffle Cone (2pcs)
+86	Monkey Business Ice Cream 200ml
+81	Eggless Paan & Gulkand Ice Cream 200ml
+76	Sunshine Limone Ice Cream 200ml
+73	Old Fashion Vanilla Ice Cream 200ml
+69	Eggless Coffee Mascarpone Ice Cream 200ml
+59	Eggless Coconut & Pineapple 200ml
+52	Eggless Chocolate Overload 200ml
+42	Eggless Banoffee Ice Cream Small Scoop
+40	Pistachio Ice Cream 200ml
+38	Eggless Cherry & Chocolate 200ml
+38	Eggless Cherry &amp; Chocolate Ice Cream Small Scoop
+31	Fig & Orange Ice Cream 200ml
+29	Eggless Strawberry Cream Cheese Small Scoop
+26	Triple Chocolate Ice Cream 200ml
+26	Eggless Chocolate Overload Ice Cream Small Scoop
+26	Eggless Paan &amp; Gulkand Ice Cream Small Scoop
+24	Cakes & Cookies Ice Cream 200ml
+24	Rose Cardamom Ice Cream 200ml
+23	Strawberry Cream Cheese Ice Cream (160gm)
+22	Eggless Coffee Mascarpone Ice Cream Small Scoop
+22	Eggless Chocolate Ice Cream 200ml
+21	Eggless Fig & Orange 200ml
+21	Takeaway Cup
+19	Banoffee Ice Cream (160gm)
+18	Coffee Mascarpone Ice Cream (160gm)
+17	Monkey Business Ice Cream Small Scoop
+15	Old Fashion Vanilla Small Scoop
+15	Eggless Fig & Orange Ice Cream 200ml
+14	Masala Chai Ice Cream 200ml
+14	Eggless Paan &amp; Gulkand Ice Cream 200ml
+14	Bean-to-bar 70% Dark Chocolate Ice Cream (160gm)
+13	Eggless Coconut &amp; Pineapple Small Scoop
+13	Sunshine Limone Ice Cream Small Scoop
+12	Bean To Bar Dark Chocolate Ice Cream Small Scoop
+12	Eggless Just Chocolate 200ml
+12	Dates With Fig & Orange 200ml
+12	Coconut & Pineapple (160gm)
+11	Eggless Just Chocolate Small Scoop
+11	Pistachio Ice Cream Ice Cream Small Scoop
+10	Fig & Orange 200ml
+10	Cakes & Cookies 200ml
+10	Pistachio Ice Cream (160gm)
+10	Cherry & Chocolate (160gm)
+8	Cakes &amp; Cookies Ice Cream Small Scoop
+8	Eggless Coffee Mascarpone Ice Cream (160gm)
+8	Paan & Gulkand Ice Cream (160gm)
+8	Old Fashion Vanilla Ice Cream (160gm)
+8	Eggless Cherry & Chocolate Ice Cream Small Scoop
+7	Coffee Mascarpone Small Scoop
+7	Sunshine Limone Ice Cream (160gm)
+6	Dates & Chocolate 200ml
+6	Dates & Chocolate (160gm)
+6	Fig & Orange (160gm)
+5	Fig &amp; Orange 200ml
+5	Fig &amp; Orange Ice Cream Small Scoop
+5	Eggless Fig &amp; Orange Ice Cream Small Scoop
+5	Monkey Business Ice Cream (160gm)
+5	Eggles Cherry & Chocolate 200ml
+5	Eggless Paan & Gulkand Ice Cream Small Scoop
+4	Dates With Fig & Orange 200ml (eggless)
+4	Dates &amp; Chocolate Small Scoop
+4	Chocolate Overload (160gm)
+4	Masala Chai Ice Cream (160gm)
+4	Rose Cardamom Ice Cream (160gm)
+4	Cakes & Cookies Ice Cream (160gm)
+4	Eggless Coconut & Pineapple Small Scoop
+3	Rose Cardamom Ice Cream Small Scoop
+3	Dates With Fig &amp; Orange Small Scoop
+3	Fig & Orange Ice Cream (160gm)
+3	Chocolate & Orange With Alcohol (160gm)
+3	Fig &amp; Orange Ice Cream 200ml
+2	Cakes &amp; Cookies 200ml
+2	Eggless Fig &amp; Orange 200ml
+2	Eggless Coconut &amp; Pineapple 200ml
+2	Go Bananas Ice Cream 200ml
+2	Eggles Cherry &amp; Chocolate 200ml
+2	Cakes & Cookies (160gm)
+2	Cakes & Cookies Ice Cream Small Scoop
+2	Masala Chai Ice Cream Small Scoop
+1	Cakes &amp; Cookies Ice Cream 200ml
+1	Dates & Chocolate 200ml (eggless)
+1	Eggless Milk Chocolate Ice Cream 200ml
+1	Dates With Fig & Orange (160gm)
+1	Fig &amp; Orange Ice Cream (160gm)
+1	Coconut &amp; Pineapple (160gm)
+1	Eggless Fig & Orange Ice Cream Small Scoop
+1	Just Chocolate (160gm)
+1	Eggless Cherry &amp; Chocolate 200ml
