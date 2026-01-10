@@ -59,7 +59,7 @@ def extract_all_item_names(orders: List[Dict]) -> Dict[str, Counter]:
     }
 
 
-def load_cleaned_menu(filepath: str = "cleaned_menu.csv") -> List[Dict]:
+def load_cleaned_menu(filepath: str = "data/cleaned_menu.csv") -> List[Dict]:
     """Load cleaned menu CSV"""
     if not os.path.exists(filepath):
         print(f"File not found: {filepath}")

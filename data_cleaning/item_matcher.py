@@ -12,7 +12,7 @@ The matching process:
 """
 
 from typing import Dict, Optional, Tuple, List
-from clean_order_item import clean_order_item_name
+from data_cleaning.clean_order_item import clean_order_item_name
 
 
 class ItemMatcher:

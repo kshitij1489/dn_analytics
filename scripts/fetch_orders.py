@@ -4,24 +4,18 @@ Task 1: Fetch Raw JSON Payloads from Django Webhook Server
 This module handles fetching order data from the PetPooja webhook server.
 """
 
-import requests
 import json
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import time
+import sys
+import os
 
-BASE_URL = "https://webhooks.db1-prod-dachnona.store/analytics"
-API_KEY = "f3e1753aa4c44159fa7218a31cd8db1e"
+# Add project root to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-HEADERS = {
-    "X-API-Key": API_KEY,
-}
-
-# Rate limiting: max requests per minute
-MAX_REQUESTS_PER_MINUTE = 60
-REQUEST_DELAY = 1.0  # seconds between requests
-
+from utils.api_client import fetch_stream_raw
 
 def _safe_json_load(value):
     """Safely parse JSON value, handling already-parsed dicts/lists"""
@@ -33,94 +27,6 @@ def _safe_json_load(value):
         return json.loads(value)
     except (TypeError, ValueError):
         return value
-
-
-def fetch_stream_raw(
-    endpoint: str = "orders",
-    limit: int = 500,
-    start_cursor: Optional[int] = 0,
-    max_records: Optional[int] = None,
-    save_to_file: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """
-    Fetch all records from the stream endpoint with pagination.
-    
-    Args:
-        endpoint: API endpoint (default: "orders")
-        limit: Number of records per page (max 500)
-        start_cursor: Starting stream_id (0 for beginning)
-        max_records: Maximum total records to fetch (None = all)
-        save_to_file: Optional path to save JSON file incrementally
-    
-    Returns:
-        List of all fetched records
-    """
-    results = []
-    last_stream_id = start_cursor or 0
-    page_count = 0
-    
-    print(f"Fetching from {endpoint} endpoint...")
-    print(f"Starting from stream_id: {last_stream_id}")
-    
-    while True:
-        # Rate limiting
-        if page_count > 0:
-            time.sleep(REQUEST_DELAY)
-        
-        params = {
-            "limit": min(limit, 500),  # API max is 500
-            "cursor": last_stream_id,
-        }
-        
-        try:
-            resp = requests.get(
-                f"{BASE_URL}/{endpoint}/",
-                headers=HEADERS,
-                params=params,
-                timeout=60,
-            )
-            resp.raise_for_status()
-            
-            payload = resp.json()
-            batch = payload.get("data", [])
-            
-            if not batch:
-                print(f"No more records. Total fetched: {len(results)}")
-                break
-            
-            results.extend(batch)
-            last_stream_id = batch[-1]["stream_id"]
-            page_count += 1
-            
-            print(f"Page {page_count}: Fetched {len(batch)} records (Total: {len(results)})")
-            
-            # Save incrementally if requested
-            if save_to_file and page_count % 10 == 0:
-                _save_json(results, save_to_file)
-            
-            # Check max records limit
-            if max_records and len(results) >= max_records:
-                print(f"Reached max_records limit: {max_records}")
-                results = results[:max_records]
-                break
-            
-            # Check if we got fewer records than requested (last page)
-            if len(batch) < limit:
-                print(f"Last page reached. Total fetched: {len(results)}")
-                break
-                
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching data: {e}")
-            print(f"Retrying in 5 seconds...")
-            time.sleep(5)
-            continue
-    
-    # Final save
-    if save_to_file:
-        _save_json(results, save_to_file)
-        print(f"Saved {len(results)} records to {save_to_file}")
-    
-    return results
 
 
 def fetch_orders_incremental(
@@ -137,11 +43,17 @@ def fetch_orders_incremental(
     Returns:
         List of new orders
     """
-    return fetch_stream_raw(
+    results = fetch_stream_raw(
         endpoint="orders",
         start_cursor=last_stream_id + 1,
-        save_to_file=save_to_file,
     )
+    
+    if save_to_file and results:
+        _save_json(results, save_to_file)
+        print(f"Saved {len(results)} records to {save_to_file}")
+        
+    return results
+
 
 
 def fetch_sample_orders(count: int = 100) -> List[Dict[str, Any]]:

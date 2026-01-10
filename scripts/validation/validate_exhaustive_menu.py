@@ -200,7 +200,7 @@ def fix_common_typos(name: str) -> str:
 # MATCHING FUNCTIONS
 # ============================================================
 
-def load_menu_items(filepath: str = "cleaned_menu.csv") -> Set[str]:
+def load_menu_items(filepath: str = "data/cleaned_menu.csv") -> Set[str]:
     """Load unique menu item names from CSV"""
     names = set()
     

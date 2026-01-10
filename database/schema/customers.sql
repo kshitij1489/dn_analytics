@@ -2,7 +2,7 @@
 -- Customers Table Schema
 -- ============================================================================
 -- This schema defines the customers table for storing customer information.
--- Customers are deduplicated based on phone number (primary identifier).
+-- Customers are deduplicated based on customer name (normalized).
 --
 -- ============================================================================
 
@@ -10,14 +10,15 @@
 -- CUSTOMERS TABLE
 -- ============================================================================
 -- Stores customer information from PetPooja orders.
--- Customers are deduplicated using phone number as primary identifier.
+-- Customers are deduplicated using normalized name as primary identifier.
 
 CREATE TABLE IF NOT EXISTS customers (
     customer_id SERIAL PRIMARY KEY,
     
     -- Customer identification
-    name VARCHAR(255),                         -- Customer name (may be empty for POS orders)
-    phone VARCHAR(20),                          -- Phone number (primary identifier for deduplication)
+    name VARCHAR(255),                         -- Customer name (original, as provided)
+    name_normalized VARCHAR(255),              -- Normalized name (lowercase, trimmed) for deduplication
+    phone VARCHAR(20),                          -- Phone number (optional metadata)
     address TEXT,                              -- Delivery address (may be empty for dine-in/POS)
     gstin VARCHAR(50),                         -- GST identification number (if available)
     
@@ -32,7 +33,7 @@ CREATE TABLE IF NOT EXISTS customers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- Constraints
-    UNIQUE(phone)  -- Phone number is unique identifier (NULL allowed for anonymous customers)
+    UNIQUE(name_normalized)  -- Normalized name is unique identifier
 );
 
 -- ============================================================================
@@ -45,10 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_customers_phone
 CREATE INDEX IF NOT EXISTS idx_customers_name 
     ON customers(name);
 
+CREATE INDEX IF NOT EXISTS idx_customers_name_normalized 
+    ON customers(name_normalized);
+
 CREATE INDEX IF NOT EXISTS idx_customers_last_order_date 
     ON customers(last_order_date);
 
--- Partial index for customers with phone numbers (most queries)
+-- Partial index for customers with phone numbers (for phone-based queries)
 CREATE INDEX IF NOT EXISTS idx_customers_phone_not_null 
     ON customers(phone) 
     WHERE phone IS NOT NULL;
@@ -59,30 +63,34 @@ CREATE INDEX IF NOT EXISTS idx_customers_phone_not_null
 
 COMMENT ON TABLE customers IS 
     'Stores customer information from PetPooja orders. '
-    'Customers are deduplicated using phone number as primary identifier.';
-
-COMMENT ON COLUMN customers.phone IS 
-    'Phone number is the primary identifier for customer deduplication. '
-    'NULL allowed for anonymous customers (e.g., POS orders without phone).';
+    'Customers are deduplicated using normalized name as primary identifier.';
 
 COMMENT ON COLUMN customers.name IS 
-    'Customer name. May be empty for POS orders or anonymous customers.';
+    'Customer name as provided in the order. Original casing and spacing preserved.';
+
+COMMENT ON COLUMN customers.name_normalized IS 
+    'Normalized version of customer name (lowercase, trimmed) used for deduplication. '
+    'This ensures "John Doe", "john doe", and " John Doe " are treated as the same customer.';
+
+COMMENT ON COLUMN customers.phone IS 
+    'Phone number (optional). Multiple customers may share the same phone number, '
+    'or have no phone number at all (NULL).';
 
 COMMENT ON COLUMN customers.address IS 
     'Delivery address. May be empty for dine-in or POS orders.';
 
 COMMENT ON COLUMN customers.total_orders IS 
-    'Denormalized count of total orders. Updated via triggers or application logic.';
+    'Denormalized count of total orders. Updated via application logic.';
 
 COMMENT ON COLUMN customers.total_spent IS 
-    'Denormalized total amount spent. Updated via triggers or application logic.';
+    'Denormalized total amount spent. Updated via application logic.';
 
 -- ============================================================================
 -- EXAMPLE QUERIES
 -- ============================================================================
 
--- Find customer by phone number
--- SELECT * FROM customers WHERE phone = '+919876543210';
+-- Find customer by name (case-insensitive)
+-- SELECT * FROM customers WHERE name_normalized = LOWER(TRIM('John Doe'));
 
 -- Get top customers by total spent
 -- SELECT 
@@ -94,7 +102,6 @@ COMMENT ON COLUMN customers.total_spent IS
 --     first_order_date,
 --     last_order_date
 -- FROM customers
--- WHERE phone IS NOT NULL
 -- ORDER BY total_spent DESC
 -- LIMIT 10;
 
@@ -126,7 +133,5 @@ COMMENT ON COLUMN customers.total_spent IS
 --     END as order_frequency,
 --     COUNT(*) as customer_count
 -- FROM customers
--- WHERE phone IS NOT NULL
 -- GROUP BY order_frequency
 -- ORDER BY customer_count DESC;
-

@@ -1,119 +1,53 @@
-# Analytics Project - Order Management System
+# Analytics Project
 
-Complete order management and analytics pipeline for cafe business.
+This project fetches, cleans, and analyzes order data from the PetPooja webhook server.
 
-## Quick Start
+## 📂 Project Structure
 
-### 1. Fetch Sample Orders
+- **`data/`**: cleaned data files (`cleaned_menu.csv`, `orders.json`) and database (`test_analytics.db`).
+- **`docs/`**: Documentation.
+    - [Setup Guide](docs/setup.md)
+    - [Docker Setup](docs/docker.md)
+    - [Troubleshooting](docs/troubleshooting.md)
+    - [Design Docs](docs/design/)
+- **`utils/`**: Shared utility modules (API client).
+- **`database/`**: Database loading and schema scripts.
+- **`rebuild_menu.py`**: Fetches raw data and regenerates `cleaned_menu.csv`.
+- **`fetch_orders.py`**: Fetches raw order payloads.
+
+## 🚀 Quick Start
+
+### Local Setup
+Refer to [docs/setup.md](docs/setup.md) for full instructions.
+
+### Docker Setup
+Refer to [docs/docker.md](docs/docker.md).
+```bash
+make up       # Start services
+make logs     # View logs
+make down     # Stop services
+```
+
+## 🛠 Common Tasks
+
+### 1. Rebuild Menu Data
+Fetch the latest orders and update the standardized menu:
+```bash
+python3 rebuild_menu.py
+```
+Output: `data/cleaned_menu.csv`
+
+### 2. Fetch Raw Orders
 ```bash
 python3 fetch_orders.py
 ```
-This will fetch 100 sample orders and save to `sample_payloads/sample_orders_100.json`
 
-### 2. Analyze Schema
+### 3. Run Analytics App
 ```bash
-python3 analyze_schema.py
-```
-This analyzes the order structure and generates `docs/schema_analysis.md`
-
-### 3. Fetch All Orders (Full Sync)
-```python
-from fetch_orders import fetch_stream_raw
-
-all_orders = fetch_stream_raw(
-    endpoint="orders",
-    save_to_file="raw_data/all_orders.json"
-)
-```
-
-### 4. Incremental Updates
-```python
-from fetch_orders import fetch_orders_incremental
-
-# Fetch new orders since last_stream_id
-new_orders = fetch_orders_incremental(
-    last_stream_id=1000,
-    save_to_file="raw_data/new_orders.json"
-)
-```
-
-## Project Structure
-
-```
-analytics/
-├── agents.md                    # Complete task documentation
-├── README.md                    # This file
-├── clean_menu_data.py           # Menu normalization (DONE)
-├── cleaned_menu.csv             # Normalized menu items (138 items)
-├── fetch_orders.py              # Task 1: API client (DONE)
-├── analyze_schema.py            # Task 2: Schema analysis
-├── sample_payloads/             # Sample order JSON files
-├── raw_data/                    # Full order datasets
-├── docs/                        # Documentation
-│   └── schema_analysis.md       # Generated schema docs
-├── data_cleaning/               # Task 3: Data cleaning scripts
-├── database/                    # Task 4: Schema & loading scripts
-└── analytics/                   # Task 5-6: Analytics & predictions
-```
-
-## Web Application
-
-### Analytics Database Client
-
-A Streamlit web application for querying and managing the analytics database.
-
-**Quick Start (Local):**
-```bash
-# Install dependencies
-pip install -r requirements_app.txt
-
-# Run the app
-streamlit run app.py
-```
-
-**Quick Start (Docker):**
-```bash
-# Using Docker Compose (includes PostgreSQL)
 docker-compose up -d
-
-# Or using Makefile
-make up
+# Open http://localhost:8501
 ```
 
-**Features:**
-- SQL query interface
-- Database sync (incremental updates)
-- Table browser with pagination
-- Real-time statistics
-
-**Documentation:**
-- `APP_README.md` - Application documentation
-- `DOCKER_README.md` - Docker setup guide
-- `DOCKER_QUICK_START.md` - Quick Docker reference
-
-## Current Status
-
-- ✅ **Task 0:** Menu normalization complete (343 items)
-- ✅ **Task 1:** Order fetching API complete
-- ✅ **Task 2:** Schema design complete
-- ✅ **Task 3:** Data cleaning complete
-- ✅ **Task 4:** Database creation complete
-- ✅ **Task 5:** Order loading complete
-- ✅ **Task 6:** Web application complete
-- ✅ **Task 7:** Docker containerization complete
-- 🔲 **Future:** Analytics queries & predictions
-
-## Data Volume
-
-- Current: ~5,000 orders, ~10,000 order items
-- Expected: 300,000 orders in 2 years
-
-## API Configuration
-
-```python
-BASE_URL = "https://webhooks.db1-prod-dachnona.store/analytics"
-API_KEY = "f3e1753aa4c44159fa7218a31cd8db1e"
-```
-
-See `agents.md` for complete documentation.
-
+## 📚 Documentation
+- **Design:** See `docs/design/` for schema discussions.
+- **Archive:** Older reports and docs are in `docs/archive/`.

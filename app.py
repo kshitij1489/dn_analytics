@@ -31,10 +31,10 @@ from database.load_orders import (
     process_order,
     get_or_create_restaurant,
     get_or_create_customer,
-    parse_timestamp,
     create_schema_if_needed
 )
-from fetch_orders import fetch_stream_raw
+from database.menu_manager import sync_menu
+from utils.api_client import fetch_stream_raw
 from data_cleaning.item_matcher import ItemMatcher
 from datetime import datetime
 
@@ -124,10 +124,17 @@ def sync_database(conn):
             # Create schema first
             try:
                 create_schema_if_needed(conn)
-                st.info("📋 Database schema created. Please load menu data first before syncing orders.")
-                return 0, "Schema created. Load menu data first."
+                st.info("📋 Database schema created.")
             except Exception as schema_error:
                 return 0, f"Schema creation failed: {str(schema_error)}"
+        
+        # 1. Sync Menu Data
+        status_text = st.empty()
+        status_text.text("Syncing menu data...")
+        menu_result = sync_menu(conn)
+        if menu_result['status'] == 'error':
+            return 0, f"Menu sync failed: {menu_result['message']}"
+        st.toast(f"Menu synced: {menu_result.get('menu_items', 0)} items")
         
         # Check if menu data is loaded (needed for ItemMatcher)
         cursor = conn.cursor()
@@ -136,18 +143,32 @@ def sync_database(conn):
         cursor.close()
         
         if menu_count == 0:
-            return 0, "Menu data not loaded. Please load menu data first using: make load-menu or python3 database/test_load_menu_postgresql.py"
+            return 0, "Menu data failed to load."
         
-        # Get last stream_id
-        last_stream_id = get_last_stream_id(conn)
+        # Check if customers table is empty (indicates migration or first run)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM customers")
+        customer_count = cursor.fetchone()[0]
+        cursor.close()
         
-        # Fetch new orders
+        # Determine if we need a full reload or incremental sync
+        if customer_count == 0:
+            # Full reload: customers table is empty (migration or first run)
+            status_text.text("🔄 Customers table empty - performing full reload...")
+            st.info("📥 Performing full reload of all orders (customers table is empty)")
+            start_cursor = 0
+        else:
+            # Incremental sync: normal operation
+            start_cursor = get_last_stream_id(conn) + 1
+        
+        # Fetch orders
         new_orders = fetch_stream_raw(
             endpoint="orders",
-            start_cursor=last_stream_id + 1
+            start_cursor=start_cursor
         )
         
         if not new_orders:
+            status_text.empty()
             return 0, "No new orders to sync"
         
         # Initialize ItemMatcher if needed
@@ -164,7 +185,6 @@ def sync_database(conn):
         }
         
         progress_bar = st.progress(0)
-        status_text = st.empty()
         
         for i, order_payload in enumerate(new_orders):
             status_text.text(f"Processing order {i+1}/{len(new_orders)}...")
@@ -197,6 +217,12 @@ def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sor
                 sort_column = 'created_at'
             elif table_name == 'customers':
                 sort_column = 'last_order_date'
+            elif table_name == 'menu_items':
+                sort_column = 'type, name'
+                sort_direction = 'ASC'
+            elif table_name == 'variants':
+                sort_column = 'variant_name'
+                sort_direction = 'ASC'
             else:
                 sort_column = 'created_at'
         
@@ -251,40 +277,7 @@ with st.sidebar:
                 if not tables_exist:
                     st.info("📋 Schema will be created automatically when needed")
                 else:
-                    # Check if menu_items table exists and has data
-                    try:
-                        cursor = conn.cursor()
-                        # Check if menu_items table exists
-                        cursor.execute("""
-                            SELECT EXISTS (
-                                SELECT FROM information_schema.tables 
-                                WHERE table_schema = 'public' 
-                                AND table_name = 'menu_items'
-                            )
-                        """)
-                        menu_table_exists = cursor.fetchone()[0]
-                        
-                        if menu_table_exists:
-                            cursor.execute("SELECT COUNT(*) FROM menu_items")
-                            menu_count = cursor.fetchone()[0]
-                            cursor.close()
-                            
-                            if menu_count > 0:
-                                try:
-                                    st.session_state.item_matcher = ItemMatcher(conn)
-                                except Exception as e:
-                                    st.warning(f"ItemMatcher initialization: {e}")
-                            else:
-                                st.warning("⚠️ Menu data not loaded. Load menu data first.")
-                        else:
-                            cursor.close()
-                            st.info("📋 Menu tables not created yet. They will be created when you load menu data.")
-                    except Exception as e:
-                        # Table might not exist yet
-                        if "does not exist" in str(e):
-                            st.info("📋 Menu tables not created yet. They will be created when you load menu data.")
-                        else:
-                            st.warning(f"Schema check: {e}")
+                    st.success("✅ Database ready")
             except Exception as e:
                 st.warning(f"Schema check: {e}")
     
@@ -320,13 +313,19 @@ with st.sidebar:
                             try:
                                 create_schema_if_needed(conn)
                                 st.success("✅ Schema created successfully!")
-                                st.info("💡 Next: Load menu data using the command: `make load-menu` or `python3 database/test_load_menu_postgresql.py`")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Schema creation failed: {e}")
                 elif menu_count == 0:
                     st.warning("⚠️ Menu data not loaded")
-                    st.info("💡 Load menu data using: `make load-menu`")
+                    if st.button("📥 Load Menu", use_container_width=True):
+                        with st.spinner("Loading menu..."):
+                            res = sync_menu(conn)
+                            if res['status'] == 'success':
+                                st.success(f"✅ Loaded {res['menu_items']} items")
+                                st.rerun()
+                            else:
+                                st.error(f"Failed: {res['message']}")
                 else:
                     st.success("✅ Database ready")
         except Exception as e:
@@ -338,7 +337,7 @@ with st.sidebar:
         if st.button("Sync New Orders", type="primary", use_container_width=True):
             conn = get_db_connection()
             if conn:
-                with st.spinner("Syncing database..."):
+                with st.spinner("Syncing..."):
                     count, result = sync_database(conn)
                     if isinstance(result, dict):
                         st.success(f"✅ Synced {count} new orders")
@@ -387,7 +386,7 @@ with st.sidebar:
                     if stats['last_order']:
                         st.caption(f"Last Order: {stats['last_order']}")
                 else:
-                    st.info("📋 Database schema not initialized. Click 'Connect to Database' to create tables.")
+                    st.info("📋 Database schema not initialized")
         except Exception as e:
             st.warning(f"Stats unavailable: {e}")
 
@@ -402,14 +401,17 @@ if not conn:
     st.stop()
 
 # Tabs for different views
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "🔍 SQL Query",
     "📦 Orders",
     "🛒 Order Items",
     "👥 Customers",
     "🍽️ Restaurants",
-    "📊 Order Taxes",
-    "💰 Order Discounts"
+    "📋 Menu Items",
+    "📏 Variants",
+    "🕸️ Menu Matrix",
+    "📊 Taxes",
+    "💰 Discounts"
 ])
 
 # Tab 1: SQL Query
@@ -484,41 +486,67 @@ with tab2:
         
         st.info(f"Showing page {st.session_state.orders_page} of {total_pages} (Total: {total_count:,} orders)")
         
+        # Pagination logic
+        def set_page(page):
+            st.session_state.orders_page = page
+            # We don't need to manually set orders_page_input if we rely on the rerender to pick up new value?
+            # Actually, to update a widget with key, we MUST update the key in session state.
+            st.session_state.orders_page_input = page
+
+        def sync_input():
+            st.session_state.orders_page = st.session_state.orders_page_input
+
         # Pagination controls
         col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
         with col1:
-            if st.button("⏮️ First", disabled=st.session_state.orders_page == 1):
-                st.session_state.orders_page = 1
-                st.rerun()
+            st.button(
+                "⏮️ First", 
+                key="orders_first", 
+                disabled=st.session_state.orders_page == 1,
+                on_click=set_page,
+                args=(1,)
+            )
         with col2:
-            if st.button("◀️ Previous", disabled=st.session_state.orders_page == 1):
-                st.session_state.orders_page -= 1
-                st.rerun()
+            st.button(
+                "◀️ Previous", 
+                key="orders_prev", 
+                disabled=st.session_state.orders_page == 1,
+                on_click=set_page,
+                args=(st.session_state.orders_page - 1,)
+            )
         with col3:
             if total_pages > 0:
-                page_input = st.number_input(
+                # Ensure input key exists
+                if "orders_page_input" not in st.session_state:
+                    st.session_state.orders_page_input = st.session_state.orders_page
+                
+                st.number_input(
                     "Page",
                     min_value=1,
                     max_value=total_pages,
-                    value=st.session_state.orders_page,
-                    key="orders_page_input"
+                    key="orders_page_input",
+                    on_change=sync_input
                 )
             else:
-                st.info("No data available for the selected filters.")
+                st.info("No data available.")
                 st.stop()
-            if page_input != st.session_state.orders_page:
-                st.session_state.orders_page = page_input
-                st.rerun()
+                
         with col4:
-            if st.button("Next ▶️", disabled=st.session_state.orders_page >= total_pages):
-                st.session_state.orders_page += 1
-                st.rerun()
+            st.button(
+                "Next ▶️", 
+                key="orders_next", 
+                disabled=st.session_state.orders_page >= total_pages,
+                on_click=set_page,
+                args=(st.session_state.orders_page + 1,)
+            )
         with col5:
-            if st.button("Last ⏭️", disabled=st.session_state.orders_page >= total_pages):
-                st.session_state.orders_page = total_pages
-                st.rerun()
-        
-        # Display table
+            st.button(
+                "Last ⏭️", 
+                key="orders_last", 
+                disabled=st.session_state.orders_page >= total_pages,
+                on_click=set_page,
+                args=(total_pages,)
+            )
         st.dataframe(df, use_container_width=True, height=500)
 
 # Tab 3: Order Items
@@ -613,8 +641,60 @@ with tab5:
         st.info(f"Total: {total_count} restaurants")
         st.dataframe(df, use_container_width=True)
 
-# Tab 6: Order Taxes
+# Tab 6: Menu Items
 with tab6:
+    st.header("Menu Items")
+    
+    df, total_count, error = get_table_data(conn, 'menu_items', page=1, page_size=1000)
+    
+    if error:
+        st.error(f"Error: {error}")
+    else:
+        st.info(f"Total: {total_count} items")
+        st.dataframe(df, use_container_width=True, height=600)
+
+# Tab 7: Variants
+with tab7:
+    st.header("Variants")
+    
+    df, total_count, error = get_table_data(conn, 'variants', page=1, page_size=1000)
+    
+    if error:
+        st.error(f"Error: {error}")
+    else:
+        st.info(f"Total: {total_count} variants")
+        st.dataframe(df, use_container_width=True)
+
+# Tab 8: Menu Matrix
+with tab8:
+    st.header("Menu Matrix (Item x Variant)")
+    
+    query = """
+        SELECT 
+            mi.name, 
+            mi.type, 
+            v.variant_name, 
+            miv.price, 
+            miv.is_active, 
+            miv.addon_eligible, 
+            miv.delivery_eligible 
+        FROM menu_item_variants miv
+        JOIN menu_items mi ON miv.menu_item_id = mi.menu_item_id
+        JOIN variants v ON miv.variant_id = v.variant_id
+        ORDER BY mi.type, mi.name, v.variant_name
+    """
+    
+    with st.spinner("Loading matrix..."):
+        df, error = execute_query(conn, query)
+        
+        if error:
+            st.error(f"Error: {error}")
+        else:
+            st.info(f"Total combinations: {len(df)}")
+            st.dataframe(df, use_container_width=True, height=600)
+
+# Tab 9: Order Taxes
+with tab9:
     st.header("Order Taxes Table")
     
     page_size = st.selectbox("Rows per page", [25, 50, 100], index=1, key="taxes_page_size")
@@ -649,8 +729,8 @@ with tab6:
         
         st.dataframe(df, use_container_width=True, height=500)
 
-# Tab 7: Order Discounts
-with tab7:
+# Tab 10: Order Discounts
+with tab10:
     st.header("Order Discounts Table")
     
     page_size = st.selectbox("Rows per page", [25, 50, 100], index=1, key="discounts_page_size")
@@ -688,4 +768,3 @@ with tab7:
 # Footer
 st.markdown("---")
 st.caption("Analytics Database Client | Built with Streamlit")
-

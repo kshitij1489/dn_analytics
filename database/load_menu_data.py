@@ -254,7 +254,7 @@ def generate_python_dicts(menu_data: List[Dict]) -> Tuple[List[Dict], List[Dict]
                 menu_item_variants_data.append({
                     'menu_item_id': menu_item_idx + 1,  # +1 because DB IDs start at 1
                     'variant_id': variant_idx + 1,
-                    'price': None,  # TODO: Add price if available
+                    'price': 0.00,  # Default to 0.00 since CSV doesn't have prices
                     'is_active': True,
                     'addon_eligible': addon_eligible,
                     'delivery_eligible': delivery_eligible

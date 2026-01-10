@@ -36,14 +36,14 @@ services:
     ports:
       - "${APP_PORT:-8501}:8501"
     volumes:
-      # Mount code for development (optional - remove in production)
       - ./app.py:/app/app.py
       - ./database:/app/database
       - ./fetch_orders.py:/app/fetch_orders.py
       - ./data_cleaning:/app/data_cleaning
       - ./clean_order_item.py:/app/clean_order_item.py
-      # Mount data files needed for loading
-      - ./cleaned_menu.csv:/app/cleaned_menu.csv
+      # Mount data and utils for live updates
+      - ./data:/app/data
+      - ./utils:/app/utils
     depends_on:
       postgres:
         condition: service_healthy

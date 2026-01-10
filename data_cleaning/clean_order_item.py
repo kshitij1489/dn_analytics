@@ -1,23 +1,32 @@
 """
-Rebuild cleaned_menu.csv from full_menu.txt
+Reusable Order Item Cleaning Module
 
-This script processes all items from full_menu.txt and generates
-a comprehensive cleaned_menu.csv with all items, types, and variants.
+This module provides functions to clean and normalize order item names
+for both initial menu creation and real-time order processing.
+
+It consolidates logic from the original rebuild_menu.py (comprehensive rules)
+and recent fixes (Belgium mapping, etc.).
+
+Usage:
+    from clean_order_item import clean_order_item_name
+    
+    result = clean_order_item_name("Old Fashion Vanilla Ice Cream (Perfect Plenty (300ml))")
+    # Returns: {'name': 'Old Fashion Vanilla Ice Cream', 'type': 'Ice Cream', 'variant': 'REGULAR_TUB_300ML'}
 """
 
 import re
-import csv
 from typing import Dict, List, Set, Tuple
 
 # ============================================================
-# CONSTANTS
+# CONSTANTS (Ported from rebuild_menu.py)
 # ============================================================
 
 # Drinks
-DRINKS = {
-    'Affogato',
+DRINKS_SET = {
     'Americano',
     'Cappuccino',
+    'Hot Chocolate',
+    'Water Bottle',
 }
 
 # Extras
@@ -31,12 +40,12 @@ EXTRAS_PATTERNS = [
     'Packaging',
     'Thermocol',
     'Dry Ice',
-    'Water Bottle',
     'Hot Chocolate Fudge Sauce',
 ]
 
 # Desserts
 DESSERTS_PATTERNS = [
+    'Affogato',
     'Boston Cream Pie',
     'Brownie',
     'Cheesecake',
@@ -73,9 +82,8 @@ def fix_html_entities(text: str) -> str:
     """Fix HTML entities"""
     return text.replace('&amp;', '&')
 
-
 def fix_typos(name: str) -> str:
-    """Fix common typos"""
+    """Fix common typos (Consolidated from rebuild_menu.py + recent fixes)"""
     # Fix Piec -> Pie
     name = re.sub(r'\bPiec\b', 'Pie', name)
     # Fix Vanila -> Vanilla
@@ -86,22 +94,44 @@ def fix_typos(name: str) -> str:
     name = re.sub(r'\bFactor Visit\b', 'Factory Visit', name)
     # Fix Pidge/porter -> Pidge/Porter
     name = re.sub(r'Pidge/porter', 'Pidge/Porter', name)
+    
     # Standardize Bean-to-bar capitalization
-    name = re.sub(r'\bBean-to-bar\b', 'Bean-to-Bar', name, flags=re.IGNORECASE)
+    name = re.sub(r'\bBean[- ]to[- ]bar\b', 'Bean-to-Bar', name, flags=re.IGNORECASE)
     name = re.sub(r'\bBean To Bar\b', 'Bean-to-Bar', name, flags=re.IGNORECASE)
+    
     # Fix "Chocolate Dark" -> "Dark Chocolate"
     name = re.sub(r'\bChocolate Dark\b', 'Dark Chocolate', name)
     name = re.sub(r'\bChocolate 70% Dark\b', '70% Dark Chocolate', name)
+    
     # Fix D&n -> D&N
     name = re.sub(r'\bD&n\b', 'D&N', name)
+    
     # Standardize "contains Alcohol" -> "(Contains Alcohol)"
     name = re.sub(r'\(contains Alcohol\)', '(Contains Alcohol)', name, flags=re.IGNORECASE)
     name = re.sub(r'With Alcohol', '(Contains Alcohol)', name, flags=re.IGNORECASE)
     name = re.sub(r'\(with Alcohol\)', '(Contains Alcohol)', name, flags=re.IGNORECASE)
+    
     # Fix "Fig Orange" -> "Fig & Orange"
     name = re.sub(r'\bFig Orange\b', 'Fig & Orange', name)
-    return name
+    
+    # Fix Eggles -> Eggless
+    name = re.sub(r'\bEggles\b', 'Eggless', name)
+    
+    # --- Recent Fixes not originally in rebuild_menu.py ---
+    
+    # Fix "Belgium" -> "Bean-to-Bar"
+    name = re.sub(r'\bBelgium\b', 'Bean-to-Bar', name, flags=re.IGNORECASE)
+    
+    # Remove redundant (Ice Cream) e.g. "Alphonso (Ice Cream)"
+    name = re.sub(r'\s*\(Ice Cream\)', '', name, flags=re.IGNORECASE)
+    
+    # Fix double "Ice Cream Ice Cream"
+    name = re.sub(r'\bIce Cream Ice Cream\b', 'Ice Cream', name)
+    
+    # Remove trailing parenthesis if incomplete (like "Mini Tub" without closing)
+    name = re.sub(r'\s*\([^)]*$', '', name)
 
+    return name
 
 def extract_variant(raw_name: str) -> Tuple[str, str]:
     """Extract variant from raw name and return (clean_name, variant)"""
@@ -117,11 +147,11 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
         name = re.sub(r'\s*\(200ml\s*\+\s*200ml\)', '', name, flags=re.IGNORECASE)
         return name.strip(), 'DUO_200ML_200ML'
     
-    if '200+200+200' in name_lower:
+    if '200+200+200' in name_lower or '200ml+200ml+200ml' in name_lower:
         name = re.sub(r'\s*\(200\+200\+200[^)]*\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s*\(200[ml\s]*\+200[ml\s]*\+200[ml\s]*\)', '', name, flags=re.IGNORECASE)
         return name.strip(), 'FAMILY_PACK_3X200ML'
     
-    # Size patterns with nested parentheses like "(Perfect Plenty (300ml))"
     # Family Feast patterns
     if 'family feast' in name_lower:
         if '725ml' in name_lower:
@@ -280,6 +310,23 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
     name = re.sub(r'\s*\(navratri\)', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s*\(Navratri\)', '', name, flags=re.IGNORECASE)
     
+    # Small Scoop patterns
+    if 'small scoop' in name_lower:
+        variant = 'JUNIOR_SCOOP_60GMS'
+        name = re.sub(r'\s*Small Scoop', '', name, flags=re.IGNORECASE)
+        return name.strip(), variant
+        
+    # Standalone weight patterns (often in parens or just at end)
+    if '160gm' in name_lower:
+        variant = 'MINI_TUB_160GMS'
+        name = re.sub(r'\s*\(?160gm\)?', '', name, flags=re.IGNORECASE)
+        return name.strip(), variant
+
+    if '200ml' in name_lower:
+        variant = 'MINI_TUB_200ML'
+        name = re.sub(r'\s*\(?200ml\)?', '', name, flags=re.IGNORECASE)
+        return name.strip(), variant
+
     # Default
     return name.strip(), '1_PIECE'
 
@@ -289,8 +336,10 @@ def determine_type(name: str) -> str:
     name_lower = name.lower()
     
     # Check drinks first (exact match)
-    for drink in DRINKS:
+    for drink in DRINKS_SET:
         if name == drink:
+            return 'Drinks'
+        if drink.lower() == name_lower:
             return 'Drinks'
     
     # Services
@@ -319,8 +368,10 @@ def determine_type(name: str) -> str:
 
 
 def normalize_name(name: str) -> str:
-    """Final name normalization"""
-    # Remove (eggless) from name if it appears in parentheses at end
+    """Final name normalization (consolidation of rules)"""
+    # Remove (eggless) from name if it appears in parentheses at end (standardizes 'Name (Eggless)')
+    # But sometimes it's 'Eggless Name'. 
+    # This rule was in rebuild_menu to fix 'Dates & Chocolate (Eggless)' -> 'Dates & Chocolate Eggless'
     name = re.sub(r'\s*\(eggless\)\s*', ' Eggless ', name, flags=re.IGNORECASE)
     
     # Remove "Dessert" suffix from Boston Cream Pie
@@ -346,14 +397,19 @@ def normalize_name(name: str) -> str:
     # Remove round shape description
     name = re.sub(r'\s*-\s*Round Shape', '', name)
     
+    # Remove trailing separators (hyphens, commas)
+    name = re.sub(r'\s*[-,\.]+\s*$', '', name)
+    
     # Clean up extra whitespace
     name = re.sub(r'\s+', ' ', name).strip()
     
     return name
 
 
-def process_item(raw_name: str) -> Dict[str, str]:
-    """Process a single item and return cleaned data"""
+def clean_order_item_name(raw_name: str) -> Dict[str, str]:
+    """
+    Main entry point to clean and normalize an order item name.
+    """
     # Step 1: Fix HTML entities
     name = fix_html_entities(raw_name)
     
@@ -369,7 +425,7 @@ def process_item(raw_name: str) -> Dict[str, str]:
     # Step 5: Normalize name
     name = normalize_name(name)
     
-    # Handle special variants for specific types
+    # Handle special variants for specific types (Logic from rebuild_menu.py 'process_item')
     if item_type == 'Drinks':
         variant = '1_PIECE'
     
@@ -387,122 +443,22 @@ def process_item(raw_name: str) -> Dict[str, str]:
         'variant': variant,
     }
 
-
-def load_full_menu(filepath: str) -> List[str]:
-    """Load items from full_menu.txt"""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # Parse the set-like format - items are between single or double quotes
-    items = []
-    lines = content.split('\n')
-    for line in lines:
-        line = line.strip()
-        # Skip empty lines and pure braces
-        if not line or line in ['{', '}']:
-            continue
-        
-        # Handle first line with opening brace: {'400 Pidge/porter...',
-        if line.startswith("{'"):
-            line = line[1:]  # Remove opening brace
-        
-        # Handle last line with closing brace: 'Water Bottle'}
-        if line.endswith("'}"):
-            line = line[:-1]  # Remove closing brace
-        
-        # Try double quotes first (for items with apostrophes)
-        match = re.match(r'[\s]*"(.+)"[,]?$', line)
-        if match:
-            items.append(match.group(1))
-            continue
-        
-        # Then try single quotes
-        # Handle items that end with ', (trailing comma)
-        if line.endswith("',"):
-            line = line[:-2]
-        if line.endswith("'"):
-            line = line[:-1]
-        if line.startswith("'"):
-            line = line[1:]
-        
-        if line and not line.startswith('{'):
-            items.append(line)
-    
-    return items
-
-
-def main():
-    print("=" * 80)
-    print("Rebuilding cleaned_menu.csv from full_menu.txt")
-    print("=" * 80)
-    
-    # Load items
-    items = load_full_menu('full_menu.txt')
-    print(f"\nLoaded {len(items)} items from full_menu.txt")
-    
-    # Process all items
-    processed = []
-    for raw_name in items:
-        result = process_item(raw_name)
-        processed.append(result)
-    
-    # Deduplicate (name, type, variant) combinations
-    seen = set()
-    unique = []
-    for item in processed:
-        key = (item['name'], item['type'], item['variant'])
-        if key not in seen:
-            seen.add(key)
-            unique.append(item)
-    
-    print(f"Processed into {len(unique)} unique (name, type, variant) combinations")
-    
-    # Sort by name, then type, then variant
-    unique.sort(key=lambda x: (x['name'], x['type'], x['variant']))
-    
-    # Count by type
-    type_counts = {}
-    for item in unique:
-        t = item['type']
-        type_counts[t] = type_counts.get(t, 0) + 1
-    
-    print("\nItems by type:")
-    for t, count in sorted(type_counts.items()):
-        print(f"  {t}: {count}")
-    
-    # Write to CSV
-    with open('cleaned_menu.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['name', 'type', 'variant'])
-        writer.writeheader()
-        for item in unique:
-            writer.writerow(item)
-    
-    print(f"\nSaved to cleaned_menu.csv")
-    
-    # Show samples
-    print("\n" + "=" * 80)
-    print("Sample items:")
-    print("=" * 80)
-    
-    # Show drinks
-    drinks = [i for i in unique if i['type'] == 'Drinks']
-    print("\nDrinks:")
-    for d in drinks[:5]:
-        print(f"  {d['name']}, {d['type']}, {d['variant']}")
-    
-    # Show extras
-    extras = [i for i in unique if i['type'] == 'Extra']
-    print("\nExtras:")
-    for e in extras[:5]:
-        print(f"  {e['name']}, {e['type']}, {e['variant']}")
-    
-    # Show services
-    services = [i for i in unique if i['type'] == 'Service']
-    print("\nServices:")
-    for s in services:
-        print(f"  {s['name']}, {s['type']}, {s['variant']}")
-
-
 if __name__ == "__main__":
-    main()
-
+    test_cases = [
+        "Old Fashion Vanilla Ice Cream (Perfect Plenty (300ml))",
+        "Employee Dessert ( Any 1 )",
+        "Eggless Chocolate Overload (Regular Scoop)",
+        "Fig Orange Ice Cream (Regular Tub (300ml))",
+        "Boston Cream Pie Dessert(2pcs)",
+        "Waffle Cone",
+        "Hot Chocolate",
+        "Belgium 70% Dark Chocolate Ice Cream (Mini Tub)",
+        "Alphonso Mango Ice Cream (Ice Cream) - Small Scoop"
+    ]
+    
+    print("Testing clean_order_item_name function:")
+    print("=" * 80)
+    for test in test_cases:
+        result = clean_order_item_name(test)
+        print(f"\nInput:  {test}")
+        print(f"Output: {result}")

@@ -34,7 +34,7 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
     print("⚠️  psycopg2 not installed. Install it with: pip install psycopg2-binary")
 
-from fetch_orders import fetch_stream_raw, load_orders_from_file
+from utils.api_client import fetch_stream_raw, load_orders_from_file
 from data_cleaning.item_matcher import ItemMatcher
 
 
@@ -144,45 +144,64 @@ def get_or_create_restaurant(conn, restaurant_data: Dict) -> int:
     return restaurant_id
 
 
-def get_or_create_customer(conn, customer_data: Dict, order_date: datetime) -> Optional[int]:
+def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, order_total: Decimal = Decimal(0)) -> Optional[int]:
     """Get or create customer, return customer_id"""
     cursor = conn.cursor()
     
     phone = customer_data.get('phone', '').strip() if customer_data.get('phone') else None
-    name = customer_data.get('name', '').strip() if customer_data.get('name') else None
+    name = customer_data.get('name', '').strip() if customer_data.get('name') else 'Anonymous'
     address = customer_data.get('address', '').strip() if customer_data.get('address') else None
     gstin = customer_data.get('gstin', '').strip() if customer_data.get('gstin') else None
     
-    # If no phone, return None (anonymous customer)
-    if not phone:
-        cursor.close()
-        return None
+    # Normalize name for deduplication (lowercase, trimmed)
+    name_normalized = name.lower().strip()
     
-    # Check if exists
+    # Check if customer exists by normalized name
     cursor.execute("""
-        SELECT customer_id, first_order_date, last_order_date, total_orders, total_spent
-        FROM customers 
-        WHERE phone = %s
-    """, (phone,))
+        SELECT customer_id FROM customers WHERE name_normalized = %s
+    """, (name_normalized,))
     
     result = cursor.fetchone()
     if result:
-        customer_id, first_order_date, last_order_date, total_orders, total_spent = result
-        # Update last order date and increment counts
-        cursor.execute("""
+        customer_id = result[0]
+        # Update last order date, increment counts, and update phone if provided
+        update_fields = []
+        update_values = []
+        
+        update_fields.append("last_order_date = %s")
+        update_values.append(order_date)
+        
+        update_fields.append("total_orders = COALESCE(total_orders, 0) + 1")
+        
+        update_fields.append("total_spent = COALESCE(total_spent, 0) + %s")
+        update_values.append(order_total)
+        
+        # Update phone if provided and currently NULL
+        if phone:
+            update_fields.append("phone = COALESCE(phone, %s)")
+            update_values.append(phone)
+        
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        
+        update_values.append(customer_id)
+        
+        cursor.execute(f"""
             UPDATE customers 
-            SET last_order_date = %s,
-                updated_at = CURRENT_TIMESTAMP
+            SET {', '.join(update_fields)}
             WHERE customer_id = %s
-        """, (order_date, customer_id))
+        """, update_values)
         conn.commit()
     else:
         # Insert new customer
         cursor.execute("""
-            INSERT INTO customers (name, phone, address, gstin, first_order_date, last_order_date)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO customers (
+                name, name_normalized, phone, address, gstin, 
+                first_order_date, last_order_date,
+                total_orders, total_spent
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
             RETURNING customer_id
-        """, (name, phone, address, gstin, order_date, order_date))
+        """, (name, name_normalized, phone, address, gstin, order_date, order_date, order_total))
         customer_id = cursor.fetchone()[0]
         conn.commit()
     
@@ -245,7 +264,8 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
         if not created_on:
             created_on = occurred_at or datetime.now()
         
-        customer_id = get_or_create_customer(conn, customer_data, created_on)
+        total_amount = Decimal(str(order_data.get('total', 0)))
+        customer_id = get_or_create_customer(conn, customer_data, created_on, total_amount)
         
         # Insert order
         cursor = conn.cursor()

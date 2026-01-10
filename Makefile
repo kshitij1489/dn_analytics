@@ -17,6 +17,7 @@ help:
 	@echo "  make test       - Test database connection"
 	@echo "  make load-menu  - Load menu data into database"
 	@echo "  make sync       - Sync new orders"
+	@echo "  make reload-all - Reload all orders from API (for migrations)"
 
 # Build images
 build:
@@ -67,6 +68,11 @@ sync:
 	docker-compose exec app python3 database/load_orders.py \
 		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics" \
 		--incremental
+
+# Reload all orders (for migrations)
+reload-all:
+	docker-compose exec app python3 database/load_orders.py \
+		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics"
 
 # Rebuild and restart
 rebuild:
