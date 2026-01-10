@@ -1,3 +1,8 @@
+# Environment files
+.env
+.env.local
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]
@@ -9,44 +14,24 @@ venv/
 ENV/
 .venv
 
-# Jupyter Notebooks
-.ipynb_checkpoints
-*.ipynb_checkpoints
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# Environment variables
-.env
-.env.local
-
-# API Keys and Secrets (if any)
-*_secret.py
-*_key.py
-secrets.json
-
-# Data files (large datasets)
-sample_payloads/*.json
-raw_data/*.json
-*.json.gz
-
-# Generated outputs
-output.csv
-menu.csv
-menu_normalized_*.csv
 
 # OS
 .DS_Store
 Thumbs.db
 
+# Data files
+*.db
+*.sqlite
+sample_payloads/*.json
+raw_data/
+
 # Logs
 *.log
 
-# Temporary files
-*.tmp
-*.bak
-
+# Docker
+.docker/

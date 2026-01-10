@@ -56,52 +56,15 @@ analytics/
 └── analytics/                   # Task 5-6: Analytics & predictions
 ```
 
-## Web Application
-
-### Analytics Database Client
-
-A Streamlit web application for querying and managing the analytics database.
-
-**Quick Start (Local):**
-```bash
-# Install dependencies
-pip install -r requirements_app.txt
-
-# Run the app
-streamlit run app.py
-```
-
-**Quick Start (Docker):**
-```bash
-# Using Docker Compose (includes PostgreSQL)
-docker-compose up -d
-
-# Or using Makefile
-make up
-```
-
-**Features:**
-- SQL query interface
-- Database sync (incremental updates)
-- Table browser with pagination
-- Real-time statistics
-
-**Documentation:**
-- `APP_README.md` - Application documentation
-- `DOCKER_README.md` - Docker setup guide
-- `DOCKER_QUICK_START.md` - Quick Docker reference
-
 ## Current Status
 
-- ✅ **Task 0:** Menu normalization complete (343 items)
+- ✅ **Task 0:** Menu normalization complete (138 items)
 - ✅ **Task 1:** Order fetching API complete
-- ✅ **Task 2:** Schema design complete
-- ✅ **Task 3:** Data cleaning complete
-- ✅ **Task 4:** Database creation complete
-- ✅ **Task 5:** Order loading complete
-- ✅ **Task 6:** Web application complete
-- ✅ **Task 7:** Docker containerization complete
-- 🔲 **Future:** Analytics queries & predictions
+- 🟡 **Task 2:** Schema analysis in progress
+- 🔲 **Task 3:** Data cleaning (next)
+- 🔲 **Task 4:** Database creation
+- 🔲 **Task 5:** Analytics queries
+- 🔲 **Task 6:** Predictions
 
 ## Data Volume
 

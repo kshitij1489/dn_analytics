@@ -25,8 +25,7 @@
 CREATE TABLE menu_items (
     menu_item_id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    type VARCHAR(50) NOT NULL,  -- Ice Cream, Dessert, Extra, Combo, Drinks
-    base_price DECIMAL(10,2),
+    type VARCHAR(50) NOT NULL,  -- Ice Cream, Dessert, Extra, Combo, Drinks, Service
     is_active BOOLEAN DEFAULT TRUE,
     petpooja_itemid BIGINT,  -- For matching with PetPooja data
     itemcode VARCHAR(100),   -- VANILLAICE, etc.
@@ -49,9 +48,12 @@ CREATE TABLE menu_item_variants (
     menu_item_variant_id SERIAL PRIMARY KEY,
     menu_item_id INTEGER REFERENCES menu_items(menu_item_id),
     variant_id INTEGER REFERENCES variants(variant_id),
-    price DECIMAL(10,2),  -- Price for this specific variant of this item
+    price DECIMAL(10,2) NOT NULL,  -- Price for this specific variant of this item
     is_active BOOLEAN DEFAULT TRUE,
+    addon_eligible BOOLEAN DEFAULT FALSE,      -- Can this variant be used as an addon?
+    delivery_eligible BOOLEAN DEFAULT TRUE,    -- Is this variant available for delivery?
     created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(menu_item_id, variant_id)
 );
 ```
@@ -60,12 +62,12 @@ CREATE TABLE menu_item_variants (
 
 ### Menu Items
 ```
-menu_item_id | name                          | type       | base_price
+menu_item_id | name                          | type       | is_active
 -------------|------------------------------|------------|------------
-1            | Banoffee Ice Cream           | Ice Cream  | 160.00
-2            | Boston Cream Pie              | Dessert    | 200.00
-3            | Waffle Cone                  | Extra      | 0.00
-4            | Employee Dessert ( Any 1 )    | Dessert    | 0.00
+1            | Banoffee Ice Cream           | Ice Cream  | TRUE
+2            | Boston Cream Pie              | Dessert    | TRUE
+3            | Waffle Cone                  | Extra      | TRUE
+4            | Employee Dessert ( Any 1 )    | Dessert    | TRUE
 ```
 
 ### Variants
@@ -81,21 +83,24 @@ variant_id | variant_name
 
 ### Menu Item Variants (Junction)
 ```
-menu_item_variant_id | menu_item_id | variant_id | price
----------------------|--------------|------------|-------
-1                    | 1            | 1          | 160.00
-2                    | 1            | 2          | 120.00
-3                    | 2            | 4          | 200.00
-4                    | 4            | 4          | 0.00
+menu_item_variant_id | menu_item_id | variant_id | price  | addon_eligible | delivery_eligible
+---------------------|--------------|------------|--------|----------------|-----------------
+1                    | 1            | 1          | 160.00 | FALSE          | TRUE
+2                    | 1            | 2          | 120.00 | FALSE          | TRUE
+3                    | 2            | 4          | 200.00 | FALSE          | TRUE
+4                    | 4            | 4          | 0.00   | FALSE          | TRUE
+5                    | 3            | 4          | 0.00   | TRUE           | TRUE  (Waffle Cone can be addon)
 ```
 
 ## Benefits
 
 1. **Normalized:** No duplicate variant names
 2. **Flexible:** Easy to add new variants or menu items
-3. **Pricing:** Can have different prices for same variant across items
+3. **Pricing:** Can have different prices for same variant across items (stored in menu_item_variants, not menu_items)
 4. **Query-friendly:** Easy to find all items with a specific variant
 5. **Scalable:** Handles 300K+ orders efficiently
+6. **Eligibility Control:** `addon_eligible` and `delivery_eligible` flags allow fine-grained control over variant availability
+7. **Price Flexibility:** Prices stored at variant level allow different pricing for same item in different sizes
 
 ## Alternative: Composite Key Approach
 

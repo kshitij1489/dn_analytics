@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Data files (large)
+# Note: cleaned_menu.csv is needed for menu loading
+*.csv
+!cleaned_menu.csv
+*.json
+sample_payloads/
+raw_data/
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+

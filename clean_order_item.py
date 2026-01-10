@@ -76,34 +76,39 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
     
     # Check for explicit variant patterns
     
-    # (160gm) or (160gms) -> MINI_TUB_160GMS
-    if re.search(r'\(160gm[s]?\)', name_lower):
+    # (160gm) or (160gms) or standalone 160gm -> MINI_TUB_160GMS
+    if re.search(r'\(160gm[s]?\)', name_lower) or re.search(r'\b160gm[s]?\b', name_lower):
         variant = 'MINI_TUB_160GMS'
         name = re.sub(r'\s*\(160gm[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+160gm[s]?\b', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (200ml) -> MINI_TUB_200ML
-    if re.search(r'\(200ml\)', name_lower):
+    # (200ml) or standalone 200ml -> MINI_TUB_200ML
+    if re.search(r'\(200ml\)', name_lower) or re.search(r'\b200ml\b', name_lower):
         variant = 'MINI_TUB_200ML'
         name = re.sub(r'\s*\(200ml\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+200ml\b', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (300ml) -> REGULAR_TUB_300ML
-    if re.search(r'\(300ml\)', name_lower):
+    # (300ml) or standalone 300ml -> REGULAR_TUB_300ML
+    if re.search(r'\(300ml\)', name_lower) or re.search(r'\b300ml\b', name_lower):
         variant = 'REGULAR_TUB_300ML'
         name = re.sub(r'\s*\(300ml\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+300ml\b', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (220gms) or (220gm) -> REGULAR_TUB_220GMS
-    if re.search(r'\(220gm[s]?\)', name_lower):
+    # (220gms) or (220gm) or standalone 220gm -> REGULAR_TUB_220GMS
+    if re.search(r'\(220gm[s]?\)', name_lower) or re.search(r'\b220gm[s]?\b', name_lower):
         variant = 'REGULAR_TUB_220GMS'
         name = re.sub(r'\s*\(220gm[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+220gm[s]?\b', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (500gms) or (500gm) -> FAMILY_TUB_500GMS
-    if re.search(r'\(500gm[s]?\)', name_lower):
+    # (500gms) or (500gm) or standalone 500gm -> FAMILY_TUB_500GMS
+    if re.search(r'\(500gm[s]?\)', name_lower) or re.search(r'\b500gm[s]?\b', name_lower):
         variant = 'FAMILY_TUB_500GMS'
         name = re.sub(r'\s*\(500gm[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+500gm[s]?\b', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # (725ml) -> FAMILY_TUB_725ML (or could be REGULAR_TUB_725ML - need to check)
@@ -112,17 +117,19 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
         name = re.sub(r'\s*\(725ml\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (120gm) or (120gms) or Regular Scoop -> REGULAR_SCOOP_120GMS
-    if re.search(r'\(120gm[s]?\)', name_lower) or '(regular scoop' in name_lower:
+    # (120gm) or (120gms) or standalone 120gm or Regular Scoop -> REGULAR_SCOOP_120GMS
+    if re.search(r'\(120gm[s]?\)', name_lower) or re.search(r'\b120gm[s]?\b', name_lower) or '(regular scoop' in name_lower:
         variant = 'REGULAR_SCOOP_120GMS'
         name = re.sub(r'\s*\(120gm[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+120gm[s]?\b', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Regular Scoop\)?', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
-    # (60gm) or (60gms) or Junior Scoop or Small Scoop -> JUNIOR_SCOOP_60GMS
-    if re.search(r'\(60gm[s]?\)', name_lower) or 'junior scoop' in name_lower or 'small scoop' in name_lower:
+    # (60gm) or (60gms) or standalone 60gm or Junior Scoop or Small Scoop -> JUNIOR_SCOOP_60GMS
+    if re.search(r'\(60gm[s]?\)', name_lower) or re.search(r'\b60gm[s]?\b', name_lower) or 'junior scoop' in name_lower or 'small scoop' in name_lower:
         variant = 'JUNIOR_SCOOP_60GMS'
         name = re.sub(r'\s*\(60gm[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+60gm[s]?\b', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Junior Scoop\)?', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*Small Scoop', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
@@ -142,6 +149,9 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
         name = re.sub(r'\s*\(Perfect Plenty\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Perfect Plenty[^)]*\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*Perfect Plenty\s*', ' ', name, flags=re.IGNORECASE)
+        # Clean up any remaining parentheses or extra spaces
+        name = re.sub(r'\s*\(\s*\)', '', name)  # Remove empty parentheses
+        name = re.sub(r'\s+', ' ', name)  # Normalize whitespace
         name = name.strip()
         return name, variant
     
@@ -180,7 +190,8 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
         # Remove Mini Tub pattern (including nested)
         name = re.sub(r'\s*\(Mini [Tt]ub\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Mini [Tt]ub[^)]*\)', '', name, flags=re.IGNORECASE)
-        name = name.strip()
+        name = re.sub(r'\s*Mini [Tt]ub\s*', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+', ' ', name).strip()
         return name, variant
     
     # Regular Tub patterns
@@ -192,7 +203,8 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
         # Remove Regular Tub pattern (including nested like "(Regular Tub (300ml))")
         name = re.sub(r'\s*\(Regular Tub\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Regular Tub[^)]*\)', '', name, flags=re.IGNORECASE)
-        name = name.strip()
+        name = re.sub(r'\s*Regular Tub\s*', ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+', ' ', name).strip()
         return name, variant
     
     # Piece counts
@@ -218,8 +230,34 @@ def extract_variant_from_name(name: str) -> Tuple[str, str]:
         name = re.sub(r'\s*\(200[ml\s]*\+200[ml\s]*\+200[ml\s]*\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
+    # Final cleanup: remove any remaining variant-like patterns
+    # Remove any remaining parentheses with common variant terms (case-insensitive)
+    variant_patterns = [
+        r'\s*\(Regular Tub\)',
+        r'\s*\(Mini tub\)',
+        r'\s*\(Mini Tub\)',
+        r'\s*\(Regular Scoop\)',
+        r'\s*\(Perfect Plenty\)',
+        r'\s*\(Family Tub\)',
+        r'\s*\(Family Feast\)',
+    ]
+    for pattern in variant_patterns:
+        name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+    
+    # Remove standalone variant terms (without parentheses)
+    name = re.sub(r'\s+Regular Tub\s+', ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+Mini Tub\s+', ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+Perfect Plenty\s+', ' ', name, flags=re.IGNORECASE)
+    
+    # Remove "Dessert" suffix from items like "Boston Cream Pie Dessert"
+    name = re.sub(r'\s+Dessert$', '', name, flags=re.IGNORECASE)
+    
+    # Clean up extra whitespace and empty parentheses
+    name = re.sub(r'\s*\(\s*\)', '', name)  # Remove empty parentheses
+    name = re.sub(r'\s+', ' ', name).strip()
+    
     # Default: no variant info found
-    return name.strip(), '1_PIECE'
+    return name, '1_PIECE'
 
 
 def normalize_name(name: str) -> str:
@@ -230,8 +268,8 @@ def normalize_name(name: str) -> str:
         return name
     
     # Items that need "Ice Cream" suffix added (order matters - more specific first)
+    # NOTE: Some items like "Eggless Chocolate Overload" are already correct in CSV (no "Ice Cream" needed)
     ice_cream_bases = [
-        'Eggless Chocolate Overload',  # Must come before 'Eggless Chocolate'
         'Eggless Cherry & Chocolate Fudge',
         'Eggless Strawberry Cream Cheese',
         'Eggless Coconut & Pineapple',
@@ -241,7 +279,7 @@ def normalize_name(name: str) -> str:
         'Eggless Milk Chocolate',
         'Eggless Paan & Gulkand',
         'Cherry & Chocolate Fudge',
-        'Chocolate Overload',
+        'Chocolate Overload',  # Note: "Eggless Chocolate Overload" is separate and doesn't need suffix
         'Dates With Fig & Orange',
         'Cakes & Cookies',
         'Coconut & Pineapple',
@@ -250,6 +288,8 @@ def normalize_name(name: str) -> str:
         'Fig & Orange',
         'Just Chocolate',
         'Old Fashion Vanilla',
+        'Chocolate & Orange (Contains Alcohol)',  # Add Ice Cream suffix
+        'Orange (Contains Alcohol)',  # Add Ice Cream suffix
         'Eggless Chocolate',  # Generic - must come after specific ones
     ]
     
@@ -269,11 +309,15 @@ def determine_type(name: str) -> str:
     if 'employee dessert' in name_lower:
         return 'Dessert'
     
+    # Check for "Ice Cream" first (before checking for "coffee" in drinks)
+    if 'ice cream' in name_lower:
+        return 'Ice Cream'
+    
     # Extras
     if any(word in name_lower for word in ['cup', 'waffle cone', 'takeaway cup', 'butter waffle']):
         return 'Extra'
     
-    # Desserts
+    # Desserts (but not ice cream desserts)
     if any(word in name_lower for word in ['dessert', 'pie', 'brownie', 'cheesecake', 'tiramisu', 'lamington', 'plum cake']):
         return 'Dessert'
     
@@ -281,8 +325,11 @@ def determine_type(name: str) -> str:
     if any(word in name_lower for word in ['combo', 'pack', 'duo', 'trio', 'family pack']):
         return 'Combo'
     
-    # Drinks
-    if any(word in name_lower for word in ['coffee', 'tea', 'americano', 'cappuccino', 'latte', 'affogato', 'chai']):
+    # Drinks (only if not ice cream)
+    if any(word in name_lower for word in ['americano', 'cappuccino', 'latte', 'affogato']):
+        return 'Drinks'
+    # Coffee/tea drinks (but not coffee ice cream)
+    if ('coffee' in name_lower or 'tea' in name_lower or 'chai' in name_lower) and 'ice cream' not in name_lower:
         return 'Drinks'
     
     # Default to Ice Cream
@@ -313,18 +360,42 @@ def clean_order_item_name(raw_name: str) -> Dict[str, str]:
     # Step 3: Extract variant
     name, variant = extract_variant_from_name(name)
     
-    # Step 4: Normalize name (add "Ice Cream" suffix if needed)
+    # Step 4: Normalize alcohol items before other normalization
+    # Handle "contains Alcohol" or "with Alcohol" -> "(Contains Alcohol)"
+    if 'contains alcohol' in name.lower() or 'with alcohol' in name.lower():
+        # Normalize to "(Contains Alcohol)"
+        name = re.sub(r'\(contains Alcohol\)', '(Contains Alcohol)', name, flags=re.IGNORECASE)
+        name = re.sub(r'\(with Alcohol\)', '(Contains Alcohol)', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+with Alcohol', ' (Contains Alcohol)', name, flags=re.IGNORECASE)
+        # Ensure it's in the right position (before "Ice Cream" if present)
+        if 'Ice Cream' in name and '(Contains Alcohol)' in name:
+            # Move to correct position: "Chocolate & Orange (Contains Alcohol) Ice Cream"
+            name = re.sub(r'\(Contains Alcohol\)\s+Ice Cream', 'Ice Cream (Contains Alcohol)', name)
+            name = re.sub(r'Ice Cream \(Contains Alcohol\)', '(Contains Alcohol) Ice Cream', name)
+    
+    # Step 5: Normalize name (add "Ice Cream" suffix if needed)
     name = normalize_name(name)
     
-    # Step 5: Determine type
+    # Step 6: Determine type
     item_type = determine_type(name)
     
-    # Step 6: Handle special cases
+    # Step 7: Handle special cases
     # Employee Dessert
     if 'Employee Dessert' in name:
         name = 'Employee Dessert ( Any 1 )'
         item_type = 'Dessert'
         variant = '1_PIECE'
+    
+    # Final cleanup: remove any trailing variant patterns that might have been missed
+    name = re.sub(r'\s*\(Regular Tub\)\s*$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*\(Mini tub\)\s*$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*\(Perfect Plenty\)\s*$', '', name, flags=re.IGNORECASE)
+    
+    # Remove "Dessert" suffix (must be at the end, not in the middle)
+    name = re.sub(r'\s+Dessert\s*$', '', name, flags=re.IGNORECASE)
+    
+    # Clean up extra whitespace
+    name = re.sub(r'\s+', ' ', name).strip()
     
     return {
         'name': name.strip(),
