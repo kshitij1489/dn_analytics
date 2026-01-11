@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS menu_items (
     petpooja_itemid BIGINT,  -- From OrderItem.itemid (may be NULL if not yet seen in orders)
     itemcode VARCHAR(100),   -- From OrderItem.itemcode (e.g., "VANILLAICE")
     
+    -- Analytics counters (denormalized for performance)
+    total_revenue DECIMAL(12,2) DEFAULT 0,
+    total_sold INTEGER DEFAULT 0,
+    
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

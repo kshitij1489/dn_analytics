@@ -14,7 +14,7 @@
 
 CREATE TABLE IF NOT EXISTS customers (
     customer_id SERIAL PRIMARY KEY,
-    
+    customer_identity_key VARCHAR(80),
     -- Customer identification
     name VARCHAR(255),                         -- Customer name (original, as provided)
     name_normalized VARCHAR(255),              -- Normalized name (lowercase, trimmed) for deduplication
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS customers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- Constraints
-    UNIQUE(name_normalized)  -- Normalized name is unique identifier
+    UNIQUE(customer_identity_key)  -- Identity key is unique identifier
 );
 
 -- ============================================================================
@@ -56,6 +56,9 @@ CREATE INDEX IF NOT EXISTS idx_customers_last_order_date
 CREATE INDEX IF NOT EXISTS idx_customers_phone_not_null 
     ON customers(phone) 
     WHERE phone IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_identity_key
+    ON customers(customer_identity_key);
 
 -- ============================================================================
 -- COMMENTS FOR DOCUMENTATION

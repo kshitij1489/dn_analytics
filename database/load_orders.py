@@ -15,6 +15,8 @@ Usage:
 """
 
 import sys
+import hashlib
+import re
 import os
 import argparse
 import json
@@ -143,6 +145,51 @@ def get_or_create_restaurant(conn, restaurant_data: Dict) -> int:
     cursor.close()
     return restaurant_id
 
+def normalize_phone(phone: str) -> str:
+    """Normalize phone number to last 10 digits"""
+    if not phone:
+        return ""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) > 10:
+        digits = digits[-10:]
+    return digits
+
+
+def normalize_text(value: str) -> str:
+    """Lowercase, trim, collapse spaces"""
+    return " ".join(value.lower().strip().split())
+
+
+def make_hash(value: str) -> str:
+    """Stable SHA-256 hash"""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def compute_customer_identity_key(customer: dict) -> str:
+    """
+    Priority:
+    1. phone
+    2. name + address
+    3. anonymous (unique per customer)
+    """
+    import uuid
+    
+    phone = customer.get("phone")
+    name = customer.get("name")
+    address = customer.get("address")
+
+    if phone:
+        phone_norm = normalize_phone(phone)
+        if phone_norm:
+            return "phone:" + make_hash(phone_norm)
+
+    if name and address:
+        base = normalize_text(name) + "|" + normalize_text(address)
+        return "addr:" + make_hash(base)
+
+    # For anonymous or name-only customers, use a unique identifier
+    # This prevents false matches based on name alone.
+    return "anon:" + str(uuid.uuid4())
 
 def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, order_total: Decimal = Decimal(0)) -> Optional[int]:
     """Get or create customer, return customer_id"""
@@ -157,9 +204,11 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     name_normalized = name.lower().strip()
     
     # Check if customer exists by normalized name
+    identity_key = compute_customer_identity_key(customer_data)
     cursor.execute("""
-        SELECT customer_id FROM customers WHERE name_normalized = %s
-    """, (name_normalized,))
+        SELECT customer_id FROM customers
+        WHERE customer_identity_key = %s
+    """, (identity_key,))
     
     result = cursor.fetchone()
     if result:
@@ -194,14 +243,19 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     else:
         # Insert new customer
         cursor.execute("""
-            INSERT INTO customers (
-                name, name_normalized, phone, address, gstin, 
+                INSERT INTO customers (
+                customer_identity_key,
+                name, name_normalized, phone, address, gstin,
                 first_order_date, last_order_date,
                 total_orders, total_spent
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
             RETURNING customer_id
-        """, (name, name_normalized, phone, address, gstin, order_date, order_date, order_total))
+        """, (
+            identity_key,
+            name, name_normalized, phone, address, gstin,
+            order_date, order_date, order_total
+        ))
         customer_id = cursor.fetchone()[0]
         conn.commit()
     
@@ -377,6 +431,16 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
             order_item_id = cursor.fetchone()[0]
             stats['order_items'] += 1
             
+            # Update menu_items stats if matched and order is successful
+            if menu_item_id and order_data.get('status') == 'Success':
+                cursor.execute("""
+                    UPDATE menu_items 
+                    SET total_sold = total_sold + %s,
+                        total_revenue = total_revenue + %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE menu_item_id = %s
+                """, (item_data.get('quantity', 1), Decimal(str(item_data.get('total', 0))), menu_item_id))
+            
             # Process addons
             addons = item_data.get('addon', [])
             for addon_data in addons:
@@ -425,6 +489,17 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
                 ))
                 
                 stats['order_item_addons'] += 1
+                
+                # Update menu_items stats for addons if matched and order is successful
+                if addon_menu_item_id and order_data.get('status') == 'Success':
+                    addon_total = Decimal(str(addon_data.get('price', 0))) * addon_quantity
+                    cursor.execute("""
+                        UPDATE menu_items 
+                        SET total_sold = total_sold + %s,
+                            total_revenue = total_revenue + %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE menu_item_id = %s
+                    """, (addon_quantity, addon_total, addon_menu_item_id))
             
             conn.commit()
         
@@ -538,6 +613,19 @@ def main():
         conn.close()
         return
     
+    # Reset menu item counters if NOT incremental
+    if not args.incremental:
+        print("\n3.5 Resetting menu item analytics counters for full reload...")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE menu_items SET total_revenue = 0, total_sold = 0;")
+            conn.commit()
+            cursor.close()
+            print("  ✓ Counters reset")
+        except Exception as e:
+            print(f"  ⚠️  Failed to reset counters: {e}")
+            conn.rollback()
+
     # Load orders
     print("\n4. Loading orders...")
     if args.input_file:

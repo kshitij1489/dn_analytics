@@ -205,11 +205,10 @@ def sync_database(conn):
         import traceback
         return 0, f"Sync error: {str(e)}\n{traceback.format_exc()}"
 
-
 def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sort_direction='DESC'):
     """Get paginated table data"""
     try:
-        # Determine sort column based on table
+        # Determine sort column based on table if not provided
         if sort_column is None:
             if table_name == 'orders':
                 sort_column = 'created_on'
@@ -218,7 +217,7 @@ def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sor
             elif table_name == 'customers':
                 sort_column = 'last_order_date'
             elif table_name == 'menu_items':
-                sort_column = 'type, name'
+                sort_column = 'name'
                 sort_direction = 'ASC'
             elif table_name == 'variants':
                 sort_column = 'variant_name'
@@ -245,6 +244,119 @@ def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sor
         return df, total_count, None
     except Exception as e:
         return None, 0, str(e)
+
+
+def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_prefix):
+    """Reusable component for rendering a paginated, globally sortable table"""
+    
+    # 1. UI Controls
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    with col1:
+        # Find index of default sort column
+        try:
+            default_index = sort_columns.index(default_sort_col)
+        except ValueError:
+            default_index = 0
+            
+        sort_col = st.selectbox(
+            f"Sort {table_name} by", 
+            sort_columns, 
+            index=default_index, 
+            key=f"{page_key_prefix}_sort_col"
+        )
+    with col2:
+        sort_dir = st.selectbox(
+            "Direction", 
+            ["Descending", "Ascending"], 
+            index=0, 
+            key=f"{page_key_prefix}_sort_dir"
+        )
+    with col3:
+        page_size = st.selectbox(
+            "Rows per page", 
+            [25, 50, 100, 200], 
+            index=1, 
+            key=f"{page_key_prefix}_page_size"
+        )
+    with col4:
+        st.write("") # Spacer
+        refresh = st.button("🔄 Refresh", key=f"{page_key_prefix}_refresh")
+
+    # 2. Pagination State
+    page_state_key = f"{page_key_prefix}_page"
+    if page_state_key not in st.session_state or refresh:
+        st.session_state[page_state_key] = 1
+
+    # 3. Data Fetching
+    df, total_count, error = get_table_data(
+        conn,
+        table_name,
+        page=st.session_state[page_state_key],
+        page_size=page_size,
+        sort_column=sort_col,
+        sort_direction='DESC' if sort_dir == "Descending" else 'ASC'
+    )
+
+    if error:
+        st.error(f"Error loading {table_name}: {error}")
+        return
+
+    total_pages = (total_count + page_size - 1) // page_size
+    if total_pages == 0:
+        st.info(f"No records found in {table_name}.")
+        return
+
+    # 4. Pagination Controls
+    st.info(f"Showing page {st.session_state[page_state_key]} of {total_pages} (Total: {total_count:,} records)")
+    
+    def set_page(p):
+        st.session_state[page_state_key] = p
+
+    p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns([1, 1, 2, 1, 1])
+    with p_col1:
+        st.button("⏮️ First", key=f"{page_key_prefix}_first", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(1,))
+    with p_col2:
+        st.button("◀️ Prev", key=f"{page_key_prefix}_prev", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(st.session_state[page_state_key] - 1,))
+    with p_col3:
+        st.session_state[f"{page_key_prefix}_page_input"] = st.session_state[page_state_key]
+        new_page = st.number_input(
+            "Go to page", 
+            min_value=1, 
+            max_value=total_pages, 
+            value=st.session_state[page_state_key],
+            key=f"{page_key_prefix}_page_input_widget"
+        )
+        if new_page != st.session_state[page_state_key]:
+            st.session_state[page_state_key] = new_page
+            st.rerun()
+    with p_col4:
+        st.button("Next ▶️", key=f"{page_key_prefix}_next", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(st.session_state[page_state_key] + 1,))
+    with p_col5:
+        st.button("Last ⏭️", key=f"{page_key_prefix}_last", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(total_pages,))
+
+    # 5. Display Table
+    cols = df.columns.tolist()
+    
+    # Define analytics columns to move for better visibility
+    to_move = ['total_revenue', 'total_sold', 'total_spent', 'total_orders']
+    
+    # Find anchor point to insert after
+    anchor = None
+    for a in ['is_active', 'name', 'order_id']:
+        if a in cols:
+            anchor = a
+            break
+            
+    if anchor:
+        for c in to_move:
+            if c in cols:
+                cols.remove(c)
+                anchor_idx = cols.index(anchor)
+                cols.insert(anchor_idx + 1, c)
+                # Note: we don't increment anchor_idx because we want multiple 
+                # analytics cols to cluster together after the anchor
+            
+    st.dataframe(df[cols], use_container_width=True, height=500)
 
 
 # Main App
@@ -455,215 +567,68 @@ with tab1:
 # Tab 2: Orders
 with tab2:
     st.header("Orders Table")
-    
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        page_size = st.selectbox("Rows per page", [25, 50, 100, 200], index=1)
-    with col2:
-        sort_direction = st.selectbox("Sort", ["Newest First", "Oldest First"], index=0)
-    with col3:
-        refresh = st.button("🔄 Refresh")
-    
-    # Pagination
-    if 'orders_page' not in st.session_state:
-        st.session_state.orders_page = 1
-    
-    if refresh:
-        st.session_state.orders_page = 1
-    
-    df, total_count, error = get_table_data(
-        conn,
-        'orders',
-        page=st.session_state.orders_page,
-        page_size=page_size,
-        sort_direction='DESC' if sort_direction == "Newest First" else 'ASC'
+    render_datatable(
+        conn, 
+        'orders', 
+        'created_on', 
+        ['order_id', 'created_on', 'total', 'order_type', 'order_from', 'status', 'petpooja_order_id'],
+        'orders'
     )
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        total_pages = (total_count + page_size - 1) // page_size
-        
-        st.info(f"Showing page {st.session_state.orders_page} of {total_pages} (Total: {total_count:,} orders)")
-        
-        # Pagination logic
-        def set_page(page):
-            st.session_state.orders_page = page
-            # We don't need to manually set orders_page_input if we rely on the rerender to pick up new value?
-            # Actually, to update a widget with key, we MUST update the key in session state.
-            st.session_state.orders_page_input = page
-
-        def sync_input():
-            st.session_state.orders_page = st.session_state.orders_page_input
-
-        # Pagination controls
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
-        with col1:
-            st.button(
-                "⏮️ First", 
-                key="orders_first", 
-                disabled=st.session_state.orders_page == 1,
-                on_click=set_page,
-                args=(1,)
-            )
-        with col2:
-            st.button(
-                "◀️ Previous", 
-                key="orders_prev", 
-                disabled=st.session_state.orders_page == 1,
-                on_click=set_page,
-                args=(st.session_state.orders_page - 1,)
-            )
-        with col3:
-            if total_pages > 0:
-                # Ensure input key exists
-                if "orders_page_input" not in st.session_state:
-                    st.session_state.orders_page_input = st.session_state.orders_page
-                
-                st.number_input(
-                    "Page",
-                    min_value=1,
-                    max_value=total_pages,
-                    key="orders_page_input",
-                    on_change=sync_input
-                )
-            else:
-                st.info("No data available.")
-                st.stop()
-                
-        with col4:
-            st.button(
-                "Next ▶️", 
-                key="orders_next", 
-                disabled=st.session_state.orders_page >= total_pages,
-                on_click=set_page,
-                args=(st.session_state.orders_page + 1,)
-            )
-        with col5:
-            st.button(
-                "Last ⏭️", 
-                key="orders_last", 
-                disabled=st.session_state.orders_page >= total_pages,
-                on_click=set_page,
-                args=(total_pages,)
-            )
-        st.dataframe(df, use_container_width=True, height=500)
 
 # Tab 3: Order Items
 with tab3:
     st.header("Order Items Table")
-    
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        page_size = st.selectbox("Rows per page", [25, 50, 100, 200], index=1, key="items_page_size")
-    with col2:
-        refresh = st.button("🔄 Refresh", key="items_refresh")
-    
-    if 'order_items_page' not in st.session_state:
-        st.session_state.order_items_page = 1
-    
-    if refresh:
-        st.session_state.order_items_page = 1
-    
-    df, total_count, error = get_table_data(
-        conn,
-        'order_items',
-        page=st.session_state.order_items_page,
-        page_size=page_size
+    render_datatable(
+        conn, 
+        'order_items', 
+        'created_at', 
+        ['order_item_id', 'order_id', 'created_at', 'total_price', 'quantity', 'name_raw', 'category_name', 'match_confidence'],
+        'order_items'
     )
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        total_pages = (total_count + page_size - 1) // page_size
-        st.info(f"Page {st.session_state.order_items_page} of {total_pages} (Total: {total_count:,} items)")
-        
-        # Simple pagination
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("◀️ Prev", key="items_prev", disabled=st.session_state.order_items_page == 1):
-                st.session_state.order_items_page -= 1
-                st.rerun()
-        with col2:
-            st.write(f"Page {st.session_state.order_items_page}/{total_pages}")
-        with col3:
-            if st.button("Next ▶️", key="items_next", disabled=st.session_state.order_items_page >= total_pages):
-                st.session_state.order_items_page += 1
-                st.rerun()
-        
-        st.dataframe(df, use_container_width=True, height=500)
 
 # Tab 4: Customers
 with tab4:
     st.header("Customers Table")
-    
-    page_size = st.selectbox("Rows per page", [25, 50, 100], index=1, key="customers_page_size")
-    
-    if 'customers_page' not in st.session_state:
-        st.session_state.customers_page = 1
-    
-    df, total_count, error = get_table_data(
-        conn,
-        'customers',
-        page=st.session_state.customers_page,
-        page_size=page_size
+    render_datatable(
+        conn, 
+        'customers', 
+        'last_order_date', 
+        ['last_order_date', 'total_orders', 'total_spent', 'name', 'phone', 'first_order_date'],
+        'customers'
     )
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        total_pages = (total_count + page_size - 1) // page_size
-        st.info(f"Page {st.session_state.customers_page} of {total_pages} (Total: {total_count:,} customers)")
-        
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("◀️ Prev", key="cust_prev", disabled=st.session_state.customers_page == 1):
-                st.session_state.customers_page -= 1
-                st.rerun()
-        with col2:
-            st.write(f"Page {st.session_state.customers_page}/{total_pages}")
-        with col3:
-            if st.button("Next ▶️", key="cust_next", disabled=st.session_state.customers_page >= total_pages):
-                st.session_state.customers_page += 1
-                st.rerun()
-        
-        st.dataframe(df, use_container_width=True, height=500)
 
 # Tab 5: Restaurants
 with tab5:
     st.header("Restaurants Table")
-    
-    df, total_count, error = get_table_data(conn, 'restaurants', page=1, page_size=100)
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        st.info(f"Total: {total_count} restaurants")
-        st.dataframe(df, use_container_width=True)
+    render_datatable(
+        conn, 
+        'restaurants', 
+        'restaurant_id', 
+        ['restaurant_id', 'name', 'petpooja_restid'],
+        'restaurants'
+    )
 
 # Tab 6: Menu Items
 with tab6:
     st.header("Menu Items")
-    
-    df, total_count, error = get_table_data(conn, 'menu_items', page=1, page_size=1000)
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        st.info(f"Total: {total_count} items")
-        st.dataframe(df, use_container_width=True, height=600)
+    render_datatable(
+        conn, 
+        'menu_items', 
+        'total_revenue', 
+        ['total_revenue', 'total_sold', 'name', 'type', 'is_active', 'menu_item_id'],
+        'menu_items'
+    )
 
 # Tab 7: Variants
 with tab7:
     st.header("Variants")
-    
-    df, total_count, error = get_table_data(conn, 'variants', page=1, page_size=1000)
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        st.info(f"Total: {total_count} variants")
-        st.dataframe(df, use_container_width=True)
+    render_datatable(
+        conn, 
+        'variants', 
+        'variant_name', 
+        ['variant_id', 'variant_name', 'variant_group_name'],
+        'variants'
+    )
 
 # Tab 8: Menu Matrix
 with tab8:
@@ -696,74 +661,24 @@ with tab8:
 # Tab 9: Order Taxes
 with tab9:
     st.header("Order Taxes Table")
-    
-    page_size = st.selectbox("Rows per page", [25, 50, 100], index=1, key="taxes_page_size")
-    
-    if 'taxes_page' not in st.session_state:
-        st.session_state.taxes_page = 1
-    
-    df, total_count, error = get_table_data(
-        conn,
-        'order_taxes',
-        page=st.session_state.taxes_page,
-        page_size=page_size
+    render_datatable(
+        conn, 
+        'order_taxes', 
+        'tax_id', 
+        ['tax_id', 'tax_amount', 'tax_rate', 'tax_title', 'order_id'],
+        'taxes'
     )
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        total_pages = (total_count + page_size - 1) // page_size
-        st.info(f"Page {st.session_state.taxes_page} of {total_pages} (Total: {total_count:,} tax records)")
-        
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("◀️ Prev", key="tax_prev", disabled=st.session_state.taxes_page == 1):
-                st.session_state.taxes_page -= 1
-                st.rerun()
-        with col2:
-            st.write(f"Page {st.session_state.taxes_page}/{total_pages}")
-        with col3:
-            if st.button("Next ▶️", key="tax_next", disabled=st.session_state.taxes_page >= total_pages):
-                st.session_state.taxes_page += 1
-                st.rerun()
-        
-        st.dataframe(df, use_container_width=True, height=500)
 
 # Tab 10: Order Discounts
 with tab10:
     st.header("Order Discounts Table")
-    
-    page_size = st.selectbox("Rows per page", [25, 50, 100], index=1, key="discounts_page_size")
-    
-    if 'discounts_page' not in st.session_state:
-        st.session_state.discounts_page = 1
-    
-    df, total_count, error = get_table_data(
-        conn,
-        'order_discounts',
-        page=st.session_state.discounts_page,
-        page_size=page_size
+    render_datatable(
+        conn, 
+        'order_discounts', 
+        'discount_id', 
+        ['discount_id', 'discount_amount', 'discount_rate', 'discount_title', 'order_id'],
+        'discounts'
     )
-    
-    if error:
-        st.error(f"Error: {error}")
-    else:
-        total_pages = (total_count + page_size - 1) // page_size
-        st.info(f"Page {st.session_state.discounts_page} of {total_pages} (Total: {total_count:,} discount records)")
-        
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("◀️ Prev", key="disc_prev", disabled=st.session_state.discounts_page == 1):
-                st.session_state.discounts_page -= 1
-                st.rerun()
-        with col2:
-            st.write(f"Page {st.session_state.discounts_page}/{total_pages}")
-        with col3:
-            if st.button("Next ▶️", key="disc_next", disabled=st.session_state.discounts_page >= total_pages):
-                st.session_state.discounts_page += 1
-                st.rerun()
-        
-        st.dataframe(df, use_container_width=True, height=500)
 
 # Footer
 st.markdown("---")
