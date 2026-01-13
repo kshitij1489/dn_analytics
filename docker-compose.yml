@@ -40,7 +40,6 @@ services:
       - ./database:/app/database
       - ./fetch_orders.py:/app/fetch_orders.py
       - ./data_cleaning:/app/data_cleaning
-      - ./clean_order_item.py:/app/clean_order_item.py
       # Mount data and utils for live updates
       - ./data:/app/data
       - ./utils:/app/utils

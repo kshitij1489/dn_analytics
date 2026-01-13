@@ -71,8 +71,11 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
             WHERE menu_item_id = %s
         """, (target_id, source_id))
         
-        # 5. Update Parsing Table
-        # Update rows that mapped to Source Name/Type to now map to Target Name/Type
+        # 5. Update Parsing Table (Upsert)
+        # Ensure a rule exists mapping Source Name/Type -> Target Name/Type. 
+        # Existing rules for Source are updated; if Source was never parsed, a new rule is inserted.
+        
+        # A. Update existing rules that point to Source
         cursor.execute("""
             UPDATE item_parsing_table
             SET cleaned_name = %s,
@@ -80,6 +83,18 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
                 updated_at = CURRENT_TIMESTAMP
             WHERE cleaned_name = %s AND type = %s
         """, (target_name, target_type, source_name, source_type))
+        
+        # B. Ensure the Source Name itself maps to Target (The "Missing Link" Fix)
+        # This handles the case where Source existed in menu but not in parsing table
+        cursor.execute("""
+            INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (raw_name) 
+            DO UPDATE SET
+                cleaned_name = EXCLUDED.cleaned_name,
+                type = EXCLUDED.type,
+                updated_at = EXCLUDED.updated_at
+        """, (source_name, target_name, target_type, '1_PIECE')) # Default variant for item-level merge
         
         updated_parsing = cursor.rowcount
         
