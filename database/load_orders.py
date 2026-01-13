@@ -438,10 +438,11 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
                 cursor.execute("""
                     UPDATE menu_items 
                     SET total_sold = total_sold + %s,
+                        sold_as_item = sold_as_item + %s,
                         total_revenue = total_revenue + %s,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE menu_item_id = %s
-                """, (item_data.get('quantity', 1), Decimal(str(item_data.get('total', 0))), menu_item_id))
+                """, (item_data.get('quantity', 1), item_data.get('quantity', 1), Decimal(str(item_data.get('total', 0))), menu_item_id))
             
             # Process addons
             addons = item_data.get('addon', [])
@@ -498,10 +499,11 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
                     cursor.execute("""
                         UPDATE menu_items 
                         SET total_sold = total_sold + %s,
+                            sold_as_addon = sold_as_addon + %s,
                             total_revenue = total_revenue + %s,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE menu_item_id = %s
-                    """, (addon_quantity, addon_total, addon_menu_item_id))
+                    """, (addon_quantity, addon_quantity, addon_total, addon_menu_item_id))
             
             conn.commit()
         
@@ -620,7 +622,7 @@ def main():
         print("\n3.5 Resetting menu item analytics counters for full reload...")
         try:
             cursor = conn.cursor()
-            cursor.execute("UPDATE menu_items SET total_revenue = 0, total_sold = 0;")
+            cursor.execute("UPDATE menu_items SET total_revenue = 0, total_sold = 0, sold_as_item = 0, sold_as_addon = 0;")
             conn.commit()
             cursor.close()
             print("  ✓ Counters reset")

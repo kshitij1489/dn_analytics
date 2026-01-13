@@ -334,7 +334,7 @@ Fig & Orange Ice Cream (Regular Tub (220gms)),Eggless Fig & Orange Ice Cream,Ice
 Just Chocolate Ice Cream (Mini Tub (160gms)),Eggless Just Chocolate,Ice Cream,MINI_TUB_160GMS,True
 Eggless Coffee Mascarpone Ice Cream (Mini Tub (160gms)),Eggless Coffee Mascarpone Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Banoffee Ice Cream (Mini Tub (160gms)),Eggless Banoffee Ice Cream,Ice Cream,MINI_TUB_160GMS,True
-Cherry & Chocolate Fudge Ice Cream (Regular Scoop (120gm)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,REGULAR_SCOOP_120GMS,True
+Cherry & Chocolate Fudge Ice Cream (Regular Scoop (120gm)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,REGULAR_SCOOP_120GMS,True
 Strawberry Cream Cheese Ice Cream (Mini Tub (160gms)),Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Eggless Coconut & Pineapple Ice Cream (Regular Tub (220gms)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Dates & Chocolate (Mini Tub (160gms)),Dates & Chocolate Eggless,Ice Cream,MINI_TUB_160GMS,True
@@ -359,7 +359,7 @@ Monkey Business Ice Cream (Regular Tub (220gms)),Monkey Business Ice Cream,Ice C
 Banoffee Ice Cream (Mini tub (160gms)),Eggless Banoffee Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Coffee Mascarpone Ice Cream (Mini tub (160gms)),Coffee Mascarpone Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Just Chocolate Ice Cream (Regular Tub (220gms)),Eggless Just Chocolate,Ice Cream,REGULAR_TUB_220GMS,True
-Cherry & Chocolate Fudge Ice Cream (Regular Tub (220gms)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
+Cherry & Chocolate Fudge Ice Cream (Regular Tub (220gms)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Eggless Coconut & Pineapple Ice Cream (Mini Tub (160gms)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Old Fashion Vanilla Ice Cream (Mini Tub (160gms)),Old Fashion Vanilla Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Pistachio Ice Cream (160gm),Pistachio Ice Cream,Ice Cream,MINI_TUB_160GMS,True
@@ -369,7 +369,7 @@ Monkey Business Ice Cream (Mini Tub (160gms)),Monkey Business Ice Cream,Ice Crea
 Coffee Mascarpone Ice Cream (Mini Tub (160gms)),Coffee Mascarpone Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Old Fashion Vanilla Ice Cream (Regular Scoop (120gm)),Old Fashion Vanilla Ice Cream,Ice Cream,REGULAR_SCOOP_120GMS,True
 Fig & Orange Ice Cream (Regular Scoop (120gm)),Eggless Fig & Orange Ice Cream,Ice Cream,REGULAR_SCOOP_120GMS,True
-Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,MINI_TUB_160GMS,True
+Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Cakes & Cookies Ice Cream (Mini Tub (160gms)),Cakes & Cookies Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Eggless Chocolate Overload (Mini Tub (160gms)),Eggless Chocolate Overload Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Monkey Business Ice Cream (Regular Scoop (120gm)),Monkey Business Ice Cream,Ice Cream,REGULAR_SCOOP_120GMS,True
@@ -419,7 +419,7 @@ Chocolate & Orange (contains Alcohol) (Regular Tub (220gms)),Chocolate & Orange 
 Eggless Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Curious Creations Duo,Design Your Indulgence Duo,Combo,DUO_200ML_200ML,True
 Dates With Fig & Orange (Mini Tub (160gms)),Dates With Fig & Orange Eggless,Ice Cream,MINI_TUB_160GMS,True
-Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,MINI_TUB_160GMS,True
+Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Rose Cardamom Ice Cream (Mini Tub (160gms)),Rose Cardamom Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Classic Night &amp; Day Duo,Design Your Indulgence Duo,Combo,DUO_200ML_200ML,True
 Eggless Milk Chocolate Ice Cream 200ml,Eggless Milk Chocolate Ice Cream,Ice Cream,MINI_TUB_200ML,True
@@ -449,7 +449,7 @@ Coconut &amp; Pineapple (160gm),Eggless Coconut & Pineapple Ice Cream,Ice Cream,
 Old Fashion Vanilla Ice Cream (Mini tub (160gms)),Old Fashion Vanilla Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Eggless Fig & Orange Ice Cream Small Scoop,Eggless Fig & Orange Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Eggless Coconut & Pineapple Ice Cream (Junior Scoop (60gm)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
-Cherry & Chocolate (160gm),Cherry & Chocolate Fudge Ice Cream,Ice Cream,MINI_TUB_160GMS,True
+Cherry & Chocolate (160gm),Eggless Cherry & Chocolate Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Fig & Orange Ice Cream (Family Tub (500gms)),Eggless Fig & Orange Ice Cream,Ice Cream,FAMILY_TUB_500GMS,True
 Bean-to-bar Chocolate Dark Ice Cream (Junior Scoop (60gm)),Bean-to-Bar Dark Chocolate Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Strawberry Cream Cheese Ice Cream (Junior Scoop (60gm)),Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
@@ -472,7 +472,7 @@ Nona’s Traditional Plum Cake (eggless) Contains Alcohol,Nona’s Traditional P
 Eggless Paan & Gulkand Ice Cream Small Scoop,Eggless Paan & Gulkand Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Egg Strawberry Cream Cheese Ice Cream (Regular Tub (220gms)),Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Eggless Chocolate Overload (Junior Scoop (60gm)),Eggless Chocolate Overload Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
-Cherry & Chocolate Fudge Ice Cream (Junior Scoop (60gm)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
+Cherry & Chocolate Fudge Ice Cream (Junior Scoop (60gm)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Eggless Coconut & Pineapple Ice Cream (Mini tub (160gms)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,MINI_TUB_160GMS,True
 Orange Ice Cream (with Alcohol) (Regular Tub (220gms)),Orange (Contains Alcohol) Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Egg Strawberry Cream Cheese Ice Cream (Mini tub (160gms)),Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,MINI_TUB_160GMS,True
@@ -519,7 +519,7 @@ Chocolate &amp; Orange (Contains Alcohol) Ice Cream (Mini Tub (160gms)),Chocolat
 Coconut & Pineapple Ice Cream (Regular Tub (220gms)),Eggless Coconut & Pineapple Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Dates & Chocolate (Junior Scoop (60gm)),Dates & Chocolate Eggless,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Chocolate Overload Ice Cream (Family Tub (500gms)),Eggless Chocolate Overload Ice Cream,Ice Cream,FAMILY_TUB_500GMS,True
-Cherry & Chocolate Fudge Ice Cream (Family Tub (500gms)),Cherry & Chocolate Fudge Ice Cream,Ice Cream,FAMILY_TUB_500GMS,True
+Cherry & Chocolate Fudge Ice Cream (Family Tub (500gms)),Eggless Cherry & Chocolate Ice Cream,Ice Cream,FAMILY_TUB_500GMS,True
 Fig & Orange Ice Cream (Junior Scoop (60gm)),Eggless Fig & Orange Ice Cream,Ice Cream,JUNIOR_SCOOP_60GMS,True
 Egg Based Paan & Gulkand Ice Cream (Regular Tub (220gms)),Eggless Paan & Gulkand Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
 Chocolate Overload Ice Cream (Regular Tub (220gms)),Eggless Chocolate Overload Ice Cream,Ice Cream,REGULAR_TUB_220GMS,True
@@ -549,7 +549,7 @@ Butter Waffle Cones,Butter Waffle Cone,Extra,1_PIECE,True
 Cakes & Cookies,Cakes & Cookies Ice Cream,Ice Cream,1_PIECE,True
 Banoffee Ice Cream,Eggless Banoffee Ice Cream,Ice Cream,1_PIECE,True
 Dates & Chocolate,Dates & Chocolate Eggless,Ice Cream,1_PIECE,True
-Cherry & Chocolate,Cherry & Chocolate Fudge Ice Cream,Ice Cream,1_PIECE,True
+Cherry & Chocolate,Eggless Cherry & Chocolate Ice Cream,Ice Cream,1_PIECE,True
 Coconut & Pineapple,Eggless Coconut & Pineapple Ice Cream,Ice Cream,1_PIECE,True
 Coffee Mascarpone,Coffee Mascarpone Ice Cream,Ice Cream,1_PIECE,True
 Eggless Cherry & Chocolate,Eggless Cherry & Chocolate Ice Cream,Ice Cream,1_PIECE,True
@@ -585,3 +585,4 @@ Eggless Chocolate Ice Cream,Eggless Just Chocolate,Ice Cream,1_PIECE,True
 Egg Strawberry Cream Cheese Ice Cream,Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,1_PIECE,True
 Paan & Gulkand Ice Cream,Eggless Paan & Gulkand Ice Cream,Ice Cream,1_PIECE,True
 Strawberry Cream Cheese Ice Cream,Eggless Strawberry Cream Cheese Ice Cream,Ice Cream,1_PIECE,True
+Cherry & Chocolate Fudge Ice Cream,Eggless Cherry & Chocolate Ice Cream,Ice Cream,1_PIECE,True

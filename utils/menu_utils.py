@@ -34,26 +34,28 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
     cursor = conn.cursor()
     try:
         # 1. Get Details
-        cursor.execute("SELECT name, type, total_sold, total_revenue FROM menu_items WHERE menu_item_id = %s", (source_id,))
+        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = %s", (source_id,))
         source = cursor.fetchone()
         
-        cursor.execute("SELECT name, type, total_sold, total_revenue FROM menu_items WHERE menu_item_id = %s", (target_id,))
+        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = %s", (target_id,))
         target = cursor.fetchone()
         
         if not source or not target:
             return {"status": "error", "message": "Source or Target item not found"}
             
-        source_name, source_type, source_sold, source_revenue = source
-        target_name, target_type, target_sold, target_revenue = target
+        source_name, source_type, source_sold, source_revenue, source_as_item, source_as_addon = source
+        target_name, target_type, target_sold, target_revenue, target_as_item, target_as_addon = target
         
         # 2. Update Target Stats
         cursor.execute("""
             UPDATE menu_items 
             SET total_sold = COALESCE(total_sold, 0) + %s,
+                sold_as_item = COALESCE(sold_as_item, 0) + %s,
+                sold_as_addon = COALESCE(sold_as_addon, 0) + %s,
                 total_revenue = COALESCE(total_revenue, 0) + %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE menu_item_id = %s
-        """, (source_sold or 0, source_revenue or 0, target_id))
+        """, (source_sold or 0, source_as_item or 0, source_as_addon or 0, source_revenue or 0, target_id))
         
         # 3. Relink Order Items
         cursor.execute("""

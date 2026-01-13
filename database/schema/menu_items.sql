@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS menu_items (
     -- Analytics counters (denormalized for performance)
     total_revenue DECIMAL(12,2) DEFAULT 0,
     total_sold INTEGER DEFAULT 0,
+    sold_as_item INTEGER DEFAULT 0,
+    sold_as_addon INTEGER DEFAULT 0,
     
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

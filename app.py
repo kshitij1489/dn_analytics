@@ -54,6 +54,8 @@ if 'db_conn' not in st.session_state:
     st.session_state.db_conn = None
 if 'item_matcher' not in st.session_state:
     st.session_state.item_matcher = None
+if 'data_version' not in st.session_state:
+    st.session_state.data_version = 0
 
 
 def get_db_connection():
@@ -201,13 +203,17 @@ def sync_database(conn):
         progress_bar.empty()
         status_text.empty()
         
+        # Increment version to trigger automatic UI refresh across all tabs
+        if len(new_orders) > 0:
+            st.session_state.data_version += 1
+            
         return len(new_orders), stats
     except Exception as e:
         import traceback
         return 0, f"Sync error: {str(e)}\n{traceback.format_exc()}"
 
-def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sort_direction='DESC'):
-    """Get paginated table data"""
+def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sort_direction='DESC', filters=None):
+    """Get paginated table data with optional multi-column filtering"""
     try:
         # Determine sort column based on table if not provided
         if sort_column is None:
@@ -226,9 +232,25 @@ def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sor
             else:
                 sort_column = 'created_at'
         
-        # Get total count
-        count_query = f"SELECT COUNT(*) as count FROM {table_name}"
-        total_count = pd.read_sql_query(count_query, conn).iloc[0]['count']
+        # Build WHERE clause from filters
+        where_clause = ""
+        params = []
+        if filters:
+            conditions = []
+            for col, val in filters.items():
+                if val:
+                    # Use CAST to TEXT to allow searching across IDs and numbers
+                    conditions.append(f"CAST({col} AS TEXT) ILIKE %s")
+                    params.append(f"%{val}%")
+            if conditions:
+                where_clause = "WHERE " + " AND ".join(conditions)
+        
+        # Get total count with filters
+        count_query = f"SELECT COUNT(*) as count FROM {table_name} {where_clause}"
+        cursor = conn.cursor()
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+        cursor.close()
         
         # Calculate offset
         offset = (page - 1) * page_size
@@ -236,22 +258,55 @@ def get_table_data(conn, table_name, page=1, page_size=50, sort_column=None, sor
         # Build query
         query = f"""
             SELECT * FROM {table_name}
+            {where_clause}
             ORDER BY {sort_column} {sort_direction}
             LIMIT {page_size} OFFSET {offset}
         """
         
-        df = pd.read_sql_query(query, conn)
+        # execute_query uses pd.read_sql_query which doesn't easily take params for the WHERE clause
+        # so we'll use a cursor and then create the DF
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(query, params)
+        df = pd.DataFrame(cursor.fetchall())
+        cursor.close()
         
         return df, total_count, None
     except Exception as e:
         return None, 0, str(e)
 
 
-def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_prefix):
-    """Reusable component for rendering a paginated, globally sortable table"""
+def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_prefix, search_columns=None):
+    """Reusable component for rendering a paginated, globally sortable table with per-column filtering"""
     
-    # 1. UI Controls
+    # 1. Search Filters
+    filters = {}
+    if search_columns:
+        st.write("🔍 **Quick Filters**")
+        # Split search columns into rows of up to 4
+        n_cols = len(search_columns)
+        rows = [search_columns[i:i + 4] for i in range(0, n_cols, 4)]
+        
+        for row in rows:
+            cols = st.columns(len(row))
+            for i, col_name in enumerate(row):
+                with cols[i]:
+                    filter_val = st.text_input(
+                        f"Search {col_name}", 
+                        key=f"{page_key_prefix}_filter_{col_name}",
+                        placeholder=f"Filter {col_name}..."
+                    )
+                    if filter_val:
+                        filters[col_name] = filter_val
+
+    # 2. UI Controls
     col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    
+    # Define reset callback before rendering buttons
+    def reset_filters():
+        for col_name in (search_columns or []):
+            st.session_state[f"{page_key_prefix}_filter_{col_name}"] = ""
+        st.session_state[f"{page_key_prefix}_page"] = 1
+
     with col1:
         # Find index of default sort column
         try:
@@ -274,40 +329,54 @@ def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_
         )
     with col3:
         page_size = st.selectbox(
-            "Rows per page", 
+            "Rows/page", 
             [25, 50, 100, 200], 
             index=1, 
             key=f"{page_key_prefix}_page_size"
         )
     with col4:
         st.write("") # Spacer
-        refresh = st.button("🔄 Refresh", key=f"{page_key_prefix}_refresh")
+        st.button("🧹", key=f"{page_key_prefix}_clear", help="Clear Filters", on_click=reset_filters, use_container_width=True)
 
-    # 2. Pagination State
+    # 3. Pagination State
     page_state_key = f"{page_key_prefix}_page"
-    if page_state_key not in st.session_state or refresh:
+    if page_state_key not in st.session_state:
         st.session_state[page_state_key] = 1
 
-    # 3. Data Fetching
+    # Reset page if filter, page size, or global data version changes
+    filter_state_keys = [f"{page_key_prefix}_filter_{c}" for c in (search_columns or [])]
+    current_state = {k: st.session_state.get(k, "") for k in filter_state_keys}
+    current_state["page_size"] = page_size
+    current_state["data_version"] = st.session_state.data_version
+    
+    state_record_key = f"{page_key_prefix}_last_state"
+    if state_record_key not in st.session_state:
+        st.session_state[state_record_key] = current_state
+    elif st.session_state[state_record_key] != current_state:
+        st.session_state[page_state_key] = 1
+        st.session_state[state_record_key] = current_state
+
+    # 4. Data Fetching
     df, total_count, error = get_table_data(
         conn,
         table_name,
         page=st.session_state[page_state_key],
         page_size=page_size,
         sort_column=sort_col,
-        sort_direction='DESC' if sort_dir == "Descending" else 'ASC'
+        sort_direction='DESC' if sort_dir == "Descending" else 'ASC',
+        filters=filters
     )
 
     if error:
         st.error(f"Error loading {table_name}: {error}")
         return
 
-    total_pages = (total_count + page_size - 1) // page_size
-    if total_pages == 0:
-        st.info(f"No records found in {table_name}.")
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+    if total_count == 0:
+        st.info(f"No records found matching filters.")
         return
 
-    # 4. Pagination Controls
+    # 5. Pagination Controls
     st.info(f"Showing page {st.session_state[page_state_key]} of {total_pages} (Total: {total_count:,} records)")
     
     def set_page(p):
@@ -315,15 +384,14 @@ def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_
 
     p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns([1, 1, 2, 1, 1])
     with p_col1:
-        st.button("⏮️ First", key=f"{page_key_prefix}_first", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(1,))
+        st.button("⏮️", key=f"{page_key_prefix}_first", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(1,))
     with p_col2:
-        st.button("◀️ Prev", key=f"{page_key_prefix}_prev", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(st.session_state[page_state_key] - 1,))
+        st.button("◀️", key=f"{page_key_prefix}_prev", disabled=st.session_state[page_state_key] == 1, on_click=set_page, args=(st.session_state[page_state_key] - 1,))
     with p_col3:
-        st.session_state[f"{page_key_prefix}_page_input"] = st.session_state[page_state_key]
         new_page = st.number_input(
             "Go to page", 
             min_value=1, 
-            max_value=total_pages, 
+            max_value=total_pages if total_pages > 0 else 1, 
             value=st.session_state[page_state_key],
             key=f"{page_key_prefix}_page_input_widget"
         )
@@ -331,15 +399,15 @@ def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_
             st.session_state[page_state_key] = new_page
             st.rerun()
     with p_col4:
-        st.button("Next ▶️", key=f"{page_key_prefix}_next", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(st.session_state[page_state_key] + 1,))
+        st.button("▶️", key=f"{page_key_prefix}_next", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(st.session_state[page_state_key] + 1,))
     with p_col5:
-        st.button("Last ⏭️", key=f"{page_key_prefix}_last", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(total_pages,))
+        st.button("⏭️", key=f"{page_key_prefix}_last", disabled=st.session_state[page_state_key] >= total_pages, on_click=set_page, args=(total_pages,))
 
-    # 5. Display Table
+    # 6. Display Table
     cols = df.columns.tolist()
     
     # Define analytics columns to move for better visibility
-    to_move = ['total_revenue', 'total_sold', 'total_spent', 'total_orders']
+    to_move = ['total_revenue', 'total_sold', 'sold_as_item', 'sold_as_addon', 'total_spent', 'total_orders']
     
     # Find anchor point to insert after
     anchor = None
@@ -357,7 +425,7 @@ def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_
                 # Note: we don't increment anchor_idx because we want multiple 
                 # analytics cols to cluster together after the anchor
             
-    st.dataframe(df[cols], width="stretch", height=500)
+    st.dataframe(df[cols], use_container_width=True, height=500)
 
 
 # Main App
@@ -574,7 +642,8 @@ with tab2:
         'orders', 
         'created_on', 
         ['order_id', 'created_on', 'total', 'order_type', 'order_from', 'order_status', 'petpooja_order_id'],
-        'orders'
+        'orders',
+        search_columns=['order_id', 'order_status', 'order_type', 'order_from']
     )
 
 # Tab 3: Order Items
@@ -585,7 +654,8 @@ with tab3:
         'order_items', 
         'created_at', 
         ['order_item_id', 'order_id', 'created_at', 'total_price', 'quantity', 'name_raw', 'category_name', 'match_confidence'],
-        'order_items'
+        'order_items',
+        search_columns=['order_id', 'name_raw', 'category_name']
     )
 
 # Tab 4: Customers
@@ -596,7 +666,8 @@ with tab4:
         'customers', 
         'last_order_date', 
         ['last_order_date', 'total_orders', 'total_spent', 'name', 'phone', 'first_order_date'],
-        'customers'
+        'customers',
+        search_columns=['name', 'phone']
     )
 
 # Tab 5: Restaurants
@@ -637,6 +708,7 @@ with tab6:
                 with st.spinner("Merge in progress..."):
                     res = merge_menu_items(conn, source_id, target_id, adopt_source_prices=adopt_prices)
                     if res.get("status") == "success":
+                        st.session_state.data_version += 1
                         st.toast(f"✅ {res.get('message')}", icon="🎉")
                         import time
                         time.sleep(5)
@@ -648,8 +720,9 @@ with tab6:
         conn, 
         'menu_items_summary_view', 
         'total_revenue', 
-        ['total_revenue', 'total_sold', 'name', 'type', 'is_active', 'menu_item_id'],
-        'menu_items'
+        ['total_revenue', 'total_sold', 'sold_as_item', 'sold_as_addon', 'name', 'type', 'is_active', 'menu_item_id'],
+        'menu_items',
+        search_columns=['menu_item_id', 'name', 'type', 'is_active']
     )
 
 # Tab 7: Variants
@@ -699,7 +772,8 @@ with tab9:
         'order_taxes', 
         'order_tax_id', 
         ['order_tax_id', 'tax_amount', 'tax_rate', 'tax_title', 'order_id'],
-        'taxes'
+        'taxes',
+        search_columns=['tax_title', 'order_id']
     )
 
 # Tab 10: Order Discounts
@@ -710,7 +784,8 @@ with tab10:
         'order_discounts', 
         'order_discount_id', 
         ['order_discount_id', 'discount_amount', 'discount_rate', 'discount_title', 'order_id'],
-        'discounts'
+        'discounts',
+        search_columns=['discount_title', 'order_id']
     )
 
 # Tab 11: Parsing & Conflicts (Version 2)
@@ -845,6 +920,4 @@ with tab11:
         else:
             st.error(f"Error loading parsing table: {e}")
 
-# Footer
-st.markdown("---")
-st.caption("Analytics Database Client | Built with Streamlit | Version 2.0")
+# End of file
