@@ -24,8 +24,10 @@ orders (depends on: customers, restaurants)
 order_taxes (depends on: orders)
 order_discounts (depends on: orders)
 order_items (depends on: orders, menu_items, variants)
-    ↓
+    │
 order_item_addons (depends on: order_items, menu_items, variants)
+
+item_parsing_table (single source of truth for name matching)
 ```
 
 ---
@@ -131,6 +133,16 @@ order_item_addons (depends on: order_items, menu_items, variants)
 - `name_raw`, `group_name`
 - `quantity`, `price`
 
+### 11. **item_parsing_table** (`database/schema/item_parsing.sql`)
+- Stores mappings between raw API names and cleaned attributes.
+- Centralizes parsing logic for consistency.
+
+**Key Fields:**
+- `id` (PK)
+- `raw_name` (unique)
+- `cleaned_name`, `type`, `variant`
+- `is_verified` (Boolean)
+
 ---
 
 ## Entity Relationship Diagram
@@ -219,10 +231,10 @@ order_item_addons (depends on: order_items, menu_items, variants)
 - NULL allowed for anonymous customers (POS orders)
 - Denormalized fields (`total_orders`, `total_spent`) for performance
 
-### 6. **Addons as Menu Items**
-- Addons reference same `menu_items` table
-- Enables unified analytics (e.g., "How many waffle cones sold?")
-- `addon_eligible` flag controls which variants can be addons
+### 7. **Data-Driven Parsing**
+- `item_parsing_table` acts as the single source of truth for name matching.
+- Decouples logic from code into the database.
+- Enables UI-driven conflict resolution and verified mappings.
 
 ---
 
@@ -252,7 +264,8 @@ database/schema/
 ├── customers.sql             # Customer table
 ├── menu_items.sql           # Menu items, variants, menu_item_variants
 ├── orders.sql               # Orders, order_taxes, order_discounts
-└── order_items.sql          # Order items, order_item_addons
+├── order_items.sql          # Order items, order_item_addons
+└── item_parsing.sql         # Item parsing rules
 ```
 
 ---

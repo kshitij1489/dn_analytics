@@ -401,8 +401,30 @@ def main():
     print(f"\n6. Inserting data into database...")
     
     try:
-        print(f"   Inserting {len(menu_items_data)} menu items...")
-        menu_item_ids = insert_menu_items(conn, menu_items_data)
+        # Handle Aliases (Version 2)
+        # 1. First, import the parsing table from CSV to ensure we have the latest mappings
+        from utils.menu_utils import import_parsing_table_from_csv
+        import_parsing_table_from_csv(conn)
+        
+        # 2. Then check for items that are marked as aliases
+        cursor = conn.cursor()
+        aliases = []
+        try:
+            cursor.execute("SELECT raw_name FROM item_parsing_table WHERE raw_name != cleaned_name")
+            aliases = [row[0].lower() for row in cursor.fetchall()]
+            if aliases:
+                print(f"   Found {len(aliases)} merged aliases in parsing table. Filtering...")
+        except Exception:
+            # Table might not exist yet, that's fine
+            conn.rollback()
+        
+        filtered_menu_items = [
+            item for item in menu_items_data 
+            if item['name'].lower() not in aliases
+        ]
+        
+        print(f"   Inserting {len(filtered_menu_items)} menu items...")
+        menu_item_ids = insert_menu_items(conn, filtered_menu_items)
         print(f"   ✓ Inserted {len(menu_item_ids)} menu items")
         
         print(f"   Inserting {len(variants_data)} variants...")

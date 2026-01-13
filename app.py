@@ -15,7 +15,7 @@ Usage:
 
 import streamlit as st
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 import pandas as pd
 from datetime import datetime
 import sys
@@ -36,6 +36,7 @@ from database.load_orders import (
 from database.menu_manager import sync_menu
 from utils.api_client import fetch_stream_raw
 from data_cleaning.item_matcher import ItemMatcher
+from utils.menu_utils import merge_menu_items, export_parsing_table_to_csv
 from datetime import datetime
 
 # Page configuration
@@ -356,7 +357,7 @@ def render_datatable(conn, table_name, default_sort_col, sort_columns, page_key_
                 # Note: we don't increment anchor_idx because we want multiple 
                 # analytics cols to cluster together after the anchor
             
-    st.dataframe(df[cols], use_container_width=True, height=500)
+    st.dataframe(df[cols], width="stretch", height=500)
 
 
 # Main App
@@ -420,7 +421,7 @@ with st.sidebar:
                 
                 if not tables_exist:
                     st.warning("⚠️ Database schema not initialized")
-                    if st.button("📋 Create Schema", use_container_width=True):
+                    if st.button("📋 Create Schema", width="stretch"):
                         with st.spinner("Creating schema..."):
                             try:
                                 create_schema_if_needed(conn)
@@ -430,7 +431,7 @@ with st.sidebar:
                                 st.error(f"Schema creation failed: {e}")
                 elif menu_count == 0:
                     st.warning("⚠️ Menu data not loaded")
-                    if st.button("📥 Load Menu", use_container_width=True):
+                    if st.button("📥 Load Menu", width="stretch"):
                         with st.spinner("Loading menu..."):
                             res = sync_menu(conn)
                             if res['status'] == 'success':
@@ -446,7 +447,7 @@ with st.sidebar:
         # Sync button
         st.markdown("---")
         st.header("🔄 Sync Database")
-        if st.button("Sync New Orders", type="primary", use_container_width=True):
+        if st.button("Sync New Orders", type="primary", width="stretch"):
             conn = get_db_connection()
             if conn:
                 with st.spinner("Syncing..."):
@@ -513,7 +514,7 @@ if not conn:
     st.stop()
 
 # Tabs for different views
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "🔍 SQL Query",
     "📦 Orders",
     "🛒 Order Items",
@@ -523,7 +524,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "📏 Variants",
     "🕸️ Menu Matrix",
     "📊 Taxes",
-    "💰 Discounts"
+    "💰 Discounts",
+    "⚡ Parsing & Conflicts"
 ])
 
 # Tab 1: SQL Query
@@ -541,7 +543,7 @@ with tab1:
     with col1:
         limit = st.number_input("Limit Results", min_value=1, max_value=10000, value=1000, step=100)
     with col2:
-        execute = st.button("▶️ Execute Query", type="primary", use_container_width=True)
+        execute = st.button("▶️ Execute Query", type="primary", width="stretch")
     
     if execute and query:
         with st.spinner("Executing query..."):
@@ -553,7 +555,7 @@ with tab1:
                 st.success(f"✅ Query executed successfully. Returned {len(df)} rows.")
                 
                 # Display results
-                st.dataframe(df, use_container_width=True, height=400)
+                st.dataframe(df, width="stretch", height=400)
                 
                 # Download button
                 csv = df.to_csv(index=False)
@@ -571,7 +573,7 @@ with tab2:
         conn, 
         'orders', 
         'created_on', 
-        ['order_id', 'created_on', 'total', 'order_type', 'order_from', 'status', 'petpooja_order_id'],
+        ['order_id', 'created_on', 'total', 'order_type', 'order_from', 'order_status', 'petpooja_order_id'],
         'orders'
     )
 
@@ -611,9 +613,40 @@ with tab5:
 # Tab 6: Menu Items
 with tab6:
     st.header("Menu Items")
+    
+    # Merge Tool
+    with st.expander("🛠️ Merge Menu Items", expanded=False):
+        st.info("Merge a duplicate item (Source) into a canonical item (Target). The Source item will be DELETED and its stats/orders transferred to Target.")
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+        with c1:
+            source_id = st.number_input("Source Menu Item ID", min_value=1, step=1, key="merge_src")
+        with c2:
+            target_id = st.number_input("Target Menu Item ID", min_value=1, step=1, key="merge_tgt")
+        with c3:
+            st.write("") 
+            adopt_prices = st.checkbox("Adopt Source Prices", help="If checked, shared variants will take the price from the Source item.")
+        with c4:
+            st.write("") 
+            st.write("") 
+            merge_btn = st.button("Merge Items", type="primary", width="stretch")
+            
+        if merge_btn:
+            if source_id == target_id:
+                st.error("Source and Target cannot be the same.")
+            else:
+                with st.spinner("Merge in progress..."):
+                    res = merge_menu_items(conn, source_id, target_id, adopt_source_prices=adopt_prices)
+                    if res.get("status") == "success":
+                        st.toast(f"✅ {res.get('message')}", icon="🎉")
+                        import time
+                        time.sleep(5)
+                        st.rerun()
+                    else:
+                        st.error(f"Merge Failed: {res.get('message')}")
+
     render_datatable(
         conn, 
-        'menu_items', 
+        'menu_items_summary_view', 
         'total_revenue', 
         ['total_revenue', 'total_sold', 'name', 'type', 'is_active', 'menu_item_id'],
         'menu_items'
@@ -626,7 +659,7 @@ with tab7:
         conn, 
         'variants', 
         'variant_name', 
-        ['variant_id', 'variant_name', 'variant_group_name'],
+        ['variant_id', 'variant_name'],
         'variants'
     )
 
@@ -656,7 +689,7 @@ with tab8:
             st.error(f"Error: {error}")
         else:
             st.info(f"Total combinations: {len(df)}")
-            st.dataframe(df, use_container_width=True, height=600)
+            st.dataframe(df, width="stretch", height=600)
 
 # Tab 9: Order Taxes
 with tab9:
@@ -664,8 +697,8 @@ with tab9:
     render_datatable(
         conn, 
         'order_taxes', 
-        'tax_id', 
-        ['tax_id', 'tax_amount', 'tax_rate', 'tax_title', 'order_id'],
+        'order_tax_id', 
+        ['order_tax_id', 'tax_amount', 'tax_rate', 'tax_title', 'order_id'],
         'taxes'
     )
 
@@ -675,11 +708,143 @@ with tab10:
     render_datatable(
         conn, 
         'order_discounts', 
-        'discount_id', 
-        ['discount_id', 'discount_amount', 'discount_rate', 'discount_title', 'order_id'],
+        'order_discount_id', 
+        ['order_discount_id', 'discount_amount', 'discount_rate', 'discount_title', 'order_id'],
         'discounts'
     )
 
+# Tab 11: Parsing & Conflicts (Version 2)
+with tab11:
+    st.header("⚡ Parsing Rules & Conflict Resolution")
+    st.info("This table defines how Raw Item Names (from API) are mapped to Cleaned Name, Type, and Variant. Rows with `is_verified=False` are suggested conflicts.")
+    
+    try:
+        # Load data
+        df_parsing = pd.read_sql("SELECT * FROM item_parsing_table ORDER BY is_verified ASC, raw_name ASC", conn)
+        
+        # Use categorical type for 'type' column to trigger dropdown in data_editor automatically
+        # this is more compatible than st.column_config.SelectColumn
+        type_options = ["Ice Cream", "Dessert", "Combo", "Drinks", "Extra", "Service"]
+        df_parsing['type'] = pd.Categorical(df_parsing['type'], categories=type_options)
+        
+        if len(df_parsing) == 0:
+            st.warning("⚠️ Item Parsing Table is empty.")
+            if st.button("📥 Load Seed Data (Legacy Rules)"):
+                with st.spinner("Loading seed data..."):
+                    try:
+                        # Find CSV path
+                        csv_path = os.path.join("data", "item_parsing_table.csv")
+                        if os.path.exists(csv_path):
+                            updates = []
+                            import csv
+                            with open(csv_path, 'r', encoding='utf-8') as f:
+                                reader = csv.DictReader(f)
+                                for row in reader:
+                                    updates.append((
+                                        row['raw_name'].strip(),
+                                        row['cleaned_name'].strip(),
+                                        row['type'].strip(),
+                                        row['variant'].strip(),
+                                        row['is_verified'].strip().lower() in ['true', '1', 't', 'yes']
+                                    ))
+                            
+                            if updates:
+                                cursor = conn.cursor()
+                                execute_values(cursor, """
+                                    INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified)
+                                    VALUES %s
+                                    ON CONFLICT (raw_name) DO UPDATE 
+                                    SET is_verified = EXCLUDED.is_verified,
+                                        cleaned_name = EXCLUDED.cleaned_name,
+                                        type = EXCLUDED.type,
+                                        variant = EXCLUDED.variant
+                                """, updates)
+                                conn.commit()
+                                st.success(f"✅ Loaded and updated {len(updates)} items!")
+                                st.rerun()
+                            else:
+                                st.error("CSV is empty?")
+                        else:
+                            st.error(f"Seed file not found: {csv_path}")
+                    except Exception as load_err:
+                        st.error(f"Failed to load: {load_err}")
+
+        # Helper to verify all
+        if len(df_parsing[~df_parsing['is_verified']]) > 0:
+            if st.button("✅ Mark All as Verified"):
+                cursor = conn.cursor()
+                cursor.execute("UPDATE item_parsing_table SET is_verified = TRUE")
+                conn.commit()
+                export_parsing_table_to_csv(conn)
+                st.success("All items marked as verified and synced to CSV!")
+                st.rerun()
+                        
+        # Always show table if it exists (even if empty, though unlikely after load)
+        if len(df_parsing) > 0:
+            with st.form("parsing_form"):
+                edited_df = st.data_editor(
+                    df_parsing,
+                    column_config={
+                        "is_verified": st.column_config.CheckboxColumn("Verified?", help="Check to confirm this mapping"),
+                        "raw_name": st.column_config.TextColumn("Raw Name", disabled=True),
+                        "cleaned_name": st.column_config.TextColumn("Cleaned Name"),
+                        "variant": st.column_config.TextColumn("Variant"),
+                    },
+                    disabled=["id", "created_at", "updated_at"],
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="dynamic"
+                )
+                
+                save_btn = st.form_submit_button("💾 Save Changes", type="primary")
+                
+                if save_btn:
+                    try:
+                        cursor = conn.cursor()
+                        updates = []
+                        for index, row in edited_df.iterrows():
+                            # Convert categorical back to string for DB
+                            row_type = str(row['type']) if pd.notnull(row['type']) else ""
+                            updates.append((
+                                row['cleaned_name'], 
+                                row_type, 
+                                row['variant'], 
+                                bool(row['is_verified']), 
+                                row['id']
+                            ))
+                            
+                        execute_values(cursor, """
+                            UPDATE item_parsing_table 
+                            SET cleaned_name = data.cleaned_name,
+                                type = data.type,
+                                variant = data.variant,
+                                is_verified = data.is_verified,
+                                updated_at = CURRENT_TIMESTAMP
+                            FROM (VALUES %s) AS data (cleaned_name, type, variant, is_verified, id)
+                            WHERE item_parsing_table.id = data.id
+                        """, updates)
+                        
+                        conn.commit()
+                        export_parsing_table_to_csv(conn)
+                        st.success(f"✅ Saved {len(updates)} rows and synced to CSV!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving changes: {e}")
+
+    except Exception as e:
+        if "does not exist" in str(e):
+            st.warning("⚠️ Item Parsing Table missing (Version 2 Update).")
+            if st.button("🚀 Initialize Version 2 Schema"):
+                with st.spinner("Creating table..."):
+                    # We can reuse create_schema_if_needed from database.load_orders
+                    # But we need to import it properly or just re-run the updated logic
+                    from database.load_orders import create_schema_if_needed
+                    create_schema_if_needed(conn)
+                    st.success("Schema updated!")
+                    st.rerun()
+        else:
+            st.error(f"Error loading parsing table: {e}")
+
 # Footer
 st.markdown("---")
-st.caption("Analytics Database Client | Built with Streamlit")
+st.caption("Analytics Database Client | Built with Streamlit | Version 2.0")

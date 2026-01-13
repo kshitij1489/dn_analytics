@@ -309,6 +309,51 @@ class ItemMatcher:
         
         return best_variant_id
     
+    def _lookup_parsing(self, raw_name: str) -> Optional[Dict]:
+        """
+        Check item_parsing_table for existing mapping.
+        """
+        try:
+            cursor = self.db.cursor()
+            cursor.execute("""
+                SELECT cleaned_name, type, variant, is_verified 
+                FROM item_parsing_table 
+                WHERE raw_name = %s
+            """, (raw_name,))
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if result:
+                return {
+                    'cleaned_name': result[0],
+                    'type': result[1],
+                    'variant': result[2],
+                    'is_verified': result[3]
+                }
+        except Exception:
+            # Table might not exist yet or connection error
+            if 'cursor' in locals():
+                cursor.close()
+        return None
+
+    def _save_suggestion(self, raw_name: str, suggestion: Dict):
+        """
+        Save a new unverified suggestion to item_parsing_table.
+        """
+        try:
+            cursor = self.db.cursor()
+            cursor.execute("""
+                INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified)
+                VALUES (%s, %s, %s, %s, FALSE)
+                ON CONFLICT (raw_name) DO NOTHING
+            """, (raw_name, suggestion['name'], suggestion['type'], suggestion['variant']))
+            self.db.commit()
+            cursor.close()
+        except Exception:
+            self.db.rollback()
+            if 'cursor' in locals():
+                cursor.close()
+
     def match_item(self, raw_name: str, 
                    use_fuzzy: bool = True,
                    fuzzy_threshold: int = 80) -> Dict[str, Optional[int]]:
@@ -325,53 +370,72 @@ class ItemMatcher:
                 - menu_item_id: int or None
                 - variant_id: int or None
                 - match_confidence: int (0-100) or None
-                - match_method: str ('exact', 'fuzzy', 'partial', None)
+                - match_method: str ('parsing_table', 'suggestion', 'fuzzy', etc.)
         """
-        # Step 1: Clean the raw name
-        try:
-            cleaned = clean_order_item_name(raw_name)
-        except Exception as e:
-            # If cleaning fails, return no match
-            return {
-                'menu_item_id': None,
-                'variant_id': None,
-                'match_confidence': None,
-                'match_method': None,
-                'error': str(e)
-            }
+        # Step 0: Check Parsing Table (Version 2 Source of Truth)
+        parsing_entry = self._lookup_parsing(raw_name)
         
-        cleaned_name = cleaned['name']
-        cleaned_type = cleaned['type']
-        cleaned_variant = cleaned['variant']
+        if parsing_entry:
+            cleaned_name = parsing_entry['cleaned_name']
+            cleaned_type = parsing_entry['type']
+            cleaned_variant = parsing_entry['variant']
+            is_verified = parsing_entry['is_verified']
+            match_method = 'parsing_table'
+            confidence_base = 100 if is_verified else 90
+        else:
+            # Step 1: Clean/Suggest using legacy logic (if miss)
+            try:
+                cleaned = clean_order_item_name(raw_name)
+                
+                # Save suggestion for future conflict resolution
+                self._save_suggestion(raw_name, cleaned)
+                
+                cleaned_name = cleaned['name']
+                cleaned_type = cleaned['type']
+                cleaned_variant = cleaned['variant']
+                match_method = 'suggestion'
+                confidence_base = 80 # Unverified suggestion
+            except Exception as e:
+                return {
+                    'menu_item_id': None,
+                    'variant_id': None,
+                    'match_confidence': None,
+                    'match_method': None,
+                    'error': str(e)
+                }
         
-        # Step 2: Try exact match for menu item
+        # Step 2: Try exact match for menu item using Cleaned Attributes
         menu_item_id = self._get_menu_item_id(cleaned_name, cleaned_type)
-        match_method = 'exact'
-        match_confidence = 100
         
-        # Step 3: If no exact match, try fuzzy matching
+        match_confidence = confidence_base
+        
+        # Step 3: If no exact menu item match ...
+        # If we came from 'parsing_table', we assume the Name is correct, so maybe it's just missing in `menu_items`.
+        # But if we came from 'suggestion', maybe the regex failed?
+        
         if menu_item_id is None and use_fuzzy:
+            # Try fuzzy match on the CLEANED name
             menu_item_id = self._fuzzy_match_menu_item(cleaned_name, cleaned_type, fuzzy_threshold)
             if menu_item_id:
-                match_method = 'fuzzy'
-                match_confidence = fuzzy_threshold  # Use threshold as confidence
+                match_method = 'fuzzy_cleaned'
+                match_confidence = min(match_confidence, fuzzy_threshold)
         
-        # Step 4: Get variant_id (try exact first, then fuzzy if needed)
+        # Step 4: Get variant_id
         variant_id = self._get_variant_id(cleaned_variant)
         
         # If variant not found and we have a menu_item_id, try fuzzy variant matching
         if variant_id is None and menu_item_id is not None:
-            variant_id = self._fuzzy_match_variant(cleaned_variant, raw_name, menu_item_id)
-            if variant_id:
-                match_confidence = max(70, match_confidence - 10)  # Reduce confidence slightly for fuzzy variant match
+             # Try fuzzy/size matching using the original raw name or cleaned variant
+             # Logic from original code handles this
+             variant_id = self._fuzzy_match_variant(cleaned_variant, raw_name, menu_item_id)
+             if variant_id:
+                 match_confidence = max(70, match_confidence - 10)
         
         # Step 5: Adjust confidence if variant not found
         if menu_item_id and variant_id is None:
-            # Menu item matched but variant didn't - lower confidence
             match_confidence = (match_confidence or 100) * 0.7
-            match_method = 'partial'
+            match_method = f"{match_method}_partial"
         elif menu_item_id is None:
-            # Nothing matched
             match_confidence = None
             match_method = None
         

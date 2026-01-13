@@ -432,7 +432,7 @@ def clean_order_item_name(raw_name: str) -> Dict[str, str]:
     if item_type == 'Combo' and variant == '1_PIECE':
         if 'Duo' in name:
             variant = 'DUO_200ML_200ML'
-        elif 'Family Pack' in name or 'Pack Of 3' in name:
+        elif 'Family Pack Of 3' in name:
             variant = 'FAMILY_PACK_3X200ML'
         elif 'Half In Half' in name:
             variant = 'HALF_IN_HALF_REGULAR_SCOOP'

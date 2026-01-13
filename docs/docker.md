@@ -145,24 +145,24 @@ docker-compose exec app bash
 
 After starting the containers for the first time:
 
-### 1. Load Menu Data
+### 1. Initialize Schema & Menu
+The easiest way is using the App UI after starting:
+1. Open http://localhost:8501
+2. Follow the setup buttons in the sidebar (Create Schema, Load Menu).
 
+### 2. Initialize Parsing Schema
+1. Go to the **"⚡ Parsing & Conflicts"** tab.
+2. Click **"🚀 Initialize Schema"**.
+3. Click **"📥 Load Seed Data"**.
+
+### 3. Load Historical Orders
 ```bash
-# Option A: Using docker-compose exec
-docker-compose exec app python3 database/test_load_menu_postgresql.py \
-  --db-url "postgresql://postgres:postgres@postgres:5432/analytics"
+# Option A: Using Makefile (Preferred)
+make sync
 
-# Option B: Access container and run
-docker-compose exec app bash
-python3 database/test_load_menu_postgresql.py --db-url "postgresql://postgres:postgres@postgres:5432/analytics"
-```
-
-### 2. Load Historical Orders
-
-```bash
+# Option B: Manual
 docker-compose exec app python3 database/load_orders.py \
-  --db-url "postgresql://postgres:postgres@postgres:5432/analytics" \
-  --limit 10  # Test with 10 orders first
+  --db-url "postgresql://postgres:postgres@postgres:5432/analytics"
 ```
 
 ### 3. Access the App

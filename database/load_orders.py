@@ -70,7 +70,9 @@ def create_schema_if_needed(conn):
         "restaurants.sql",
         "customers.sql",
         "orders.sql",
-        "order_items.sql"
+        "order_items.sql",
+        "item_parsing.sql",
+        "views.sql"
     ]
     
     for schema_file in schema_files:

@@ -38,20 +38,34 @@ def sync_menu(conn, csv_path: Optional[str] = None):
         return {"status": "error", "message": f"Menu file not found at {csv_path}"}
         
     try:
+        # 0. Import parsing table from CSV first to restore any merges/verifications
+        from utils.menu_utils import import_parsing_table_from_csv
+        import_parsing_table_from_csv(conn)
+        
         # 1. Load data
         menu_data = load_cleaned_menu(csv_path)
         
         # 2. Generate structures
         menu_items_data, variants_data, menu_item_variants_data = generate_python_dicts(menu_data)
         
+        # 3. Handle Aliases (Version 2)
+        # If an item in the CSV is already mapped to a different canonical name in 
+        # the item_parsing_table, we should skip it to prevent duplicates re-appearing.
         cursor = conn.cursor()
+        cursor.execute("SELECT raw_name FROM item_parsing_table WHERE raw_name != cleaned_name")
+        aliases = {row[0].lower() for row in cursor.fetchall()}
         
-        # 3. Insert Menu Items
-        # Use simple INSERT ON CONFLICT for robustness
+        # 4. Insert Menu Items
+        # Filter out items that are actually aliases
+        filtered_menu_items = [
+            item for item in menu_items_data 
+            if item['name'].lower() not in aliases
+        ]
+        
         from psycopg2.extras import execute_values
         
         # Menu Items
-        values = [(item['name'], item['type'], item['is_active']) for item in menu_items_data]
+        values = [(item['name'], item['type'], item['is_active']) for item in filtered_menu_items]
         if values:
             execute_values(
                 cursor,
