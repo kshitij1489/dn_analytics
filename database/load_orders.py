@@ -37,26 +37,11 @@ except ImportError:
     print("⚠️  psycopg2 not installed. Install it with: pip install psycopg2-binary")
 
 from utils.api_client import fetch_stream_raw, load_orders_from_file
-from data_cleaning.item_matcher import ItemMatcher
+from services.clustering_service import OrderItemCluster
+from utils.db_utils import create_postgresql_connection
 
 
-def create_postgresql_connection(host, port, database, user, password, db_url=None):
-    """Create PostgreSQL database connection"""
-    if not PSYCOPG2_AVAILABLE:
-        raise ImportError("psycopg2 is required for PostgreSQL connections")
-    
-    if db_url:
-        conn = psycopg2.connect(db_url)
-    else:
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
-    
-    return conn
+# Removed create_postgresql_connection (moved to utils.db_utils)
 
 
 def create_schema_if_needed(conn):
@@ -64,14 +49,22 @@ def create_schema_if_needed(conn):
     cursor = conn.cursor()
     schema_dir = Path(__file__).parent / "schema"
     
-    # Read and execute schema files in order (menu_items must come first)
+    # 0. Initialize migration tracking table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS migration_logs (
+            id SERIAL PRIMARY KEY,
+            file_name TEXT UNIQUE NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 1. Read and execute core schema files in order
     schema_files = [
         "menu_items.sql",  # Must be first - other tables depend on it
         "restaurants.sql",
         "customers.sql",
         "orders.sql",
         "order_items.sql",
-        "item_parsing.sql",
         "views.sql"
     ]
     
@@ -80,17 +73,48 @@ def create_schema_if_needed(conn):
         if schema_path.exists():
             with open(schema_path, 'r', encoding='utf-8') as f:
                 schema_sql = f.read()
-                # Execute each statement separately
                 try:
                     cursor.execute(schema_sql)
-                    print(f"  ✓ Created schema from {schema_file}")
+                    # print(f"  ✓ Created schema from {schema_file}")
                 except Exception as e:
-                    # Table might already exist, that's okay
                     if "already exists" not in str(e).lower():
                         print(f"  ⚠️  Warning creating {schema_file}: {e}")
     
+    # 2. Run migrations
+    migrations_dir = schema_dir / "migrations"
+    if migrations_dir.exists():
+        # Get already applied migrations
+        cursor.execute("SELECT file_name FROM migration_logs")
+        applied_migrations = {row[0] for row in cursor.fetchall()}
+        
+        # Sort migrations by name to ensure order (01, 02, etc.)
+        migration_files = sorted([f for f in migrations_dir.glob("*.sql")])
+        for migration_path in migration_files:
+            file_name = migration_path.name
+            
+            if file_name in applied_migrations:
+                continue
+                
+            with open(migration_path, 'r', encoding='utf-8') as f:
+                migration_sql = f.read()
+                try:
+                    cursor.execute(migration_sql)
+                    cursor.execute("INSERT INTO migration_logs (file_name) VALUES (%s)", (file_name,))
+                    # print(f"  ✓ Applied migration {file_name}")
+                except Exception as e:
+                    # Column or table might already exist in manual setup cases
+                    already_exists = any(msg in str(e).lower() for msg in ["already exists", "duplicate column"])
+                    if already_exists:
+                        cursor.execute("INSERT INTO migration_logs (file_name) VALUES (%s) ON CONFLICT DO NOTHING", (file_name,))
+                        # print(f"  · Migration {file_name} already exists in DB, recorded as applied.")
+                    else:
+                        print(f"  ⚠️  Warning applying {file_name}: {e}")
+    
     conn.commit()
     cursor.close()
+
+
+
 
 
 def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
@@ -265,7 +289,7 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     return customer_id
 
 
-def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[str, int]:
+def process_order(conn, order_payload: Dict, item_cluster: OrderItemCluster) -> Dict[str, int]:
     """
     Process a single order payload and insert into database.
     Returns dict with counts of inserted records.
@@ -387,13 +411,9 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
         for item_data in order_items_data:
             raw_name = item_data.get('name', '')
             
-            # Match item using ItemMatcher
-            match_result = item_matcher.match_item(raw_name)
-            
-            menu_item_id = match_result.get('menu_item_id')
-            variant_id = match_result.get('variant_id')
-            match_confidence = match_result.get('match_confidence')
-            match_method = match_result.get('match_method')
+            # Match item using OrderItemCluster
+            menu_item_id, _, variant_id, match_method = item_cluster.add(raw_name, item_data.get('itemid'))
+            match_confidence = 100.0 if menu_item_id else 0.0
             
             # Insert order item
             cursor.execute("""
@@ -450,12 +470,8 @@ def process_order(conn, order_payload: Dict, item_matcher: ItemMatcher) -> Dict[
                 addon_raw_name = addon_data.get('name', '')
                 
                 # Match addon
-                addon_match = item_matcher.match_item(addon_raw_name)
-                
-                addon_menu_item_id = addon_match.get('menu_item_id')
-                addon_variant_id = addon_match.get('variant_id')
-                addon_match_confidence = addon_match.get('match_confidence')
-                addon_match_method = addon_match.get('match_method')
+                addon_menu_item_id, _, addon_variant_id, addon_match_method = item_cluster.add(addon_raw_name, addon_data.get('addonid'))
+                addon_match_confidence = 100.0 if addon_menu_item_id else 0.0
                 
                 # Parse quantity (can be string or int)
                 addon_quantity = addon_data.get('quantity', 1)
@@ -607,13 +623,13 @@ def main():
         conn.close()
         return
     
-    # Initialize ItemMatcher
-    print("\n3. Initializing ItemMatcher...")
+    # Initialize OrderItemCluster
+    print("\n3. Initializing OrderItemCluster...")
     try:
-        item_matcher = ItemMatcher(conn)
-        print("  ✓ ItemMatcher ready")
+        item_cluster = OrderItemCluster(conn)
+        print("  ✓ OrderItemCluster ready")
     except Exception as e:
-        print(f"  ✗ ItemMatcher initialization failed: {e}")
+        print(f"  ✗ OrderItemCluster initialization failed: {e}")
         conn.close()
         return
     
@@ -666,7 +682,7 @@ def main():
         if i % 10 == 0:
             print(f"  Processing order {i}/{len(orders)}...")
         
-        stats = process_order(conn, order_payload, item_matcher)
+        stats = process_order(conn, order_payload, item_cluster)
         
         for key in total_stats:
             if key == 'errors':

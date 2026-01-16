@@ -14,8 +14,7 @@ help:
 	@echo "  make clean      - Stop and remove all containers/volumes"
 	@echo "  make psql       - Access PostgreSQL shell"
 	@echo "  make shell      - Access app container shell"
-	@echo "  make test       - Test database connection"
-	@echo "  make load-menu  - Load menu data into database"
+	@echo "  make shell      - Access app container shell"
 	@echo "  make sync       - Sync new orders"
 	@echo "  make reload-all - Reload all orders from API (for migrations)"
 
@@ -53,15 +52,6 @@ psql:
 shell:
 	docker-compose exec app bash
 
-# Test database connection
-test:
-	docker-compose exec app python3 database/test_connection.py \
-		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics"
-
-# Load menu data
-load-menu:
-	docker-compose exec app python3 database/test_load_menu_postgresql.py \
-		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics"
 
 # Sync new orders
 sync:

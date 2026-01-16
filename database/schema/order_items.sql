@@ -26,13 +26,8 @@ CREATE TABLE IF NOT EXISTS order_items (
     -- Note: Add FK constraint after orders table is created
     
     -- Menu item mapping (normalized)
-    menu_item_id INTEGER,
-    -- FOREIGN KEY (menu_item_id) REFERENCES menu_items(menu_item_id),
-    -- Note: Add FK constraint after menu_items table is created
-    
-    variant_id INTEGER,
-    -- FOREIGN KEY (variant_id) REFERENCES variants(variant_id),
-    -- Note: Add FK constraint after variants table is created
+    menu_item_id UUID,
+    variant_id UUID,
     
     -- PetPooja identifiers (for reconciliation)
     petpooja_itemid BIGINT,
@@ -81,13 +76,8 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
     -- Note: Add FK constraint after order_items table is created
     
     -- Addon mapping (addons are also menu items)
-    menu_item_id INTEGER,
-    -- FOREIGN KEY (menu_item_id) REFERENCES menu_items(menu_item_id),
-    -- Note: Add FK constraint after menu_items table is created
-    
-    variant_id INTEGER,
-    -- FOREIGN KEY (variant_id) REFERENCES variants(variant_id),
-    -- Note: Add FK constraint after variants table is created
+    menu_item_id UUID,
+    variant_id UUID,
     
     -- PetPooja identifiers
     petpooja_addonid VARCHAR(100),

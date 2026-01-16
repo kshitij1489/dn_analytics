@@ -6,26 +6,23 @@ import csv
 import os
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
+import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from scripts.seed_from_backups import export_to_backups
+from utils.id_generator import generate_deterministic_id
 
-def get_menu_item(conn, menu_item_id: int) -> Dict[str, Any]:
-    """Get menu item details"""
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM menu_items WHERE menu_item_id = %s", (menu_item_id,))
-    result = cursor.fetchone()
-    cursor.close()
-    return result
 
-def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: bool = False) -> Dict[str, Any]:
+
+def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: bool = False) -> Dict[str, Any]:
     """
-    Merge source_id into target_id.
+    Merge source_id (UUID) into target_id (UUID).
     
     Actions:
     1. Transfer stats (revenue, sold count)
     2. Re-link order_items
-    3. Update parsing table (cleaned_name mappings)
-    4. Transfer variants (Adopting source prices if requested)
+    3. Re-link order_item_addons
+    4. Re-link item mappings (menu_item_variants)
     5. Delete source item
     """
     if source_id == target_id:
@@ -46,6 +43,15 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
         source_name, source_type, source_sold, source_revenue, source_as_item, source_as_addon = source
         target_name, target_type, target_sold, target_revenue, target_as_item, target_as_addon = target
         
+        # 1.5 Record History (Collect affected order_item_ids from mappings)
+        cursor.execute("SELECT order_item_id FROM menu_item_variants WHERE menu_item_id = %s", (source_id,))
+        affected_ids = [row[0] for row in cursor.fetchall()]
+        
+        cursor.execute("""
+            INSERT INTO merge_history (source_id, target_id, source_name, source_type, affected_order_items)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (source_id, target_id, source_name, source_type, json.dumps(affected_ids)))
+        
         # 2. Update Target Stats
         cursor.execute("""
             UPDATE menu_items 
@@ -63,7 +69,6 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
             SET menu_item_id = %s 
             WHERE menu_item_id = %s
         """, (target_id, source_id))
-        
         relinked_count = cursor.rowcount
         
         # 4. Relink Order Item Addons
@@ -73,82 +78,28 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
             WHERE menu_item_id = %s
         """, (target_id, source_id))
         
-        # 5. Update Parsing Table (Upsert)
-        # Ensure a rule exists mapping Source Name/Type -> Target Name/Type. 
-        # Existing rules for Source are updated; if Source was never parsed, a new rule is inserted.
-        
-        # A. Update existing rules that point to Source
+        # 5. Relink Mappings
         cursor.execute("""
-            UPDATE item_parsing_table
-            SET cleaned_name = %s,
-                type = %s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE cleaned_name = %s AND type = %s
-        """, (target_name, target_type, source_name, source_type))
-        
-        # B. Ensure the Source Name itself maps to Target (The "Missing Link" Fix)
-        # This handles the case where Source existed in menu but not in parsing table
-        cursor.execute("""
-            INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (raw_name) 
-            DO UPDATE SET
-                cleaned_name = EXCLUDED.cleaned_name,
-                type = EXCLUDED.type,
-                updated_at = EXCLUDED.updated_at
-        """, (source_name, target_name, target_type, '1_PIECE')) # Default variant for item-level merge
-        
-        updated_parsing = cursor.rowcount
-        
-        # 6. Handle Pricing & Variants
-        if adopt_source_prices:
-            # Update target prices for variants that both items have
-            cursor.execute("""
-                UPDATE menu_item_variants tv
-                SET price = sv.price,
-                    updated_at = CURRENT_TIMESTAMP
-                FROM menu_item_variants sv
-                WHERE sv.menu_item_id = %s 
-                AND tv.menu_item_id = %s
-                AND sv.variant_id = tv.variant_id
-            """, (source_id, target_id))
-            prices_adopted = cursor.rowcount
-        else:
-            prices_adopted = 0
-
-        # Transfer unique variants that the target doesn't have at all
-        cursor.execute("""
-            UPDATE menu_item_variants
-            SET menu_item_id = %s,
-                updated_at = CURRENT_TIMESTAMP
+            UPDATE menu_item_variants 
+            SET menu_item_id = %s 
             WHERE menu_item_id = %s
-            AND variant_id NOT IN (
-                SELECT variant_id FROM menu_item_variants WHERE menu_item_id = %s
-            )
-        """, (target_id, source_id, target_id))
-        
-        variants_transferred = cursor.rowcount
-        
-        # 7. Delete Source Item and Remaining Variant Links
-        cursor.execute("DELETE FROM menu_item_variants WHERE menu_item_id = %s", (source_id,))
+        """, (target_id, source_id))
+        mappings_updated = cursor.rowcount
+
+        # 6. Delete Source Item
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = %s", (source_id,))
         
         conn.commit()
         
-        # 8. Sync to CSV for persistence across rebuilds
-        try:
-            export_parsing_table_to_csv(conn)
-        except Exception as csv_error:
-            print(f"Warning: Failed to sync parsing table to CSV: {csv_error}")
-            
+        # 7. Update Backups
+        export_to_backups(conn)
+
         return {
             "status": "success", 
             "message": f"Merged '{source_name}' into '{target_name}'",
             "stats": {
                 "orders_relinked": relinked_count,
-                "parsing_updated": updated_parsing,
-                "variants_transferred": variants_transferred,
-                "prices_adopted": prices_adopted,
+                "mappings_updated": mappings_updated,
                 "revenue_added": float(source_revenue or 0)
             }
         }
@@ -159,85 +110,180 @@ def merge_menu_items(conn, source_id: int, target_id: int, adopt_source_prices: 
     finally:
         cursor.close()
 
-def export_parsing_table_to_csv(conn, csv_path: Optional[str] = None):
+
+def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, new_variant_id: str) -> Dict[str, Any]:
     """
-    Export the current item_parsing_table from DB back to the CSV file.
-    Ensures that persistence is maintained across rebuilds.
+    Remap an individual order item to a different menu_item cluster.
     """
-    if csv_path is None:
-        csv_path = str(Path(__file__).parent.parent / "data" / "item_parsing_table.csv")
-        
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor = conn.cursor()
     try:
+        # 1. Update Mapping
         cursor.execute("""
-            SELECT raw_name, cleaned_name, type, variant, is_verified 
-            FROM item_parsing_table 
-            ORDER BY id ASC
-        """)
-        rows = cursor.fetchall()
+            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
+            VALUES (%s, %s, %s, TRUE)
+            ON CONFLICT (order_item_id) DO UPDATE SET
+                menu_item_id = EXCLUDED.menu_item_id,
+                variant_id = EXCLUDED.variant_id,
+                is_verified = TRUE
+        """, (order_item_id, new_menu_item_id, new_variant_id))
         
-        if not rows:
-            return
-            
-        # Ensure directory exists
-        Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+        conn.commit()
         
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            if rows:
-                writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-                writer.writeheader()
-                writer.writerows(rows)
-                
-        return True
+        # 2. Update Backups
+        export_to_backups(conn)
+        
+        return {"status": "success", "message": "Order item remapped successfully"}
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": str(e)}
     finally:
         cursor.close()
 
-def import_parsing_table_from_csv(conn, csv_path: Optional[str] = None):
+def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> Dict[str, Any]:
     """
-    Import mappings from CSV into the database.
-    This ensures that merges/verifications are restored after a 'make clean'.
+    Handle resolution where an item is renamed.
+    This effectively means:
+    1. Generate ID for new name/type
+    2. Check if that target item exists
+    3. If not, create it (verified)
+    4. Merge source into target
     """
-    if csv_path is None:
-        csv_path = str(Path(__file__).parent.parent / "data" / "item_parsing_table.csv")
-        
-    if not os.path.exists(csv_path):
-        return False
-        
     cursor = conn.cursor()
     try:
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            values = []
-            for row in reader:
-                values.append((
-                    row['raw_name'],
-                    row['cleaned_name'],
-                    row['type'],
-                    row['variant'],
-                    row['is_verified'].lower() == 'true'
-                ))
-                
-            if values:
-                from psycopg2.extras import execute_values
-                execute_values(
-                    cursor,
-                    """
-                    INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified)
-                    VALUES %s
-                    ON CONFLICT (raw_name) DO UPDATE 
-                    SET cleaned_name = EXCLUDED.cleaned_name,
-                        type = EXCLUDED.type,
-                        variant = EXCLUDED.variant,
-                        is_verified = EXCLUDED.is_verified,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    values
-                )
-                conn.commit()
-        return True
+        target_id = generate_deterministic_id(new_name, new_type)
+        
+        # Check existence
+        cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = %s", (target_id,))
+        exists = cursor.fetchone()
+        
+        if not exists:
+            # Create Target
+            cursor.execute("""
+                INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+                VALUES (%s, %s, %s, TRUE)
+            """, (target_id, new_name, new_type))
+            conn.commit() # Commit creation effectively
+            
+        # Merge Source -> Target
+        # Note: This handles the full merge logic including deletions
+        return merge_menu_items(conn, source_id, target_id)
+        
     except Exception as e:
-        print(f"Error importing parsing table: {e}")
         conn.rollback()
-        return False
+        return {"status": "error", "message": f"Resolution failed: {e}"}
+    finally:
+        cursor.close()
+
+def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
+    """
+    Reverse a merge operation.
+    1. Re-insert source menu item
+    2. Point affected mappings back to source item
+    3. Point affected order_items/addons back to source item
+    4. Deduct stats from target item
+    5. Delete history record
+    """
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # 1. Get History Entry
+        cursor.execute("SELECT * FROM merge_history WHERE merge_id = %s", (merge_id,))
+        history = cursor.fetchone()
+        if not history:
+            return {"status": "error", "message": "Merge history record not found"}
+        
+        source_id = history['source_id']
+        target_id = history['target_id']
+        affected_ids = history['affected_order_items'] # List of strings
+        
+        # 2. Re-insert Source Item
+        cursor.execute("""
+            INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+            VALUES (%s, %s, %s, TRUE)
+            ON CONFLICT (menu_item_id) DO NOTHING
+        """, (source_id, history['source_name'], history['source_type']))
+        
+        # 3. Relink Mappings (menu_item_variants)
+        if affected_ids:
+            cursor.execute("""
+                UPDATE menu_item_variants 
+                SET menu_item_id = %s 
+                WHERE order_item_id = ANY(%s)
+            """, (source_id, affected_ids))
+            
+            # 4. Relink Order Items
+            cursor.execute("""
+                UPDATE order_items 
+                SET menu_item_id = %s 
+                WHERE petpooja_itemid::text = ANY(%s)
+            """, (source_id, affected_ids))
+
+            # 5. Relink Order Item Addons
+            cursor.execute("""
+                UPDATE order_item_addons 
+                SET menu_item_id = %s 
+                WHERE petpooja_addonid = ANY(%s)
+            """, (source_id, affected_ids))
+        
+        # 6. Recalculate Stats (Deducting from target is tricky, let's just refresh both)
+        # Actually, let's just deduct what we transferred if we knew it, 
+        # but recalculating is safer if we have the orders.
+        # For now, let's just do a simple reverse of the stats transfer.
+        # We didn't store the exact counts transferred at that moment, 
+        # but we can query them now from the re-linked items.
+        
+        # 6. Recalculate Stats (Filtered by Success status)
+        for mid in [target_id, source_id]:
+            cursor.execute("""
+                UPDATE menu_items 
+                SET total_sold = (
+                        (SELECT COALESCE(SUM(oi.quantity), 0) 
+                         FROM order_items oi 
+                         JOIN orders o ON oi.order_id = o.order_id 
+                         WHERE oi.menu_item_id = %s AND o.order_status = 'Success') +
+                        (SELECT COALESCE(SUM(oia.quantity), 0) 
+                         FROM order_item_addons oia 
+                         JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                         JOIN orders o ON oi.order_id = o.order_id
+                         WHERE oia.menu_item_id = %s AND o.order_status = 'Success')
+                    ),
+                    total_revenue = (
+                        (SELECT COALESCE(SUM(oi.total_price), 0) 
+                         FROM order_items oi 
+                         JOIN orders o ON oi.order_id = o.order_id 
+                         WHERE oi.menu_item_id = %s AND o.order_status = 'Success') +
+                        (SELECT COALESCE(SUM(oia.price * oia.quantity), 0) 
+                         FROM order_item_addons oia 
+                         JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                         JOIN orders o ON oi.order_id = o.order_id
+                         WHERE oia.menu_item_id = %s AND o.order_status = 'Success')
+                    ),
+                    sold_as_item = (SELECT COALESCE(SUM(oi.quantity), 0) 
+                                   FROM order_items oi 
+                                   JOIN orders o ON oi.order_id = o.order_id 
+                                   WHERE oi.menu_item_id = %s AND o.order_status = 'Success'),
+                    sold_as_addon = (SELECT COALESCE(SUM(oia.quantity), 0) 
+                                    FROM order_item_addons oia 
+                                    JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                                    JOIN orders o ON oi.order_id = o.order_id
+                                    WHERE oia.menu_item_id = %s AND o.order_status = 'Success'),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = %s
+            """, (mid, mid, mid, mid, mid, mid, mid))
+
+
+        
+        # 7. Delete History
+        cursor.execute("DELETE FROM merge_history WHERE merge_id = %s", (merge_id,))
+        
+        conn.commit()
+        
+        # 8. Update Backups
+        export_to_backups(conn)
+        
+        return {"status": "success", "message": f"Successfully reversed merge of '{history['source_name']}'"}
+        
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": f"Undo failed: {e}"}
     finally:
         cursor.close()

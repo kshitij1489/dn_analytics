@@ -1,23 +1,24 @@
-# Database Loading Scripts
+# Database Scripts
 
-This directory contains Python scripts for initializing the database schema and loading data from the PetPooja API.
+This directory contains Python scripts for initializing the database schema and loading data.
 
 ## Core Scripts
 
 - **`load_orders.py`**: The main script for fetching and loading order data.
   - Supports `--incremental` for syncing new orders.
   - Automatically deduplicates customers.
-  - Uses `ItemMatcher` which consults the `item_parsing_table`.
-- **`load_parsing_table.py`**: Utility to load/sync the `item_parsing_table.csv` into the SQL database.
-- **`menu_manager.py`**: Handles menu synchronization and variants.
-- **`test_load_menu_postgresql.py`**: Utility to load the standardized menu from `cleaned_menu.csv`.
+  - Uses `ClusteringService` to auto-discover menu items.
+- **`menu_manager.py`**: Utilities for menu item management and variant handling.
 
 ## 🛠 Menu Management
 
-We use a data-driven parsing system:
-1. **`item_parsing_table`**: Stores explicit mappings between Raw Names and Cleaned Attributes.
-2. **Conflict Resolution**: New raw items are added as `is_verified=False` and can be managed via the Web UI.
-3. **Merging**: `utils/menu_utils.py` provides logic to safely merge duplicate menu items and update all historical records.
+The system uses an **Auto-Discovery** approach:
+1. **Detection**: `ClusteringService` receives an order. If the item name (after cleaning) is new, it creates a new `menu_item` with `is_verified=FALSE`.
+2. **Resolution**: Use the CLI tool to review and verify these items.
+   ```bash
+   python3 scripts/resolve_unclustered.py
+   ```
+3. **Merging**: `utils/menu_utils.py` / `merge_menu_items` provides logic to safely merge duplicate menu items and update all historical records.
 
 ## Common Operations
 
@@ -26,10 +27,9 @@ We use a data-driven parsing system:
 make sync
 ```
 
-### 2. Load/Refresh Parsing Rules
+### 2. Verify New Items
 ```bash
-# Load seed data from data/item_parsing_table.csv
-python3 database/load_parsing_table.py --user your_user
+python3 scripts/resolve_unclustered.py
 ```
 
 ## Schema Reference

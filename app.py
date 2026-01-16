@@ -33,11 +33,11 @@ from database.load_orders import (
     get_or_create_customer,
     create_schema_if_needed
 )
-from database.menu_manager import sync_menu
 from utils.api_client import fetch_stream_raw
-from data_cleaning.item_matcher import ItemMatcher
-from utils.menu_utils import merge_menu_items, export_parsing_table_to_csv
-from datetime import datetime
+from services.clustering_service import OrderItemCluster
+from utils.menu_utils import merge_menu_items, resolve_item_rename, remap_order_item_cluster, undo_merge
+from scripts.seed_from_backups import perform_seeding, export_to_backups
+from scripts.resolve_unclustered import get_unverified_items, verify_item
 
 # Page configuration
 st.set_page_config(
@@ -52,10 +52,49 @@ if 'db_connected' not in st.session_state:
     st.session_state.db_connected = False
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = None
-if 'item_matcher' not in st.session_state:
-    st.session_state.item_matcher = None
+if 'item_cluster' not in st.session_state:
+    st.session_state.item_cluster = None
 if 'data_version' not in st.session_state:
     st.session_state.data_version = 0
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = False
+
+# --- AUTOMATIC INITIALIZATION ---
+def initialize_app():
+    """Initialize database connection and services automatically"""
+    if st.session_state.initialized:
+        return
+        
+    conn = get_db_connection()
+    if conn:
+        # 0. Ensure schema is ready
+        try:
+            create_schema_if_needed(conn)
+        except Exception as e:
+            st.warning(f"Schema check error: {e}")
+            
+        # 1. Auto-seed if empty
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM menu_items")
+            count = cursor.fetchone()[0]
+            cursor.close()
+            
+            if count == 0:
+                st.info("🌱 Clean database detected. Seeding from backups...")
+                if perform_seeding(conn):
+                    st.success("✅ Seed data loaded successfully")
+                else:
+                    st.warning("⚠️ Could not load seed data")
+        except Exception as e:
+            st.error(f"Seeding check failed: {e}")
+            
+        # 2. Initialize cluster
+        if st.session_state.item_cluster is None:
+            st.session_state.item_cluster = OrderItemCluster(conn)
+            
+        st.session_state.initialized = True
+
 
 
 def get_db_connection():
@@ -79,21 +118,18 @@ def get_db_connection():
                 db_url = "postgresql://kshitijsharma@localhost:5432/analytics"
             
             st.session_state.db_conn = psycopg2.connect(db_url)
-            
-            # Create schema if it doesn't exist
-            try:
-                create_schema_if_needed(st.session_state.db_conn)
-            except Exception as schema_error:
-                st.warning(f"Schema creation warning: {schema_error}")
-            
             st.session_state.db_connected = True
         except Exception as e:
             st.error(f"Database connection failed: {e}")
             st.info("💡 Tip: Set up database connection in `.streamlit/secrets.toml` or use DB_URL environment variable")
             st.session_state.db_connected = False
             return None
+
     
     return st.session_state.db_conn
+
+
+initialize_app()
 
 
 def execute_query(conn, query, limit=None):
@@ -131,22 +167,9 @@ def sync_database(conn):
             except Exception as schema_error:
                 return 0, f"Schema creation failed: {str(schema_error)}"
         
-        # 1. Sync Menu Data
+        
+        # 1. Prepare for Sync
         status_text = st.empty()
-        status_text.text("Syncing menu data...")
-        menu_result = sync_menu(conn)
-        if menu_result['status'] == 'error':
-            return 0, f"Menu sync failed: {menu_result['message']}"
-        st.toast(f"Menu synced: {menu_result.get('menu_items', 0)} items")
-        
-        # Check if menu data is loaded (needed for ItemMatcher)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM menu_items")
-        menu_count = cursor.fetchone()[0]
-        cursor.close()
-        
-        if menu_count == 0:
-            return 0, "Menu data failed to load."
         
         # Check if customers table is empty (indicates migration or first run)
         cursor = conn.cursor()
@@ -174,9 +197,9 @@ def sync_database(conn):
             status_text.empty()
             return 0, "No new orders to sync"
         
-        # Initialize ItemMatcher if needed
-        if st.session_state.item_matcher is None:
-            st.session_state.item_matcher = ItemMatcher(conn)
+        # Initialize OrderItemCluster if needed
+        if st.session_state.item_cluster is None:
+            st.session_state.item_cluster = OrderItemCluster(conn)
         
         stats = {
             'orders': 0,
@@ -193,7 +216,7 @@ def sync_database(conn):
             status_text.text(f"Processing order {i+1}/{len(new_orders)}...")
             progress_bar.progress((i + 1) / len(new_orders))
             
-            order_stats = process_order(conn, order_payload, st.session_state.item_matcher)
+            order_stats = process_order(conn, order_payload, st.session_state.item_cluster)
             for key in stats:
                 if key == 'errors':
                     stats[key].extend(order_stats[key])
@@ -206,6 +229,8 @@ def sync_database(conn):
         # Increment version to trigger automatic UI refresh across all tabs
         if len(new_orders) > 0:
             st.session_state.data_version += 1
+            # Export to backups
+            export_to_backups(conn)
             
         return len(new_orders), stats
     except Exception as e:
@@ -436,42 +461,18 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Database connection
-    if st.button("🔌 Connect to Database"):
-        conn = get_db_connection()
-        if conn:
-            st.success("✅ Connected to database")
-            
-            # Check if schema exists
-            try:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
-                        AND table_name = 'orders'
-                    )
-                """)
-                tables_exist = cursor.fetchone()[0]
-                cursor.close()
-                
-                if not tables_exist:
-                    st.info("📋 Schema will be created automatically when needed")
-                else:
-                    st.success("✅ Database ready")
-            except Exception as e:
-                st.warning(f"Schema check: {e}")
+    if st.session_state.db_connected:
+        st.success("✅ Connected to Database")
+    else:
+        st.error("❌ Database Not Connected")
+        if st.button("🔄 Retry Connection"):
+            get_db_connection()
+            st.rerun()
     
     if st.session_state.db_connected:
-        st.success("🟢 Database Connected")
-        
-        # Database setup
-        st.markdown("---")
-        st.header("🛠️ Database Setup")
-        
-        # Check if schema exists
+        # Schema status check
         try:
-            conn = get_db_connection()
+            conn = st.session_state.db_conn
             if conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -482,33 +483,12 @@ with st.sidebar:
                     )
                 """)
                 tables_exist = cursor.fetchone()[0]
-                
-                cursor.execute("SELECT COUNT(*) FROM menu_items")
-                menu_count = cursor.fetchone()[0] if tables_exist else 0
                 cursor.close()
                 
                 if not tables_exist:
-                    st.warning("⚠️ Database schema not initialized")
-                    if st.button("📋 Create Schema", width="stretch"):
-                        with st.spinner("Creating schema..."):
-                            try:
-                                create_schema_if_needed(conn)
-                                st.success("✅ Schema created successfully!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Schema creation failed: {e}")
-                elif menu_count == 0:
-                    st.warning("⚠️ Menu data not loaded")
-                    if st.button("📥 Load Menu", width="stretch"):
-                        with st.spinner("Loading menu..."):
-                            res = sync_menu(conn)
-                            if res['status'] == 'success':
-                                st.success(f"✅ Loaded {res['menu_items']} items")
-                                st.rerun()
-                            else:
-                                st.error(f"Failed: {res['message']}")
+                    st.warning("⚠️ Schema Missing")
                 else:
-                    st.success("✅ Database ready")
+                    st.info("📊 Database Ready")
         except Exception as e:
             st.error(f"Setup check failed: {e}")
         
@@ -584,6 +564,7 @@ if not conn:
 # Tabs for different views
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "🔍 SQL Query",
+    "✨ Resolutions",
     "📦 Orders",
     "🛒 Order Items",
     "👥 Customers",
@@ -592,9 +573,98 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "📏 Variants",
     "🕸️ Menu Matrix",
     "📊 Taxes",
-    "💰 Discounts",
-    "⚡ Parsing & Conflicts"
+    "💰 Discounts"
 ])
+
+# Tab 2: Resolutions (Unclustered Data)
+with tab2:
+    st.header("✨ Unclustered Data Resolution")
+    st.info("Resolve items that don't match existing menu items exactly.")
+    
+    unverified_items = get_unverified_items(conn)
+    
+    if not unverified_items:
+        st.success("✅ All items are verified! No conflicts found.")
+    else:
+        st.write(f"Found {len(unverified_items)} unverified items.")
+        
+        # Group by item for cleaner UI
+        for i, item in enumerate(unverified_items):
+            with st.expander(f"📝 {item['name']} ({item['type']})", expanded=(i==0)):
+                col1, col2 = st.columns(2)
+                
+                # Fetch Suggestion if any
+                suggestion_name = None
+                if item.get('suggestion_id'):
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name, type FROM menu_items WHERE menu_item_id = %s", (item['suggestion_id'],))
+                    s_res = cursor.fetchone()
+                    cursor.close()
+                    if s_res:
+                        suggestion_name = f"{s_res[0]} ({s_res[1]})"
+                
+                with col1:
+                    st.write("**Current Details:**")
+                    st.write(f"- Name: `{item['name']}`")
+                    st.write(f"- Type: `{item['type']}`")
+                    st.write(f"- Created: {item['created_at']}")
+                    if suggestion_name:
+                        st.info(f"💡 Suggestion: **{suggestion_name}**")
+                
+                with col2:
+                    st.write("**Action:**")
+                    action = st.radio("Choose resolution:", 
+                                    ["Merge into Existing", "Rename / Create New", "Verify as is"], 
+                                    key=f"act_{item['menu_item_id']}", index=0 if suggestion_name else 2)
+                    
+                    if action == "Merge into Existing":
+                        # Fetch all verified items for dropdown
+                        # (Optimized: ideally cache this or use autocomplete)
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT menu_item_id, name, type FROM menu_items WHERE is_verified = TRUE ORDER BY name")
+                        verified_options = cursor.fetchall()
+                        cursor.close()
+                        
+                        # Find index of suggestion if available
+                        default_idx = 0
+                        if item.get('suggestion_id'):
+                            for idx, v_opt in enumerate(verified_options):
+                                if str(v_opt[0]) == str(item['suggestion_id']):
+                                    default_idx = idx
+                                    break
+                                    
+                        target_choice = st.selectbox("Select Target Item:", 
+                                                   options=verified_options,
+                                                   format_func=lambda x: f"{x[1]} ({x[2]})",
+                                                   index=default_idx,
+                                                   key=f"target_{item['menu_item_id']}")
+                                                   
+                        if st.button("Merge", key=f"btn_merge_{item['menu_item_id']}"):
+                            res = merge_menu_items(conn, item['menu_item_id'], str(target_choice[0]))
+                            if res['status'] == 'success':
+                                st.success(res['message'])
+                                st.rerun()
+                            else:
+                                st.error(res['message'])
+                                
+                    elif action == "Rename / Create New":
+                        new_name = st.text_input("New Name", value=item['name'], key=f"name_{item['menu_item_id']}")
+                        new_type = st.text_input("New Type", value=item['type'], key=f"type_{item['menu_item_id']}")
+                        
+                        if st.button("Save & Verify", key=f"btn_save_{item['menu_item_id']}"):
+                            res = resolve_item_rename(conn, item['menu_item_id'], new_name, new_type)
+                            if res['status'] == 'success':
+                                st.success(res['message'])
+                                st.rerun()
+                            else:
+                                st.error(res['message'])
+                                
+                    elif action == "Verify as is":
+                        if st.button("Confirm Verify", key=f"btn_verify_{item['menu_item_id']}"):
+                            verify_item(conn, item['menu_item_id'])
+                            st.success("Item verified")
+                            st.rerun()
+
 
 # Tab 1: SQL Query
 with tab1:
@@ -634,8 +704,8 @@ with tab1:
                     mime="text/csv"
                 )
 
-# Tab 2: Orders
-with tab2:
+# Tab 3: Orders
+with tab3:
     st.header("Orders Table")
     render_datatable(
         conn, 
@@ -646,8 +716,8 @@ with tab2:
         search_columns=['order_id', 'order_status', 'order_type', 'order_from']
     )
 
-# Tab 3: Order Items
-with tab3:
+# Tab 4: Order Items
+with tab4:
     st.header("Order Items Table")
     render_datatable(
         conn, 
@@ -658,8 +728,8 @@ with tab3:
         search_columns=['order_id', 'name_raw', 'category_name']
     )
 
-# Tab 4: Customers
-with tab4:
+# Tab 5: Customers
+with tab5:
     st.header("Customers Table")
     render_datatable(
         conn, 
@@ -670,8 +740,8 @@ with tab4:
         search_columns=['name', 'phone']
     )
 
-# Tab 5: Restaurants
-with tab5:
+# Tab 6: Restaurants
+with tab6:
     st.header("Restaurants Table")
     render_datatable(
         conn, 
@@ -681,40 +751,81 @@ with tab5:
         'restaurants'
     )
 
-# Tab 6: Menu Items
-with tab6:
-    st.header("Menu Items")
-    
+# Tab 7: Menu Items
+with tab7:
     # Merge Tool
     with st.expander("🛠️ Merge Menu Items", expanded=False):
         st.info("Merge a duplicate item (Source) into a canonical item (Target). The Source item will be DELETED and its stats/orders transferred to Target.")
-        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+        
+        # Get list for Selectbox instead of raw ID input
+        cursor = conn.cursor()
+        cursor.execute("SELECT menu_item_id, name, type FROM menu_items ORDER BY name")
+        all_items = cursor.fetchall()
+        cursor.close()
+        
+        # Add placeholder
+        placeholder = (None, "-- Select Item --", "")
+        merge_options = [placeholder] + all_items
+        
+        c1, c2 = st.columns(2)
         with c1:
-            source_id = st.number_input("Source Menu Item ID", min_value=1, step=1, key="merge_src")
+            src_choice = st.selectbox("Source (To Delete)", 
+                                    options=merge_options, 
+                                    format_func=lambda x: f"{x[1]} ({x[2]})" if x[0] else x[1],
+                                    key="merge_src_sel")
         with c2:
-            target_id = st.number_input("Target Menu Item ID", min_value=1, step=1, key="merge_tgt")
-        with c3:
-            st.write("") 
-            adopt_prices = st.checkbox("Adopt Source Prices", help="If checked, shared variants will take the price from the Source item.")
-        with c4:
-            st.write("") 
-            st.write("") 
-            merge_btn = st.button("Merge Items", type="primary", width="stretch")
+            # Filter all_items to exclude source if source is selected
+            target_options = [placeholder] + [i for i in all_items if not src_choice[0] or i[0] != src_choice[0]]
+            tgt_choice = st.selectbox("Target (To Keep)", 
+                                    options=target_options, 
+                                    format_func=lambda x: f"{x[1]} ({x[2]})" if x[0] else x[1],
+                                    key="merge_tgt_sel")
             
-        if merge_btn:
-            if source_id == target_id:
-                st.error("Source and Target cannot be the same.")
+        if st.button("Merge Items"):
+            if not src_choice[0] or not tgt_choice[0]:
+                st.error("Please select both a Source and a Target item")
+            elif src_choice[0] == tgt_choice[0]:
+                st.error("Cannot merge item into itself")
             else:
-                with st.spinner("Merge in progress..."):
-                    res = merge_menu_items(conn, source_id, target_id, adopt_source_prices=adopt_prices)
-                    if res.get("status") == "success":
-                        st.session_state.data_version += 1
-                        st.toast(f"✅ {res.get('message')}", icon="🎉")
-                        import time
-                        time.sleep(5)
-                        st.rerun()
-                    else:
-                        st.error(f"Merge Failed: {res.get('message')}")
+                res = merge_menu_items(conn, str(src_choice[0]), str(tgt_choice[0]))
+                if res['status'] == 'success':
+                    st.success(res['message'])
+                    st.write(res['stats'])
+                    st.rerun()
+                else:
+                    st.error(res['message'])
+
+    # Merge History
+    with st.expander("⏳ Recent Merge History"):
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT h.*, m.name as target_name 
+            FROM merge_history h
+            LEFT JOIN menu_items m ON h.target_id = m.menu_item_id
+            ORDER BY h.merged_at DESC 
+            LIMIT 5
+        """)
+        history = cursor.fetchall()
+        cursor.close()
+        
+        if not history:
+            st.info("No recent merges found.")
+        else:
+            for record in history:
+                col1, col2, col3 = st.columns([3, 3, 1])
+                with col1:
+                    target_display = record['target_name'] or f"Item {str(record['target_id'])[:8]}..."
+                    st.write(f"**{record['source_name']}** → **{target_display}**")
+                with col2:
+                    st.caption(f"Relinked {len(record['affected_order_items'])} mappings • {record['merged_at'].strftime('%Y-%m-%d %H:%M')}")
+                with col3:
+                    if st.button("Undo", key=f"undo_{record['merge_id']}", use_container_width=True):
+                        undo_res = undo_merge(conn, record['merge_id'])
+                        if undo_res['status'] == 'success':
+                            st.success(undo_res['message'])
+                            st.rerun()
+                        else:
+                            st.error(undo_res['message'])
 
     render_datatable(
         conn, 
@@ -725,8 +836,8 @@ with tab6:
         search_columns=['menu_item_id', 'name', 'type', 'is_active']
     )
 
-# Tab 7: Variants
-with tab7:
+# Tab 8: Variants
+with tab8:
     st.header("Variants")
     render_datatable(
         conn, 
@@ -736,9 +847,61 @@ with tab7:
         'variants'
     )
 
-# Tab 8: Menu Matrix
-with tab8:
+# Tab 9: Menu Matrix
+with tab9:
     st.header("Menu Matrix (Item x Variant)")
+    
+    
+    # Remap Tool
+    with st.expander("🔄 Remap Order Item"):
+        # 1. Input Order Item ID
+        raw_oid = st.text_input("Order Item ID (to move):")
+        
+        if raw_oid:
+            # 2. Show current mapping
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.name, v.variant_name 
+                FROM menu_item_variants mv
+                JOIN menu_items m ON mv.menu_item_id = m.menu_item_id
+                JOIN variants v ON mv.variant_id = v.variant_id
+                WHERE mv.order_item_id = %s
+            """, (raw_oid,))
+            current = cursor.fetchone()
+            cursor.close()
+            
+            if current:
+                st.write(f"Currently mapped to: **{current[0]}** ({current[1]})")
+                
+                # 3. Select New Menu Item
+                cursor = conn.cursor()
+                cursor.execute("SELECT menu_item_id, name, type FROM menu_items ORDER BY name")
+                all_items_remap = cursor.fetchall()
+                
+                # Select Item First
+                new_item_choice = st.selectbox("Move to Menu Item:", 
+                                            options=all_items_remap,
+                                            format_func=lambda x: f"{x[1]} ({x[2]})",
+                                            key="remap_item_sel")
+                                            
+                if new_item_choice:
+                    cursor.execute("SELECT variant_id, variant_name FROM variants ORDER BY variant_name")
+                    all_variants = cursor.fetchall()
+                    cursor.close()
+                    
+                    new_variant_choice = st.selectbox("Select Variant:", 
+                                                    options=all_variants, 
+                                                    format_func=lambda x: x[1],
+                                                    key="remap_var_sel")
+                                                    
+                    if st.button("Remap"):
+                        res = remap_order_item_cluster(conn, raw_oid, str(new_item_choice[0]), str(new_variant_choice[0]))
+                        if res['status'] == 'success':
+                            st.success(res['message'])
+                        else:
+                            st.error(res['message'])
+            else:
+                st.warning("Order Item ID not found in cluster map")
     
     query = """
         SELECT 
@@ -764,8 +927,8 @@ with tab8:
             st.info(f"Total combinations: {len(df)}")
             st.dataframe(df, width="stretch", height=600)
 
-# Tab 9: Order Taxes
-with tab9:
+# Tab 10: Order Taxes
+with tab10:
     st.header("Order Taxes Table")
     render_datatable(
         conn, 
@@ -776,8 +939,8 @@ with tab9:
         search_columns=['tax_title', 'order_id']
     )
 
-# Tab 10: Order Discounts
-with tab10:
+# Tab 11: Order Discounts
+with tab11:
     st.header("Order Discounts Table")
     render_datatable(
         conn, 
@@ -787,137 +950,3 @@ with tab10:
         'discounts',
         search_columns=['discount_title', 'order_id']
     )
-
-# Tab 11: Parsing & Conflicts (Version 2)
-with tab11:
-    st.header("⚡ Parsing Rules & Conflict Resolution")
-    st.info("This table defines how Raw Item Names (from API) are mapped to Cleaned Name, Type, and Variant. Rows with `is_verified=False` are suggested conflicts.")
-    
-    try:
-        # Load data
-        df_parsing = pd.read_sql("SELECT * FROM item_parsing_table ORDER BY is_verified ASC, raw_name ASC", conn)
-        
-        # Use categorical type for 'type' column to trigger dropdown in data_editor automatically
-        # this is more compatible than st.column_config.SelectColumn
-        type_options = ["Ice Cream", "Dessert", "Combo", "Drinks", "Extra", "Service"]
-        df_parsing['type'] = pd.Categorical(df_parsing['type'], categories=type_options)
-        
-        if len(df_parsing) == 0:
-            st.warning("⚠️ Item Parsing Table is empty.")
-            if st.button("📥 Load Seed Data (Legacy Rules)"):
-                with st.spinner("Loading seed data..."):
-                    try:
-                        # Find CSV path
-                        csv_path = os.path.join("data", "item_parsing_table.csv")
-                        if os.path.exists(csv_path):
-                            updates = []
-                            import csv
-                            with open(csv_path, 'r', encoding='utf-8') as f:
-                                reader = csv.DictReader(f)
-                                for row in reader:
-                                    updates.append((
-                                        row['raw_name'].strip(),
-                                        row['cleaned_name'].strip(),
-                                        row['type'].strip(),
-                                        row['variant'].strip(),
-                                        row['is_verified'].strip().lower() in ['true', '1', 't', 'yes']
-                                    ))
-                            
-                            if updates:
-                                cursor = conn.cursor()
-                                execute_values(cursor, """
-                                    INSERT INTO item_parsing_table (raw_name, cleaned_name, type, variant, is_verified)
-                                    VALUES %s
-                                    ON CONFLICT (raw_name) DO UPDATE 
-                                    SET is_verified = EXCLUDED.is_verified,
-                                        cleaned_name = EXCLUDED.cleaned_name,
-                                        type = EXCLUDED.type,
-                                        variant = EXCLUDED.variant
-                                """, updates)
-                                conn.commit()
-                                st.success(f"✅ Loaded and updated {len(updates)} items!")
-                                st.rerun()
-                            else:
-                                st.error("CSV is empty?")
-                        else:
-                            st.error(f"Seed file not found: {csv_path}")
-                    except Exception as load_err:
-                        st.error(f"Failed to load: {load_err}")
-
-        # Helper to verify all
-        if len(df_parsing[~df_parsing['is_verified']]) > 0:
-            if st.button("✅ Mark All as Verified"):
-                cursor = conn.cursor()
-                cursor.execute("UPDATE item_parsing_table SET is_verified = TRUE")
-                conn.commit()
-                export_parsing_table_to_csv(conn)
-                st.success("All items marked as verified and synced to CSV!")
-                st.rerun()
-                        
-        # Always show table if it exists (even if empty, though unlikely after load)
-        if len(df_parsing) > 0:
-            with st.form("parsing_form"):
-                edited_df = st.data_editor(
-                    df_parsing,
-                    column_config={
-                        "is_verified": st.column_config.CheckboxColumn("Verified?", help="Check to confirm this mapping"),
-                        "raw_name": st.column_config.TextColumn("Raw Name", disabled=True),
-                        "cleaned_name": st.column_config.TextColumn("Cleaned Name"),
-                        "variant": st.column_config.TextColumn("Variant"),
-                    },
-                    disabled=["id", "created_at", "updated_at"],
-                    width="stretch",
-                    hide_index=True,
-                    num_rows="dynamic"
-                )
-                
-                save_btn = st.form_submit_button("💾 Save Changes", type="primary")
-                
-                if save_btn:
-                    try:
-                        cursor = conn.cursor()
-                        updates = []
-                        for index, row in edited_df.iterrows():
-                            # Convert categorical back to string for DB
-                            row_type = str(row['type']) if pd.notnull(row['type']) else ""
-                            updates.append((
-                                row['cleaned_name'], 
-                                row_type, 
-                                row['variant'], 
-                                bool(row['is_verified']), 
-                                row['id']
-                            ))
-                            
-                        execute_values(cursor, """
-                            UPDATE item_parsing_table 
-                            SET cleaned_name = data.cleaned_name,
-                                type = data.type,
-                                variant = data.variant,
-                                is_verified = data.is_verified,
-                                updated_at = CURRENT_TIMESTAMP
-                            FROM (VALUES %s) AS data (cleaned_name, type, variant, is_verified, id)
-                            WHERE item_parsing_table.id = data.id
-                        """, updates)
-                        
-                        conn.commit()
-                        export_parsing_table_to_csv(conn)
-                        st.success(f"✅ Saved {len(updates)} rows and synced to CSV!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error saving changes: {e}")
-
-    except Exception as e:
-        if "does not exist" in str(e):
-            st.warning("⚠️ Item Parsing Table missing (Version 2 Update).")
-            if st.button("🚀 Initialize Version 2 Schema"):
-                with st.spinner("Creating table..."):
-                    # We can reuse create_schema_if_needed from database.load_orders
-                    # But we need to import it properly or just re-run the updated logic
-                    from database.load_orders import create_schema_if_needed
-                    create_schema_if_needed(conn)
-                    st.success("Schema updated!")
-                    st.rerun()
-        else:
-            st.error(f"Error loading parsing table: {e}")
-
-# End of file

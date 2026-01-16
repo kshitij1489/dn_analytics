@@ -38,7 +38,7 @@ services:
     volumes:
       - ./app.py:/app/app.py
       - ./database:/app/database
-      - ./fetch_orders.py:/app/fetch_orders.py
+      - ./scripts:/app/scripts
       - ./data_cleaning:/app/data_cleaning
       # Mount data and utils for live updates
       - ./data:/app/data
