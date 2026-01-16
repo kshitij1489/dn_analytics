@@ -320,6 +320,12 @@ def process_order(conn, order_payload: Dict, item_cluster: OrderItemCluster) -> 
         order_data = properties.get('Order', {})
         petpooja_order_id = order_data.get('orderID')
         
+        # Check if order already exists to prevent double-counting customer stats
+        cursor = conn.cursor()
+        cursor.execute("SELECT order_id FROM orders WHERE petpooja_order_id = %s", (petpooja_order_id,))
+        exists = cursor.fetchone()
+        cursor.close()
+        
         # Customer data
         customer_data = properties.get('Customer', {})
         
@@ -345,9 +351,24 @@ def process_order(conn, order_payload: Dict, item_cluster: OrderItemCluster) -> 
             created_on = occurred_at or datetime.now()
         
         total_amount = Decimal(str(order_data.get('total', 0)))
-        customer_id = get_or_create_customer(conn, customer_data, created_on, total_amount)
         
-        # Insert order
+        # Only increment customer stats if it's a new order
+        if exists:
+            # Get customer_id without incrementing stats
+            identity_key = compute_customer_identity_key(customer_data)
+            cursor = conn.cursor()
+            cursor.execute("SELECT customer_id FROM customers WHERE customer_identity_key = %s", (identity_key,))
+            res = cursor.fetchone()
+            cursor.close()
+            if res:
+                customer_id = res[0]
+            else:
+                # This case shouldn't happen if order exists, but fallback to 0 increment if it does
+                customer_id = get_or_create_customer(conn, customer_data, created_on, Decimal(0))
+        else:
+            customer_id = get_or_create_customer(conn, customer_data, created_on, total_amount)
+        
+        # Insert or update order
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO orders (
@@ -656,7 +677,7 @@ def main():
         print(f"  Incremental update: fetching orders after stream_id {last_stream_id}")
         orders = fetch_stream_raw(
             endpoint="orders",
-            start_cursor=last_stream_id + 1
+            start_cursor=last_stream_id
         )
     else:
         print("  Fetching all orders from API...")
