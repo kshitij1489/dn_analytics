@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS orders (
     -- Note: Add FK constraint after restaurants table is created
     
     -- Order metadata
-    occurred_at TIMESTAMP NOT NULL,             -- From top-level occurred_at
-    created_on TIMESTAMP NOT NULL,             -- From Order.created_on (order creation time)
+    occurred_at TIMESTAMPTZ NOT NULL,           -- From top-level occurred_at
+    created_on TIMESTAMPTZ NOT NULL,           -- From Order.created_on
     
     -- Order type and source
     order_type VARCHAR(50) NOT NULL,            -- Delivery, Dine In, Takeaway
@@ -72,8 +72,8 @@ CREATE TABLE IF NOT EXISTS orders (
     comment TEXT,                               -- Order comments/notes
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     
     -- Constraints
     CHECK (core_total >= 0),
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS order_taxes (
     tax_amount DECIMAL(10,2) NOT NULL CHECK (tax_amount >= 0),
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS order_discounts (
     discount_amount DECIMAL(10,2) NOT NULL CHECK (discount_amount >= 0),
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================

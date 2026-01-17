@@ -64,7 +64,7 @@ INDIAN_HOLIDAYS = [
     {"date": "2026-12-25", "name": "Christmas"},
 ]
 
-# Add parent directory to path
+# Add parent directory to path early for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from database.load_orders import (
@@ -202,6 +202,15 @@ def get_db_connection(force_retry=False):
             
             conn = psycopg2.connect(db_url, connect_timeout=3)
             
+            # --- SET SESSION TIMEZONE TO IST ---
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SET TIMEZONE TO 'Asia/Kolkata';")
+                cursor.close()
+                conn.commit()
+            except:
+                pass
+            
             # If connection succeeds, return it
             st.session_state.db_conn = conn
             st.session_state.db_connected = True
@@ -213,7 +222,6 @@ def get_db_connection(force_retry=False):
                 st.session_state.db_status = "Failed"
                 st.session_state.db_connected = False
                 return None
-            import time
             time.sleep(1) # Wait a bit before retry
             
     return None
@@ -415,11 +423,6 @@ def render_insights_dashboard(conn):
         ds_data = pd.DataFrame(cursor.fetchall())
         
         if not ds_data.empty:
-            # Format currency columns with Indian nomenclature (Strings break sorting, but user requested this format)
-            cols_to_format = ['total_revenue', 'net_revenue', 'tax_collected']
-            for col in cols_to_format:
-                ds_data[col] = ds_data[col].apply(lambda x: f"₹{format_indian_currency(x)}")
-            
             # Use Column Config for counts to ensure proper numeric sorting
             st.dataframe(
                 ds_data, 
@@ -427,9 +430,9 @@ def render_insights_dashboard(conn):
                 height=600,
                 column_config={
                     "order_date": "Date",
-                    "total_revenue": "Total Revenue",
-                    "net_revenue": "Net Revenue",
-                    "tax_collected": "Tax Collected",
+                    "total_revenue": st.column_config.NumberColumn("Total Revenue", format="₹%d"),
+                    "net_revenue": st.column_config.NumberColumn("Net Revenue", format="₹%d"),
+                    "tax_collected": st.column_config.NumberColumn("Tax Collected", format="₹%d"),
                     "total_orders": st.column_config.NumberColumn("Total Orders", format="%d"),
                     "Website Revenue": st.column_config.NumberColumn(format="₹%d"),
                     "POS Revenue": st.column_config.NumberColumn(format="₹%d"),
@@ -571,27 +574,15 @@ def render_insights_dashboard(conn):
         menu_data = pd.DataFrame(cursor.fetchall())
         
         if not menu_data.empty:
-            # Format currency (needs to stay string for Indian nomenclature)
-            menu_data['Total Revenue'] = menu_data['Total Revenue'].apply(lambda x: f"₹{format_indian_currency(x)}")
-            
             st.dataframe(
                 menu_data, 
                 use_container_width=True, 
                 height=600,
                 column_config={
-                    "Reorder Rate %": st.column_config.NumberColumn(
-                        "Reorder Rate",
-                        help="Percentage of identified customers who reordered this item",
-                        format="%.1f%%"
-                    ),
-                    "Repeat Revenue %": st.column_config.NumberColumn(
-                        "Repeat Revenue",
-                        help="Percentage of total revenue from repeat customers",
-                        format="%.1f%%"
-                    ),
+                    "Total Revenue": st.column_config.NumberColumn(format="₹%d"),
                     "Repeat Customers": st.column_config.NumberColumn(format="%d"),
                     "Unique Customers": st.column_config.NumberColumn(format="%d"),
-                    "Total Sold (Qty)": st.column_config.NumberColumn("Total Units", format="%d"),
+                    "Total Sold (Qty)": st.column_config.NumberColumn("Total Sold", format="%d"),
                     "As Item (Qty)": st.column_config.NumberColumn("As Item", format="%d"),
                     "As Addon (Qty)": st.column_config.NumberColumn("As Addon", format="%d"),
                     "Reorder Count": st.column_config.NumberColumn(format="%d")
@@ -610,8 +601,7 @@ def render_insights_dashboard(conn):
                     total_orders,
                     CASE WHEN total_orders > 1 THEN 1 ELSE 0 END as is_returning
                 FROM customers c
-                WHERE (c.phone IS NOT NULL AND c.phone != '') 
-                OR (c.name IS NOT NULL AND c.name != '' AND c.name != 'Anonymous' AND c.address IS NOT NULL AND c.address != '')
+                WHERE c.is_verified = TRUE
             )
             SELECT 
                 COUNT(*) as total_customers,
@@ -636,92 +626,176 @@ def render_insights_dashboard(conn):
             
         st.markdown("---")
         
-        # 2. Top Customers Table
-        st.subheader("💎 Top Customers by Spend")
-        cursor.execute("""
-            WITH customer_item_counts AS (
-                -- Main Items
-                SELECT 
-                    o.customer_id,
-                    mi.name as item_name,
-                    SUM(oi.quantity) as item_qty
-                FROM order_items oi
-                JOIN orders o ON oi.order_id = o.order_id
-                JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
-                WHERE o.order_status = 'Success'
-                GROUP BY o.customer_id, mi.name
-                
-                UNION ALL
-                
-                -- Addons
-                SELECT 
-                    o.customer_id,
-                    mi.name as item_name,
-                    SUM(oia.quantity) as item_qty
-                FROM order_item_addons oia
-                JOIN order_items oi ON oia.order_item_id = oi.order_item_id
-                JOIN orders o ON oi.order_id = o.order_id
-                JOIN menu_items mi ON oia.menu_item_id = mi.menu_item_id
-                WHERE o.order_status = 'Success'
-                GROUP BY o.customer_id, mi.name
-            ),
-            final_counts AS (
-                SELECT 
-                    customer_id,
-                    item_name,
-                    SUM(item_qty) as total_item_qty
-                FROM customer_item_counts
-                GROUP BY customer_id, item_name
-            ),
-            top_items_per_customer AS (
-                SELECT DISTINCT ON (customer_id)
-                    customer_id,
-                    item_name,
-                    total_item_qty
-                FROM final_counts
-                ORDER BY customer_id, total_item_qty DESC, item_name ASC
-            )
-            SELECT 
-                c.name,
-                c.total_orders,
-                c.total_spent,
-                c.last_order_date,
-                CASE WHEN c.total_orders > 1 THEN 'Returning' ELSE 'New' END as status,
-                tic.item_name as favorite_item,
-                tic.total_item_qty as fav_item_qty
-            FROM customers c
-            LEFT JOIN top_items_per_customer tic ON c.customer_id = tic.customer_id
-            WHERE (c.name IS NOT NULL AND c.name != '' AND c.name != 'Anonymous' AND c.address IS NOT NULL AND c.address != '')
-            OR (c.phone IS NOT NULL AND c.phone != '')
-            ORDER BY c.total_spent DESC
-            LIMIT 50
-        """)
-        top_cust = pd.DataFrame(cursor.fetchall())
-        
-        if not top_cust.empty:
-            # Format date for display
-            top_cust['last_order_date'] = pd.to_datetime(top_cust['last_order_date']).dt.strftime('%Y-%m-%d %I:%M %p')
+        # 1.1 View Switcher Buttons
+        if "customer_view" not in st.session_state:
+            st.session_state.customer_view = "loyalty"
             
-            st.dataframe(
-                top_cust, 
-                use_container_width=True, 
-                height=500,
-                column_config={
-                    "name": "Customer Name",
-                    "favorite_item": "Favorite Item",
-                    "fav_item_qty": st.column_config.NumberColumn("Favorite Count", format="%d"),
-                    "total_orders": st.column_config.NumberColumn("Total Orders", format="%d"),
-                    "total_spent": st.column_config.NumberColumn(
-                        "Total Earned", 
-                        help="Total spend across all successful orders",
-                        format="₹%d"
-                    ),
-                    "last_order_date": "Last Seen",
-                    "status": "Loyalty Status"
-                }
-            )
-        else:
-            st.info("No top customer data available.")
+        cv_col1, cv_col2, _ = st.columns([1, 1, 2])
+        with cv_col1:
+            if st.button("🔄 Customer Retention", use_container_width=True, type="primary" if st.session_state.customer_view == "loyalty" else "secondary"):
+                st.session_state.customer_view = "loyalty"
+                st.rerun()
+        with cv_col2:
+            if st.button("💎 Top Verified Customers", use_container_width=True, type="primary" if st.session_state.customer_view == "top_spend" else "secondary"):
+                st.session_state.customer_view = "top_spend"
+                st.rerun()
+        
+        st.markdown("---")
+        
+        if st.session_state.customer_view == "loyalty":
+            # 2. Customer Retention Analysis
+            cursor.execute("""
+                WITH customer_ranks AS (
+                    -- 1. Identify verified orders and rank them by customer lifetime
+                    SELECT 
+                        o.customer_id,
+                        o.created_on,
+                        o.total,
+                        ROW_NUMBER() OVER (PARTITION BY o.customer_id ORDER BY o.created_on ASC) as o_rank
+                    FROM orders o
+                    JOIN customers c ON o.customer_id = c.customer_id
+                    WHERE o.order_status = 'Success'
+                      AND c.is_verified = TRUE
+                ),
+                monthly_stats AS (
+                    -- 2. Aggregate raw sums in the CTE
+                    SELECT 
+                        TO_CHAR(created_on, 'Mon-YYYY') as month_label,
+                        DATE_TRUNC('month', created_on) as month_sort,
+                        
+                        COUNT(*) as total_orders,
+                        COUNT(*) FILTER (WHERE o_rank > 1) as repeat_orders,
+                        
+                        COUNT(DISTINCT customer_id) as total_uid,
+                        COUNT(DISTINCT customer_id) FILTER (WHERE o_rank > 1) as repeat_uid,
+                        
+                        SUM(total) as raw_revenue,
+                        SUM(total) FILTER (WHERE o_rank > 1) as raw_repeat_revenue
+                    FROM customer_ranks
+                    GROUP BY 1, 2
+                )
+                SELECT 
+                    month_label as "Month",
+                    repeat_orders as "Repeat Orders",
+                    total_orders as "Total Orders",
+                    ROUND(100.0 * repeat_orders / NULLIF(total_orders, 0), 2) as "Order Repeat%",
+                    repeat_uid as "Repeat Customer Count",
+                    total_uid as "Total Verified Customers",
+                    ROUND(100.0 * repeat_uid / NULLIF(total_uid, 0), 2) as "Repeat Customer %",
+                    ROUND(raw_repeat_revenue) as "Repeat Revenue",
+                    ROUND(raw_revenue) as "Total Revenue",
+                    ROUND((100.0 * CAST(raw_repeat_revenue AS NUMERIC) / NULLIF(CAST(raw_revenue AS NUMERIC), 0)), 2) as "Revenue Repeat %",
+                    month_sort -- for sorting
+                FROM monthly_stats
+                ORDER BY month_sort DESC;
+            """)
+            loyalty_df = pd.DataFrame(cursor.fetchall())
+            
+            if not loyalty_df.empty:
+                # Remove sort column from display
+                display_cols = [c for c in loyalty_df.columns if c != 'month_sort']
+                
+                st.dataframe(
+                    loyalty_df[display_cols],
+                    use_container_width=True,
+                    height=500,
+                    column_config={
+                        "Total Revenue": st.column_config.NumberColumn(format="₹%d"),
+                        "Repeat Revenue": st.column_config.NumberColumn(format="₹%d"),
+                        "Order Repeat%": st.column_config.NumberColumn(format="%.1f%%"),
+                        "Repeat Customer %": st.column_config.NumberColumn(format="%.1f%%"),
+                        "Revenue Repeat %": st.column_config.NumberColumn(format="%.1f%%")
+                    }
+                )
+            else:
+                st.info("No loyalty data found yet.")
+        
+        elif st.session_state.customer_view == "top_spend":
+            # 3. Top Customers Table
+            
+            cursor.execute("""
+                WITH customer_item_counts AS (
+                    -- Main Items
+                    SELECT 
+                        o.customer_id,
+                        mi.name as item_name,
+                        SUM(oi.quantity) as item_qty
+                    FROM order_items oi
+                    JOIN orders o ON oi.order_id = o.order_id
+                    JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
+                    WHERE o.order_status = 'Success'
+                    GROUP BY o.customer_id, mi.name
+                    
+                    UNION ALL
+                    
+                    -- Addons
+                    SELECT 
+                        o.customer_id,
+                        mi.name as item_name,
+                        SUM(oia.quantity) as item_qty
+                    FROM order_item_addons oia
+                    JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                    JOIN orders o ON oi.order_id = o.order_id
+                    JOIN menu_items mi ON oia.menu_item_id = mi.menu_item_id
+                    WHERE o.order_status = 'Success'
+                    GROUP BY o.customer_id, mi.name
+                ),
+                final_counts AS (
+                    SELECT 
+                        customer_id,
+                        item_name,
+                        SUM(item_qty) as total_item_qty
+                    FROM customer_item_counts
+                    GROUP BY customer_id, item_name
+                ),
+                top_items_per_customer AS (
+                    SELECT DISTINCT ON (customer_id)
+                        customer_id,
+                        item_name,
+                        total_item_qty
+                    FROM final_counts
+                    ORDER BY customer_id, total_item_qty DESC, item_name ASC
+                )
+                SELECT 
+                    c.name,
+                    c.total_orders,
+                    c.total_spent,
+                    c.last_order_date,
+                    CASE WHEN c.total_orders > 1 THEN 'Returning' ELSE 'New' END as status,
+                    tic.item_name as favorite_item,
+                    tic.total_item_qty as fav_item_qty
+                FROM customers c
+                LEFT JOIN top_items_per_customer tic ON c.customer_id = tic.customer_id
+                WHERE c.is_verified = TRUE
+                ORDER BY c.total_spent DESC
+                LIMIT 50
+            """)
+            top_cust = pd.DataFrame(cursor.fetchall())
+            
+            if not top_cust.empty:
+                # Format date for display
+                top_cust['last_order_date'] = pd.to_datetime(top_cust['last_order_date']).dt.strftime('%Y-%m-%d %I:%M %p')
+                
+                st.dataframe(
+                    top_cust, 
+                    use_container_width=True, 
+                    height=500,
+                    column_config={
+                        "name": "Customer Name",
+                        "favorite_item": "Favorite Item",
+                        "fav_item_qty": st.column_config.NumberColumn("Favorite Count", format="%d"),
+                        "total_orders": st.column_config.NumberColumn("Total Orders", format="%d"),
+                        "total_spent": st.column_config.NumberColumn(
+                            "Total Earned", 
+                            help="Total spend across all successful orders",
+                            format="₹%d"
+                        ),
+                        "last_order_date": "Last Seen",
+                        "status": "Loyalty Status"
+                    }
+                )
+            else:
+                st.info("No top customer data available.")
 
     with tab_charts:
         # Removed Visual Analytics subheader
@@ -1173,16 +1247,16 @@ def render_insights_dashboard(conn):
         elif chart_to_show == "⏰ Hourly Revenue Analysis":
             st.markdown("**⏰ Hourly Revenue Analysis (Local Time - IST)**")
             
-            # 1. Fetch hourly revenue and averages (Convert UTC to IST)
+            # 1. Fetch hourly revenue and averages (Using session timezone IST)
             cursor.execute("""
                 WITH total_days AS (
-                    SELECT COUNT(DISTINCT DATE(occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')) as day_count
+                    SELECT COUNT(DISTINCT DATE(occurred_at)) as day_count
                     FROM orders
                     WHERE order_status = 'Success'
                 ),
                 hourly_stats AS (
                     SELECT 
-                        EXTRACT(HOUR FROM (occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')) as hour_num,
+                        EXTRACT(HOUR FROM occurred_at) as hour_num,
                         SUM(total) as revenue
                     FROM orders
                     WHERE order_status = 'Success'
@@ -1301,12 +1375,31 @@ initialize_app()
 def execute_query(conn, query, limit=None):
     """Execute SQL query and return results as DataFrame"""
     try:
-        if limit:
-            query = f"{query.rstrip(';')} LIMIT {limit}"
+        # Check if it's a SELECT/WITH query
+        query_type = query.strip().split()[0].upper() if query.strip() else ""
+        is_read_only = query_type in ("SELECT", "WITH", "SHOW", "EXPLAIN")
         
-        df = pd.read_sql_query(query, conn)
-        return df, None
+        if is_read_only:
+            # Only append LIMIT if not already present and it is a SELECT/WITH
+            if limit and "LIMIT" not in query.upper():
+                query = f"{query.rstrip(';')} LIMIT {limit}"
+            
+            df = pd.read_sql_query(query, conn)
+            return df, None
+        else:
+            # For ALTER, UPDATE, INSERT, etc.
+            cursor = conn.cursor()
+            cursor.execute(query)
+            conn.commit()
+            cursor.close()
+            # Return a status message for UI
+            return pd.DataFrame([{"Status": "Success", "Message": f"{query_type} command completed successfully"}]), None
+            
     except Exception as e:
+        try:
+            conn.rollback()
+        except:
+            pass
         return None, str(e)
 
 

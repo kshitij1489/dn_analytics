@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS menu_items (
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     
     -- Analytics counters
     total_revenue DECIMAL(12,2) DEFAULT 0,
@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS variants (
     unit TEXT,
     value DECIMAL(10,2),
     is_verified BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================
@@ -52,8 +52,8 @@ CREATE TABLE IF NOT EXISTS menu_item_variants (
     addon_eligible BOOLEAN DEFAULT FALSE,
     delivery_eligible BOOLEAN DEFAULT TRUE,
     is_verified BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================

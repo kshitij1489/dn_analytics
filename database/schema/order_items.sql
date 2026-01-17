@@ -57,8 +57,8 @@ CREATE TABLE IF NOT EXISTS order_items (
     match_method VARCHAR(50),  -- 'exact', 'fuzzy', 'manual', NULL
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
     match_method VARCHAR(50),  -- 'exact', 'fuzzy', 'manual', NULL
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================

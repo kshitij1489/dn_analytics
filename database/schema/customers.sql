@@ -25,12 +25,16 @@ CREATE TABLE IF NOT EXISTS customers (
     -- Metadata
     first_order_date TIMESTAMP,                -- Date of first order (for customer analytics)
     last_order_date TIMESTAMP,                 -- Date of most recent order
-    total_orders INTEGER DEFAULT 0,            -- Total number of orders (denormalized for performance)
-    total_spent DECIMAL(10,2) DEFAULT 0,      -- Total amount spent (denormalized for performance)
+    -- Denormalized stats
+    total_orders INTEGER DEFAULT 0,            
+    total_spent DECIMAL(10,2) DEFAULT 0,      
+    
+    -- Verification
+    is_verified BOOLEAN DEFAULT FALSE,         -- True if Phone or Name+Address exists
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     
     -- Constraints
     UNIQUE(customer_identity_key)  -- Identity key is unique identifier

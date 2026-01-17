@@ -22,6 +22,10 @@ import argparse
 import json
 from pathlib import Path
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 
@@ -118,7 +122,7 @@ def create_schema_if_needed(conn):
 
 
 def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
-    """Parse timestamp string to datetime object"""
+    """Parse timestamp string to datetime object and ensure IST"""
     if not timestamp_str:
         return None
     
@@ -131,9 +135,15 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
         "%Y-%m-%dT%H:%M:%S",
     ]
     
+    ist = ZoneInfo('Asia/Kolkata')
+    
     for fmt in formats:
         try:
-            return datetime.strptime(timestamp_str, fmt)
+            dt = datetime.strptime(timestamp_str, fmt)
+            # If naive, assume IST as per user's observation that fetch returns IST
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ist)
+            return dt
         except ValueError:
             continue
     
@@ -251,6 +261,11 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
         update_fields.append("total_spent = COALESCE(total_spent, 0) + %s")
         update_values.append(order_total)
         
+        # Calculate verification status
+        is_verified = not identity_key.startswith("anon:")
+        update_fields.append("is_verified = %s")
+        update_values.append(is_verified)
+        
         # Update phone if provided and currently NULL
         if phone:
             update_fields.append("phone = COALESCE(phone, %s)")
@@ -269,18 +284,19 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     else:
         # Insert new customer
         cursor.execute("""
-                INSERT INTO customers (
+            INSERT INTO customers (
                 customer_identity_key,
                 name, name_normalized, phone, address, gstin,
                 first_order_date, last_order_date,
-                total_orders, total_spent
+                total_orders, total_spent, is_verified
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s)
             RETURNING customer_id
         """, (
             identity_key,
             name, name_normalized, phone, address, gstin,
-            order_date, order_date, order_total
+            order_date, order_date, order_total,
+            not identity_key.startswith("anon:")
         ))
         customer_id = cursor.fetchone()[0]
         conn.commit()
