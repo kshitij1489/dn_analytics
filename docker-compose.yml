@@ -36,7 +36,8 @@ services:
     ports:
       - "${APP_PORT:-8501}:8501"
     volumes:
-      - ./app.py:/app/app.py
+      - ./src:/app/src
+      - ./run_app.py:/app/run_app.py
       - ./database:/app/database
       - ./scripts:/app/scripts
       - ./data_cleaning:/app/data_cleaning
