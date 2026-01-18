@@ -11,7 +11,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Schema files can be auto-loaded on first run by mounting:
-      # - ./database/schema:/docker-entrypoint-initdb.d
+      # Mount consolidated schema files in execution order
+      - ./database/consolidated/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/consolidated/indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql
+      - ./database/consolidated/views.sql:/docker-entrypoint-initdb.d/03_views.sql
+      - ./database/consolidated/seed.sql:/docker-entrypoint-initdb.d/04_seed.sql
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
