@@ -5,7 +5,8 @@ This project fetches, cleans, and analyzes order data from the PetPooja webhook 
 ## 📂 Project Structure
 
 - **`app.py`**: Streamlit visualization and management UI.
-- **`database/`**: SQL schemas and python scripts for data loading.
+- **`services/`**: Core business logic and data ingestion scripts (e.g., `load_orders.py`, `clustering_service.py`).
+- **`database/`**: SQL schemas.
 - **`data_cleaning/`**: Logic for matching raw names to menu items.
 - **`data/`**: Configuration files and CSV seeds (e.g., `item_parsing_table.csv`).
 - **`utils/`**: Shared utility modules (API client, database helpers).
@@ -37,7 +38,7 @@ make logs
    Set `DB_URL` (e.g., `postgresql://user:pass@localhost:5432/analytics`).
 3. **Run App**:
    ```bash
-   streamlit run app.py
+   python3 run_app.py
    ```
 
 ## 🛠 Project Architecture
@@ -48,16 +49,18 @@ make logs
 
 ### Key Directories
 - **`app.py`**: Main Streamlit dashboard.
-- **`database/`**: SQL schemas and `load_orders.py` for data ingestion.
+- **`services/`**: Data ingestion (`load_orders.py`) and business logic.
+- **`database/`**: SQL schemas.
 - **`data_cleaning/`**: Logic for normalizing menu item names.
 - **`scripts/`**: Utilities for fetching and validating data.
 
 ## 📚 Documentation
 - **System Context**: [SYSTEM_CONTEXT.md](SYSTEM_CONTEXT.md)
-- **Database Schema**: [database/schema/00_schema_overview.md](database/schema/00_schema_overview.md)
+- **Database Schema**: Full schema in `database/schema.sql`
 
 ## 🔧 Troubleshooting
 - **App Not Loading**: Ensure you use `http://localhost:8501`.
 - **Database Reset**: Run `make clean && make up` to wipe and re-seed the DB.
 - **New Orders**: Run `make sync` to fetch incremental orders.
+
 

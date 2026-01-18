@@ -13,7 +13,7 @@ from utils.db_utils import create_postgresql_connection
 def perform_seeding(conn):
     """Restore menu data from JSON backups in data/archive/"""
     # Paths
-    archive_dir = Path("data/archive")
+    archive_dir = Path("data")
     cluster_state_path = archive_dir / "cluster_state_backup.json"
     id_maps_path = archive_dir / "id_maps_backup.json"
     
@@ -102,7 +102,7 @@ def perform_seeding(conn):
 
 def export_to_backups(conn):
     """Dump database state to JSON backups in data/archive/"""
-    archive_dir = Path("data/archive")
+    archive_dir = Path("data")
     archive_dir.mkdir(parents=True, exist_ok=True)
     
     cluster_state_path = archive_dir / "cluster_state_backup.json"

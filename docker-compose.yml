@@ -12,10 +12,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
       # Schema files can be auto-loaded on first run by mounting:
       # Mount consolidated schema files in execution order
-      - ./database/consolidated/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
-      - ./database/consolidated/indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql
-      - ./database/consolidated/views.sql:/docker-entrypoint-initdb.d/03_views.sql
-      - ./database/consolidated/seed.sql:/docker-entrypoint-initdb.d/04_seed.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql
+      - ./database/views.sql:/docker-entrypoint-initdb.d/03_views.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/04_seed.sql
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
@@ -44,7 +44,6 @@ services:
       - ./run_app.py:/app/run_app.py
       - ./database:/app/database
       - ./scripts:/app/scripts
-      - ./data_cleaning:/app/data_cleaning
       # Mount data and utils for live updates
       - ./data:/app/data
       - ./utils:/app/utils

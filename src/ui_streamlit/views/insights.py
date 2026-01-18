@@ -54,16 +54,58 @@ def render_insights_dashboard(conn):
             st.info("No daily sales data available.")
 
     with tab_menu:
-        st.subheader("🍱 Menu Analytics")
+        st.subheader("🗓️ Menu Item Performance")
         
-        c1, c2 = st.columns(2)
-        with c1:
+        # 1. Date & Day Filters
+        c_date1, c_date2, c_days = st.columns([1, 1, 3])
+        
+        with c_date1:
+            start_date = st.date_input("Begin Date:", value=pd.to_datetime('2024-01-01'), key="menu_start_date")
+        with c_date2:
+            end_date = st.date_input("End Date:", value=pd.to_datetime('today'), key="menu_end_date")
+            
+        with c_days:
+            st.write("Include Days:")
+            days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            days_abbr = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            
+            if 'menu_selected_weekdays' not in st.session_state:
+                st.session_state.menu_selected_weekdays = days_of_week.copy()
+                
+            weekday_cols = st.columns(7)
+            for i, day in enumerate(days_of_week):
+                is_selected = day in st.session_state.menu_selected_weekdays
+                if weekday_cols[i].button(
+                    days_abbr[i], 
+                    key=f"menu_btn_day_{day}", 
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary"
+                ):
+                    if is_selected:
+                        st.session_state.menu_selected_weekdays.remove(day)
+                    else:
+                        st.session_state.menu_selected_weekdays.append(day)
+                    st.rerun()
+
+        st.markdown("---")
+        
+        # 2. Search & Type Filters
+        c_search, c_type = st.columns(2)
+        with c_search:
             name_search = st.text_input("Search by Item Name:", key="menu_name_filter", placeholder="e.g. Chocolate")
-        with c2:
+        with c_type:
             types = fetch_menu_types(conn)
             type_choice = st.selectbox("Filter by Type:", ["All"] + types, key="menu_type_filter")
 
-        menu_data = fetch_menu_stats(conn, name_search, type_choice)
+        # 3. Data Fetching
+        menu_data = fetch_menu_stats(
+            conn, 
+            name_search, 
+            type_choice, 
+            start_date=start_date, 
+            end_date=end_date, 
+            selected_weekdays=st.session_state.menu_selected_weekdays
+        )
         
         if not menu_data.empty:
             st.dataframe(

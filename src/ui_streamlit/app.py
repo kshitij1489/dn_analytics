@@ -20,7 +20,7 @@ from src.ui_streamlit.views.menu import render_menu_page
 from src.ui_streamlit.views.operations import render_operations_page
 from src.ui_streamlit.views.sql_console import render_sql_console_page
 from services.clustering_service import OrderItemCluster
-from database.load_orders import create_schema_if_needed
+from services.load_orders import create_schema_if_needed
 from scripts.seed_from_backups import perform_seeding
 
 # --- PAGE CONFIG ---
@@ -120,7 +120,7 @@ if not conn:
 # Route to Page
 if module == "🏠 Insights":
     render_insights_dashboard(conn)
-elif module == "🛒 Operations":
+elif module == "🛒 Orders":
     render_operations_page(conn)
 elif module == "🍽️ Menu":
     render_menu_page(conn)
@@ -129,3 +129,6 @@ elif module == "📦 Inventory & COGS":
     st.info("Coming soon")
 elif module == "🔍 SQL Query":
     render_sql_console_page(conn)
+elif module == "✨ AI Mode":
+    st.title(module)
+    st.info("Coming soon")

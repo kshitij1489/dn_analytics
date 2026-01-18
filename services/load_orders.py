@@ -51,7 +51,7 @@ from utils.db_utils import create_postgresql_connection
 def create_schema_if_needed(conn):
     """Create all necessary tables if they don't exist"""
     cursor = conn.cursor()
-    schema_dir = Path(__file__).parent / "schema"
+    schema_dir = Path(__file__).parent.parent / "database"
     
     # 0. Initialize migration tracking table
     cursor.execute("""
@@ -64,11 +64,8 @@ def create_schema_if_needed(conn):
     
     # 1. Read and execute core schema files in order
     schema_files = [
-        "menu_items.sql",  # Must be first - other tables depend on it
-        "restaurants.sql",
-        "customers.sql",
-        "orders.sql",
-        "order_items.sql",
+        "schema.sql",
+        "indexes.sql",
         "views.sql"
     ]
     
@@ -81,10 +78,9 @@ def create_schema_if_needed(conn):
                     cursor.execute(schema_sql)
                     # print(f"  ✓ Created schema from {schema_file}")
                 except Exception as e:
-                    if "already exists" not in str(e).lower():
-                        print(f"  ⚠️  Warning creating {schema_file}: {e}")
+                     print(f"  ⚠️  Warning executing {schema_file}: {e}")
     
-    # 2. Run migrations
+    # 2. Run migrations (if any exist in consolidated/migrations)
     migrations_dir = schema_dir / "migrations"
     if migrations_dir.exists():
         # Get already applied migrations

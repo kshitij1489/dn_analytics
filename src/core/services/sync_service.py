@@ -6,7 +6,7 @@ import traceback
 # This assumes the app is run from the project root or src/core is part of a larger package structure that includes these.
 # For now, we'll keep the imports as they match the existing project structure.
 
-from database.load_orders import (
+from services.load_orders import (
     get_last_stream_id,
     process_order,
     create_schema_if_needed

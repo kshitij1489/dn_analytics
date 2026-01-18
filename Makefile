@@ -55,13 +55,13 @@ shell:
 
 # Sync new orders
 sync:
-	docker-compose exec app python3 database/load_orders.py \
+	docker-compose exec app python3 services/load_orders.py \
 		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics" \
 		--incremental
 
 # Reload all orders (for migrations)
 reload-all:
-	docker-compose exec app python3 database/load_orders.py \
+	docker-compose exec app python3 services/load_orders.py \
 		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics"
 
 # Rebuild and restart

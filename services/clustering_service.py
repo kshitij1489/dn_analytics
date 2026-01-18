@@ -13,7 +13,7 @@ from utils.id_generator import generate_deterministic_id
 from utils.db_utils import create_postgresql_connection
 
 try:
-    from data_cleaning.clean_order_item import clean_order_item_name
+    from utils.clean_order_item import clean_order_item_name
 except ImportError:
     logging.warning("Could not import clean_order_item_name")
     def clean_order_item_name(name):

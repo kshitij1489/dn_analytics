@@ -8,7 +8,7 @@ def render_sidebar():
     with st.sidebar:
         st.header("🧩 Modules")
         
-        nav_modules = ["🏠 Insights", "🛒 Operations", "🍽️ Menu", "📦 Inventory & COGS", "🔍 SQL Query"]
+        nav_modules = ["🏠 Insights", "🛒 Orders", "🍽️ Menu", "📦 Inventory & COGS", "🔍 SQL Query", "✨ AI Mode"]
         
         # Ensure active_module is in session state
         if 'active_module' not in st.session_state:
