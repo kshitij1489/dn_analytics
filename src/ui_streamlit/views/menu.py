@@ -2,7 +2,7 @@ import streamlit as st
 from psycopg2.extras import RealDictCursor
 from utils.menu_utils import merge_menu_items, remap_order_item_cluster, undo_merge
 from src.ui_streamlit.components.datatable import render_datatable
-from src.ui_streamlit.pages.resolutions import render_resolutions_tab
+from src.ui_streamlit.views.resolutions import render_resolutions_tab
 from src.core.queries.table_queries import execute_raw_query
 from src.ui_streamlit.utils import get_dataframe_config
 

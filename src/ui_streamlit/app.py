@@ -15,10 +15,10 @@ from src.core.db.connection import get_db_connection
 from src.core.db.schema import check_schema_exists
 from src.core.config.constants import INDIAN_HOLIDAYS
 from src.ui_streamlit.sidebar import render_sidebar
-from src.ui_streamlit.pages.insights import render_insights_dashboard
-from src.ui_streamlit.pages.menu import render_menu_page
-from src.ui_streamlit.pages.operations import render_operations_page
-from src.ui_streamlit.pages.sql_console import render_sql_console_page
+from src.ui_streamlit.views.insights import render_insights_dashboard
+from src.ui_streamlit.views.menu import render_menu_page
+from src.ui_streamlit.views.operations import render_operations_page
+from src.ui_streamlit.views.sql_console import render_sql_console_page
 from services.clustering_service import OrderItemCluster
 from database.load_orders import create_schema_if_needed
 from scripts.seed_from_backups import perform_seeding

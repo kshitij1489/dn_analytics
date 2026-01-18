@@ -19,7 +19,7 @@ def fetch_daily_sales(conn):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
         SELECT 
-            DATE(created_on) as order_date,
+            DATE(created_on AT TIME ZONE 'Asia/Kolkata') as order_date,
             SUM(total) as total_revenue,
             SUM(total - tax_total) as net_revenue,
             SUM(tax_total) as tax_collected,
@@ -30,7 +30,7 @@ def fetch_daily_sales(conn):
             SUM(total) FILTER (WHERE order_from = 'Zomato') as "Zomato Revenue"
         FROM orders
         WHERE order_status = 'Success'
-        GROUP BY DATE(created_on)
+        GROUP BY DATE(created_on AT TIME ZONE 'Asia/Kolkata')
         ORDER BY order_date DESC
     """)
     return pd.DataFrame(cursor.fetchall())
@@ -40,12 +40,12 @@ def fetch_sales_trend(conn):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
         SELECT 
-            DATE(created_on) as date,
+            DATE(created_on AT TIME ZONE 'Asia/Kolkata') as date,
             SUM(total) as revenue,
             COUNT(*) as num_orders
         FROM orders
         WHERE order_status = 'Success'
-        GROUP BY DATE(created_on)
+        GROUP BY DATE(created_on AT TIME ZONE 'Asia/Kolkata')
         ORDER BY date
     """)
     return pd.DataFrame(cursor.fetchall())
@@ -55,14 +55,14 @@ def fetch_category_trend(conn):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
         SELECT 
-            DATE(o.created_on) as date,
+            DATE(o.created_on AT TIME ZONE 'Asia/Kolkata') as date,
             mi.type as category,
             SUM(oi.total_price) as revenue
         FROM orders o
         JOIN order_items oi ON o.order_id = oi.order_id
         JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
         WHERE o.order_status = 'Success'
-        GROUP BY DATE(o.created_on), mi.type
+        GROUP BY DATE(o.created_on AT TIME ZONE 'Asia/Kolkata'), mi.type
         ORDER BY date
     """)
     return pd.DataFrame(cursor.fetchall())
@@ -191,13 +191,13 @@ def fetch_hourly_revenue_data(conn):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
         WITH total_days AS (
-            SELECT COUNT(DISTINCT DATE(occurred_at)) as day_count
+            SELECT COUNT(DISTINCT DATE(occurred_at AT TIME ZONE 'Asia/Kolkata')) as day_count
             FROM orders
             WHERE order_status = 'Success'
         ),
         hourly_stats AS (
             SELECT 
-                EXTRACT(HOUR FROM occurred_at) as hour_num,
+                EXTRACT(HOUR FROM occurred_at AT TIME ZONE 'Asia/Kolkata') as hour_num,
                 SUM(total) as revenue
             FROM orders
             WHERE order_status = 'Success'

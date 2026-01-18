@@ -62,6 +62,34 @@ def fetch_paginated_table(conn, table_name, page=1, page_size=50, sort_column=No
         df = pd.DataFrame(cursor.fetchall())
         cursor.close()
         
+        # Post-processing: Convert Timezones to IST
+        if not df.empty:
+            # 1. Convert columns that pandas detected as datetimetz (unlikely with cursor.fetchall unless converted)
+            # 2. Convert object columns that hold datetime objects (common with psycopg2)
+            try:
+                for col in df.columns:
+                    # Check if the first non-null value is a datetime with timezone
+                    first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+                    
+                    if hasattr(first_valid, 'tzinfo') and first_valid.tzinfo is not None:
+                        # It is timezone aware. Convert to IST.
+                        # We use apply because directly creating a Series from mixed objects can be tricky, 
+                        # but standard pandas methods are preferred if dtype is already proper.
+                        
+                        # If dtype is object, we can use apply
+                        if df[col].dtype == 'object':
+                            # ZoneInfo objects from Python 3.9+ or pytz 
+                            from zoneinfo import ZoneInfo
+                            ist = ZoneInfo('Asia/Kolkata')
+                            df[col] = df[col].apply(lambda x: x.astimezone(ist) if x and hasattr(x, 'astimezone') else x)
+                        else:
+                            # If it's already a localized datetime64
+                            df[col] = df[col].dt.tz_convert('Asia/Kolkata')
+                            
+            except Exception as e:
+                # Log error but don't fail the entire fetch
+                print(f"Timezone conversion warning: {e}")
+        
         return df, total_count, None
     except Exception as e:
         return None, 0, str(e)
