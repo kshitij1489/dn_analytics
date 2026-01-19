@@ -4,6 +4,7 @@
     "1182c413-4f67-5339-adb3-b4329846ab53": "Fudgy Chocolate Brownie",
     "32941b27-b380-5495-add7-8022f4c99487": "Half In Half Regular Scoop Combo",
     "e908cd70-4990-5653-8a5e-04c187122355": "Eggless Strawberry Cream Cheese",
+    "2fecdeca-c347-5e68-821a-891a1f4337fa": "Cappuccino",
     "6da65f92-f7f1-54ba-ac3d-9055901159e6": "Affogato",
     "f15727e6-9fc7-573c-b6db-0850afbcfbc3": "Cherry & Chocolate Fudge Ice Cream",
     "7e934374-853c-5250-a690-ad9f0abea8a4": "Masala Chai Ice Cream",
@@ -29,7 +30,6 @@
     "ca612c98-acf6-52c7-9617-0dbc7e014953": "Tres Leches",
     "af4a5711-e1b4-5418-b2cb-b87a62903ee8": "Coffee Mascarpone",
     "c674e969-50c1-534c-ad57-84a5b83cc6bf": "Cream Cheese Fruit Medley Cake",
-    "2fecdeca-c347-5e68-821a-891a1f4337fa": "Cappuccino",
     "113d84b7-b764-54a0-aeab-d349fec36b83": "Hot Chocolate",
     "72b47b77-80f4-5e5a-af2b-1d2abbd6f39d": "Water Bottle",
     "59f649bb-a890-5d32-9f7a-3a686599b0ec": "Dates Rose & Nuts Ice Cream",
@@ -66,7 +66,6 @@
     "5b5641cb-5e82-543b-b6fe-1014f0d327b6": "Just Chocolate",
     "9d84af2f-7d38-53d7-9c66-cd95853bdf44": "Coconut & Pineapple",
     "1cc49103-5647-5181-816b-dc759baed982": "Eggless Coconut & Pineapple",
-    "d4c5cdb2-07f9-53bd-a880-740ba64b42f6": "Orange & Chocolate Cheesecake",
     "b232792d-48d5-5c35-ab86-144a6fb1e43d": "Eggless Paan & Gulkand Ice Cream",
     "45eed9b7-0fd2-5f16-988a-1b859047225f": "Chocolate & Orange (Contains Alcohol) Ice Cream",
     "9fd98a50-8d69-5fbc-84c1-1f61dac4db05": "Butter Waffle Cone",
@@ -81,12 +80,13 @@
     "09d510e1-6514-5dba-95ea-cfc3639b84e1": "Eggless Chocolate Overload",
     "68e9f641-0d12-5699-bda0-0fc452640a25": "Hot Chocolate Fudge Sauce 50gm",
     "3358e3dc-46e1-5629-9f0b-e685060cf875": "Eggless Banoffee Ice Cream",
-    "be5401e4-e641-5142-b743-26d27541553c": "Cup",
     "af249e85-4855-5076-867f-139e7e79da37": "Fig & Orange Ice Cream",
     "10ed2345-74d2-5f34-bd36-ce91724ce9e6": "Triple Chocolate Ice Cream",
+    "d4c5cdb2-07f9-53bd-a880-740ba64b42f6": "Orange & Chocolate Cheesecake",
+    "bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1": "Eggless Strawberry Cream Cheese Ice Cream",
     "3c11f5f6-0712-593a-972b-b3a9acb398b5": "Monkey Business Ice Cream",
     "6e62d989-db42-5d76-88e0-4fe6587c97f7": "Eggless Kulfi Inspired Ice Cream",
-    "bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1": "Eggless Strawberry Cream Cheese Ice Cream",
+    "be5401e4-e641-5142-b743-26d27541553c": "Cup",
     "1b1a56f0-7e0a-5f7c-93b7-9543004db816": "Coffee Mascarpone Ice Cream"
   },
   "variant_id_to_str": {
@@ -114,8 +114,8 @@
     "be43c374-248a-5f15-b3f7-1c3dddfc8d43": "Dessert",
     "e25fea18-4f3e-5f45-8f58-27e11058d880": "Combo",
     "128a4e8d-75be-5ce1-81e1-5080c0bd94cd": "Ice Cream",
-    "68f25945-2582-5994-8996-c237c2e1f4bb": "Extra",
     "d801f031-3b1c-5389-9ef1-c64a77dd941b": "Drinks",
+    "68f25945-2582-5994-8996-c237c2e1f4bb": "Extra",
     "8087020f-dfcd-5dee-be0e-161e660083f1": "Service"
   }
 }

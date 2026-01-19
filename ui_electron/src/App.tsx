@@ -1,19 +1,24 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 import { endpoints } from './api';
+import type { JobResponse } from './api';
 
 // Components
 import Insights from './pages/Insights';
-import Operations from './pages/Operations';
 import Menu from './pages/Menu';
 import Resolutions from './pages/Resolutions';
 import SQLConsole from './pages/SQLConsole';
+import ComingSoon from './pages/ComingSoon';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
 function App() {
   const [activeTab, setActiveTab] = useState('insights');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+
+  // Sync State
+  const [job, setJob] = useState<JobResponse | null>(null);
+  const [polling, setPolling] = useState(false);
 
   useEffect(() => {
     checkConnection();
@@ -23,6 +28,26 @@ function App() {
     const interval = setInterval(() => checkConnection(), 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Sync Polling Effect
+  useEffect(() => {
+    let interval: any;
+    if (polling && job) {
+      interval = setInterval(async () => {
+        try {
+          const res = await endpoints.sync.status(job.job_id);
+          setJob(res.data);
+          if (res.data.status === 'completed' || res.data.status === 'failed') {
+            setPolling(false);
+          }
+        } catch (err) {
+          console.error("Polling error", err);
+          setPolling(false);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [polling, job]);
 
   const checkConnection = async (attempt = 1) => {
     const maxAttempts = 3;
@@ -37,6 +62,17 @@ function App() {
       } else {
         setConnectionStatus('disconnected');
       }
+    }
+  };
+
+  const startSync = async () => {
+    try {
+      const res = await endpoints.sync.run();
+      setJob(res.data);
+      setPolling(true);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to start sync");
     }
   };
 
@@ -61,10 +97,7 @@ function App() {
         console.log("No data found, identifying as fresh install. Triggering auto-sync...");
 
         // Trigger Sync
-        await endpoints.sync.run();
-
-        // Redirect to Operations tab so user sees the progress
-        setActiveTab('operations');
+        startSync();
         alert("Startup: No data found. Auto-sync started.");
       }
     } catch (e) {
@@ -79,9 +112,14 @@ function App() {
         <nav>
           <button className={activeTab === 'insights' ? 'active' : ''} onClick={() => setActiveTab('insights')}>Insights</button>
           <button className={activeTab === 'menu' ? 'active' : ''} onClick={() => setActiveTab('menu')}>Menu</button>
-          <button className={activeTab === 'operations' ? 'active' : ''} onClick={() => setActiveTab('operations')}>Operations</button>
+
+          <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>Orders</button>
+          <button className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setActiveTab('inventory')}>Inventory & COGS</button>
+
           <button className={activeTab === 'resolutions' ? 'active' : ''} onClick={() => setActiveTab('resolutions')}>Resolutions</button>
           <button className={activeTab === 'sql' ? 'active' : ''} onClick={() => setActiveTab('sql')}>SQL Console</button>
+
+          <button className={activeTab === 'ai_mode' ? 'active' : ''} onClick={() => setActiveTab('ai_mode')}>AI Mode</button>
 
           {/* Connection Status */}
           <div style={{
@@ -91,29 +129,81 @@ function App() {
             backgroundColor: '#2d2d2d',
             borderRadius: '4px',
             display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
+            flexDirection: 'column',
+            gap: '8px',
             color: status.color,
             fontWeight: '500'
           }}>
-            <span>{status.icon}</span>
-            <span>{status.text}</span>
-            {connectionStatus === 'disconnected' && (
-              <button
-                onClick={() => checkConnection()}
-                style={{
-                  marginLeft: 'auto',
-                  padding: '2px 8px',
-                  fontSize: '10px',
-                  background: '#646cff',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '3px',
-                  cursor: 'pointer'
-                }}
-              >
-                Retry
-              </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>{status.icon}</span>
+              <span>{status.text}</span>
+              {connectionStatus === 'disconnected' && (
+                <button
+                  onClick={() => checkConnection()}
+                  style={{
+                    marginLeft: 'auto',
+                    padding: '2px 8px',
+                    fontSize: '10px',
+                    background: '#646cff',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '3px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+
+            {/* Sync Button */}
+            <button
+              onClick={startSync}
+              disabled={polling || connectionStatus !== 'connected'}
+              title="Sync Database"
+              style={{
+                width: '100%',
+                padding: '6px',
+                fontSize: '12px',
+                background: polling ? '#555' : '#646cff',
+                color: 'white',
+                border: 'none',
+                borderRadius: '3px',
+                cursor: (polling || connectionStatus !== 'connected') ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px'
+              }}
+            >
+              {polling ? '🔄 Syncing...' : '🔄 Sync DB'}
+            </button>
+
+            {/* Sync Progress */}
+            {job && polling && (
+              <div style={{ width: '100%', backgroundColor: '#444', height: '4px', borderRadius: '2px', overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.round(job.progress * 100)}%`,
+                  backgroundColor: '#10B981',
+                  height: '100%',
+                  transition: 'width 0.3s ease'
+                }} />
+              </div>
+            )}
+
+            {/* Sync Result Label */}
+            {job && job.status === 'completed' && !polling && (
+              <div style={{
+                fontSize: '11px',
+                color: '#aaa',
+                textAlign: 'center',
+                marginTop: '4px'
+              }}>
+                {(job.stats?.count === 0 || job.stats?.orders === 0)
+                  ? 'No orders to Update'
+                  : `${job.stats?.orders || 0} orders updated`
+                }
+              </div>
             )}
           </div>
         </nav>
@@ -121,9 +211,11 @@ function App() {
       <main className="main-content">
         {activeTab === 'insights' && <Insights />}
         {activeTab === 'menu' && <Menu />}
-        {activeTab === 'operations' && <Operations />}
+        {activeTab === 'orders' && <ComingSoon title="Orders" />}
+        {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
         {activeTab === 'resolutions' && <Resolutions />}
         {activeTab === 'sql' && <SQLConsole />}
+        {activeTab === 'ai_mode' && <ComingSoon title="AI Mode" />}
       </main>
     </div>
   );
