@@ -7,6 +7,20 @@ const api = axios.create({
     headers: {
         'Content-Type': 'application/json',
     },
+    paramsSerializer: (params) => {
+        const searchParams = new URLSearchParams();
+        for (const key in params) {
+            const val = params[key];
+            if (val !== undefined && val !== null) {
+                if (Array.isArray(val)) {
+                    val.forEach((v) => searchParams.append(key, v));
+                } else {
+                    searchParams.append(key, val);
+                }
+            }
+        }
+        return searchParams.toString();
+    },
 });
 
 export interface JobResponse {

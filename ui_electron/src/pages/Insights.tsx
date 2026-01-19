@@ -561,6 +561,16 @@ function MenuItemsTab() {
 
     const ALL_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+    const DAY_MAPPING: Record<string, string> = {
+        'Mon': 'Monday',
+        'Tue': 'Tuesday',
+        'Wed': 'Wednesday',
+        'Thu': 'Thursday',
+        'Fri': 'Friday',
+        'Sat': 'Saturday',
+        'Sun': 'Sunday'
+    };
+
     useEffect(() => {
         loadTypes();
         loadData();
@@ -583,12 +593,15 @@ function MenuItemsTab() {
     const loadData = async () => {
         setLoading(true);
         try {
+            // Map short days to full days for backend
+            const mappedDays = selectedDays.map(d => DAY_MAPPING[d]);
+
             const res = await endpoints.menu.items({
                 name_search: nameSearch || undefined,
                 type_choice: typeFilter,
                 start_date: startDate || undefined,
                 end_date: endDate || undefined,
-                days: selectedDays.length === 7 ? undefined : selectedDays // Send undefined if all days selected to avoid long URL
+                days: selectedDays.length === 7 ? undefined : mappedDays
             });
             setData(res.data);
         } catch (e) {
