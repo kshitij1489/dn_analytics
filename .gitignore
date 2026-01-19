@@ -35,3 +35,4 @@ raw_data/
 
 # Docker
 .docker/
+node_modules
