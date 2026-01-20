@@ -145,7 +145,7 @@ function ResizableTableWrapper({
 }
 
 // --- Generic Table Component ---
-function GenericTable({ title, apiCall, defaultSort = 'created.at' }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string }) {
+function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string, lastDbSync?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -172,7 +172,7 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at' }: { title: s
         }
     };
 
-    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection]);
+    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection, lastDbSync]);
 
     const handleSort = (key: string) => {
         if (sortKey === key) {
@@ -289,7 +289,7 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at' }: { title: s
     );
 }
 
-export default function Orders() {
+export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'customers' | 'restaurants' | 'taxes' | 'discounts'>('orders');
 
     const tabs = [
@@ -302,7 +302,7 @@ export default function Orders() {
     ];
 
     return (
-        <div className="page-container" style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'Inter, sans-serif' }}>
+        <div className="page-container" style={{ padding: '20px', fontFamily: 'Inter, sans-serif' }}>
 
 
             <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'white', padding: '5px', borderRadius: '30px', overflowX: 'auto', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
@@ -330,12 +330,12 @@ export default function Orders() {
             </div>
 
 
-            {activeTab === 'orders' && <GenericTable title="Orders" apiCall={endpoints.orders.orders} defaultSort="created_on" />}
-            {activeTab === 'items' && <GenericTable title="Order Items" apiCall={endpoints.orders.items} defaultSort="created_at" />}
-            {activeTab === 'customers' && <GenericTable title="Customers" apiCall={endpoints.orders.customers} defaultSort="last_order_date" />}
-            {activeTab === 'restaurants' && <GenericTable title="Restaurants" apiCall={endpoints.orders.restaurants} defaultSort="restaurant_id" />}
-            {activeTab === 'taxes' && <GenericTable title="Taxes" apiCall={endpoints.orders.taxes} defaultSort="created_at" />}
-            {activeTab === 'discounts' && <GenericTable title="Discounts" apiCall={endpoints.orders.discounts} defaultSort="created_at" />}
+            {activeTab === 'orders' && <GenericTable title="Orders" apiCall={endpoints.orders.orders} defaultSort="created_on" lastDbSync={lastDbSync} />}
+            {activeTab === 'items' && <GenericTable title="Order Items" apiCall={endpoints.orders.items} defaultSort="created_at" lastDbSync={lastDbSync} />}
+            {activeTab === 'customers' && <GenericTable title="Customers" apiCall={endpoints.orders.customers} defaultSort="last_order_date" lastDbSync={lastDbSync} />}
+            {activeTab === 'restaurants' && <GenericTable title="Restaurants" apiCall={endpoints.orders.restaurants} defaultSort="restaurant_id" lastDbSync={lastDbSync} />}
+            {activeTab === 'taxes' && <GenericTable title="Taxes" apiCall={endpoints.orders.taxes} defaultSort="created_at" lastDbSync={lastDbSync} />}
+            {activeTab === 'discounts' && <GenericTable title="Discounts" apiCall={endpoints.orders.discounts} defaultSort="created_at" lastDbSync={lastDbSync} />}
         </div >
     );
 }

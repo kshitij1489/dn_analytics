@@ -15,18 +15,18 @@ import {
     OrderSourceChart
 } from '../components/charts';
 
-export default function Insights() {
+export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState('dailySales');
     const [kpis, setKpis] = useState<any>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadKPIs();
-    }, []);
+    }, [lastDbSync]);
 
     const loadKPIs = async () => {
         try {
-            const res = await endpoints.insights.kpis();
+            const res = await endpoints.insights.kpis({ _t: lastDbSync });
             setKpis(res.data);
         } catch (error) {
             console.error(error);
@@ -58,10 +58,10 @@ export default function Insights() {
             </div>
 
             {/* Tab Content */}
-            {activeTab === 'dailySales' && <DailySalesTab />}
-            {activeTab === 'menu' && <MenuItemsTab />}
-            {activeTab === 'customer' && <CustomerTab />}
-            {activeTab === 'charts' && <ChartsTab />}
+            {activeTab === 'dailySales' && <DailySalesTab lastDbSync={lastDbSync} />}
+            {activeTab === 'menu' && <MenuItemsTab lastDbSync={lastDbSync} />}
+            {activeTab === 'customer' && <CustomerTab lastDbSync={lastDbSync} />}
+            {activeTab === 'charts' && <ChartsTab lastDbSync={lastDbSync} />}
         </div>
     );
 }
@@ -104,7 +104,7 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode, a
     );
 }
 
-function DailySalesTab() {
+function DailySalesTab({ lastDbSync }: { lastDbSync?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [sortKey, setSortKey] = useState<string | null>(null);
@@ -112,11 +112,11 @@ function DailySalesTab() {
 
     useEffect(() => {
         loadData();
-    }, []);
+    }, [lastDbSync]);
 
     const loadData = async () => {
         try {
-            const res = await endpoints.insights.dailySales();
+            const res = await endpoints.insights.dailySales({ _t: lastDbSync });
             setData(res.data);
         } catch (error) {
             console.error(error);
@@ -203,7 +203,7 @@ function DailySalesTab() {
     );
 }
 
-function MenuItemsTab() {
+function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [types, setTypes] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
@@ -233,7 +233,7 @@ function MenuItemsTab() {
     useEffect(() => {
         loadTypes();
         loadData();
-    }, []);
+    }, [lastDbSync]);
 
     useEffect(() => {
         const timer = setTimeout(() => loadData(), 300);
@@ -418,7 +418,7 @@ function MenuItemsTab() {
     );
 }
 
-function CustomerTab() {
+function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
     const [customerView, setCustomerView] = useState('loyalty');
     const [reorderRate, setReorderRate] = useState<any>(null);
     const [loyaltyData, setLoyaltyData] = useState<any[]>([]);
@@ -429,19 +429,19 @@ function CustomerTab() {
 
     useEffect(() => {
         loadData();
-    }, [customerView]);
+    }, [customerView, lastDbSync]);
 
     const loadData = async () => {
         setLoading(true);
         try {
-            const rateRes = await endpoints.insights.customerReorderRate();
+            const rateRes = await endpoints.insights.customerReorderRate({ _t: lastDbSync });
             setReorderRate(rateRes.data);
 
             if (customerView === 'loyalty') {
-                const loyaltyRes = await endpoints.insights.customerLoyalty();
+                const loyaltyRes = await endpoints.insights.customerLoyalty({ _t: lastDbSync });
                 setLoyaltyData(loyaltyRes.data);
             } else {
-                const topRes = await endpoints.insights.topCustomers();
+                const topRes = await endpoints.insights.topCustomers({ _t: lastDbSync });
                 setTopCustomers(topRes.data);
             }
         } catch (e) {
@@ -636,8 +636,16 @@ function CustomerTab() {
     );
 }
 
-function ChartsTab() {
+function ChartsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [chartType, setChartType] = useState('salesTrend');
+
+    useEffect(() => {
+        // Force charts to re-render or re-fetch if they have internal state
+        // Since charts are likely just components, we might need key to force re-mount
+    }, [lastDbSync]);
+
+    // Using key on charts to force re-mount on sync
+    const chartKey = `chart-${lastDbSync}`;
 
     return (
         <div>
@@ -656,14 +664,14 @@ function ChartsTab() {
                 <option value="orderSource">🛵 Order Source</option>
             </select>
 
-            {chartType === 'salesTrend' && <SalesTrendChart />}
-            {chartType === 'categoryTrend' && <CategoryTrendChart />}
-            {chartType === 'revenueVsOrders' && <RevenueVsOrdersChart />}
-            {chartType === 'aovTrend' && <AverageOrderValueChart />}
-            {chartType === 'topItems' && <TopItemsChart />}
-            {chartType === 'revenueByCategory' && <RevenueByCategoryChart />}
-            {chartType === 'hourlyRevenue' && <HourlyRevenueChart />}
-            {chartType === 'orderSource' && <OrderSourceChart />}
+            {chartType === 'salesTrend' && <SalesTrendChart key={chartKey} />}
+            {chartType === 'categoryTrend' && <CategoryTrendChart key={chartKey} />}
+            {chartType === 'revenueVsOrders' && <RevenueVsOrdersChart key={chartKey} />}
+            {chartType === 'aovTrend' && <AverageOrderValueChart key={chartKey} />}
+            {chartType === 'topItems' && <TopItemsChart key={chartKey} />}
+            {chartType === 'revenueByCategory' && <RevenueByCategoryChart key={chartKey} />}
+            {chartType === 'hourlyRevenue' && <HourlyRevenueChart key={chartKey} />}
+            {chartType === 'orderSource' && <OrderSourceChart key={chartKey} />}
         </div>
     );
 }

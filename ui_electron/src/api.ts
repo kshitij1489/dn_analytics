@@ -35,17 +35,17 @@ export const endpoints = {
     health: () => api.get('/health'),
 
     insights: {
-        kpis: () => api.get('/insights/kpis'),
-        dailySales: () => api.get('/insights/daily_sales'),
-        salesTrend: () => api.get('/insights/sales_trend'),
-        categoryTrend: () => api.get('/insights/category_trend'),
-        topItems: () => api.get('/insights/top_items'),
-        revenueByCategory: () => api.get('/insights/revenue_by_category'),
-        hourlyRevenue: () => api.get('/insights/hourly_revenue'),
-        orderSource: () => api.get('/insights/order_source'),
-        customerReorderRate: () => api.get('/insights/customer/reorder_rate'),
-        customerLoyalty: () => api.get('/insights/customer/loyalty'),
-        topCustomers: () => api.get('/insights/customer/top'),
+        kpis: (params?: any) => api.get('/insights/kpis', { params }),
+        dailySales: (params?: any) => api.get('/insights/daily_sales', { params }),
+        salesTrend: (params?: any) => api.get('/insights/sales_trend', { params }),
+        categoryTrend: (params?: any) => api.get('/insights/category_trend', { params }),
+        topItems: (params?: any) => api.get('/insights/top_items', { params }),
+        revenueByCategory: (params?: any) => api.get('/insights/revenue_by_category', { params }),
+        hourlyRevenue: (params?: any) => api.get('/insights/hourly_revenue', { params }),
+        orderSource: (params?: any) => api.get('/insights/order_source', { params }),
+        customerReorderRate: (params?: any) => api.get('/insights/customer/reorder_rate', { params }),
+        customerLoyalty: (params?: any) => api.get('/insights/customer/loyalty', { params }),
+        topCustomers: (params?: any) => api.get('/insights/customer/top', { params }),
     },
 
     menu: {

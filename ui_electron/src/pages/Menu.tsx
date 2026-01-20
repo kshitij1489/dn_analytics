@@ -170,7 +170,7 @@ function ResizableTableWrapper({
 
 // --- Menu Items Tab ---
 
-function MenuItemsTab() {
+function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     // State for Merge Tool
     const [itemsList, setItemsList] = useState<any[]>([]);
     const [sourceId, setSourceId] = useState('');
@@ -196,7 +196,7 @@ function MenuItemsTab() {
 
     useEffect(() => {
         loadTable();
-    }, [page, search, pageSize, sortKey, sortDirection]);
+    }, [page, search, pageSize, sortKey, sortDirection, lastDbSync]);
 
     const loadDropdowns = async () => {
         try {
@@ -392,7 +392,7 @@ function MenuItemsTab() {
 
 // --- Variants Tab ---
 
-function VariantsTab() {
+function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -419,7 +419,7 @@ function VariantsTab() {
         }
     };
 
-    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection]);
+    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection, lastDbSync]);
 
     const handleSort = (key: string) => {
         if (sortKey === key) {
@@ -500,7 +500,7 @@ function VariantsTab() {
 
 // --- Matrix Tab ---
 
-function MatrixTab() {
+function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [oid, setOid] = useState('');
     const [checkResult, setCheckResult] = useState<any>(null);
     const [items, setItems] = useState<any[]>([]);
@@ -518,7 +518,7 @@ function MatrixTab() {
     useEffect(() => {
         loadMatrix();
         loadLists();
-    }, []);
+    }, [lastDbSync]);
 
     const loadLists = async () => {
         const i = await endpoints.menu.list();
@@ -672,7 +672,7 @@ function MatrixTab() {
 
 // --- Resolutions Tab ---
 
-function ResolutionsTab() {
+function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [items, setItems] = useState<any[]>([]);
 
     const load = async () => {
@@ -680,7 +680,7 @@ function ResolutionsTab() {
         setItems(res.data);
     };
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); }, [lastDbSync]);
 
     const handleVerify = async (id: string, newName?: string, newType?: string) => {
         try {
@@ -722,11 +722,11 @@ function ResolutionsTab() {
 
 // --- Main Page ---
 
-export default function Menu() {
+export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'items' | 'variants' | 'matrix' | 'resolutions'>('items');
 
     return (
-        <div className="page-container" style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'Inter, sans-serif' }}>
+        <div className="page-container" style={{ padding: '20px', fontFamily: 'Inter, sans-serif' }}>
             <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'white', padding: '5px', borderRadius: '30px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
                 {[
                     { id: 'items', label: '📋 Menu Items' },
@@ -755,10 +755,10 @@ export default function Menu() {
                 ))}
             </div>
 
-            {activeTab === 'items' && <MenuItemsTab />}
-            {activeTab === 'variants' && <VariantsTab />}
-            {activeTab === 'matrix' && <MatrixTab />}
-            {activeTab === 'resolutions' && <ResolutionsTab />}
+            {activeTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
+            {activeTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
+            {activeTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} />}
+            {activeTab === 'resolutions' && <ResolutionsTab lastDbSync={lastDbSync} />}
         </div>
     );
 }

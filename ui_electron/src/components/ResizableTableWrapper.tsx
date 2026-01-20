@@ -28,6 +28,15 @@ export function ResizableTableWrapper({
         if (containerRef.current) {
             setWidth(containerRef.current.offsetWidth);
         }
+
+        const handleResize = () => {
+            if (containerRef.current) {
+                setWidth(containerRef.current.offsetWidth);
+            }
+        };
+
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
     }, []);
 
     const onResize = (_event: any, { size }: any) => {

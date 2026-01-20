@@ -20,6 +20,7 @@ function App() {
   // Sync State
   const [job, setJob] = useState<JobResponse | null>(null);
   const [polling, setPolling] = useState(false);
+  const [lastDbSync, setLastDbSync] = useState<number>(Date.now());
 
   // Theme Config
   useEffect(() => {
@@ -49,6 +50,9 @@ function App() {
           setJob(res.data);
           if (res.data.status === 'completed' || res.data.status === 'failed') {
             setPolling(false);
+            if (res.data.status === 'completed') {
+              setLastDbSync(Date.now());
+            }
           }
         } catch (err) {
           console.error("Polling error", err);
@@ -301,9 +305,9 @@ function App() {
         </div>
       </aside>
       <main className="main-content">
-        {activeTab === 'insights' && <Insights />}
-        {activeTab === 'menu' && <Menu />}
-        {activeTab === 'orders' && <Orders />}
+        {activeTab === 'insights' && <Insights lastDbSync={lastDbSync} />}
+        {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
+        {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
         {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
         {activeTab === 'sql' && <SQLConsole />}
         {activeTab === 'ai_mode' && <ComingSoon title="AI Mode" />}
