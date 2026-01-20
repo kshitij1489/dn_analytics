@@ -11,6 +11,7 @@ def fetch_kpis(conn):
             AVG(total) as avg_order_value,
             (SELECT COUNT(*) FROM customers) as total_customers
         FROM orders
+        WHERE order_status = 'Success'
     """)
     return cursor.fetchone()
 
