@@ -9,7 +9,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { endpoints } from '../../api';
 import { ResizableChart } from '../ResizableChart';
 import { FullscreenModal } from './FullscreenModal';
-import { INDIAN_HOLIDAYS } from '../../constants/holidays';
+import { calculateStrictMA, filterByWeekdays, getVisibleHolidays, groupDataByTimeBucket } from '../../utils/chartUtils';
 
 export function CategoryTrendChart() {
     const [data, setData] = useState<any[]>([]);
@@ -46,84 +46,52 @@ export function CategoryTrendChart() {
     const processData = () => {
         if (!data.length) return [];
 
-        // Filter by selected weekdays
-        const filtered = data.filter(row => {
-            const date = new Date(row.date);
-            const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getDay()];
-            return selectedDays.includes(dayName);
-        });
-
-        // Group by category
-        const categories = [...new Set(filtered.map(row => row.category))];
+        const categories = [...new Set(data.map(row => row.category))];
         const result: any[] = [];
 
         categories.forEach(category => {
-            const categoryData = filtered.filter(row => row.category === category);
-            const grouped = groupByTimeBucket(categoryData, timeBucket);
-            const processed = applyMetric(grouped, metric);
+            const categoryData = data.filter(row => row.category === category);
 
-            processed.forEach(item => {
-                result.push({
-                    date: item.date,
-                    category: category,
-                    value: item.value
+            if (metric === 'Moving Average (7-day)') {
+                // Now using the shared Strict MA logic per category
+                const maData = calculateStrictMA(categoryData, selectedDays);
+                result.push(...maData);
+            } else {
+                // Standard Logic
+                const filtered = filterByWeekdays(categoryData, selectedDays);
+                const grouped = groupDataByTimeBucket(filtered, timeBucket);
+                const processed = applyMetric(grouped, metric);
+
+                // Add category back to processed data as grouping might lose it if not careful 
+                // (groupDataByTimeBucket doesn't preserve extra fields from first row necessarily? 
+                //  Actually groupDataByTimeBucket implementation returns new objects: { date, revenue, num_orders, count }.
+                //  So we MUST re-attach category.)
+                processed.forEach(p => {
+                    p.category = category;
                 });
-            });
+                result.push(...processed);
+            }
         });
 
         return result;
-    };
-
-    const groupByTimeBucket = (data: any[], bucket: string) => {
-        if (bucket === 'Day' || metric === 'Moving Average (7-day)') return data;
-
-        const groups: { [key: string]: any[] } = {};
-        data.forEach(row => {
-            const dateStr = row.date;
-            const [year, month, day] = dateStr.split('-').map(Number);
-            let key: string;
-
-            if (bucket === 'Week') {
-                const date = new Date(year, month - 1, day);
-                const dayOfWeek = date.getDay();
-                const weekStart = new Date(year, month - 1, day - dayOfWeek);
-                const weekYear = weekStart.getFullYear();
-                const weekMonth = String(weekStart.getMonth() + 1).padStart(2, '0');
-                const weekDay = String(weekStart.getDate()).padStart(2, '0');
-                key = `${weekYear}-${weekMonth}-${weekDay}`;
-            } else { // Month
-                key = `${year}-${String(month).padStart(2, '0')}-01`;
-            }
-
-            if (!groups[key]) groups[key] = [];
-            groups[key].push(row);
-        });
-
-        return Object.keys(groups).sort().map(key => ({
-            date: key,
-            revenue: groups[key].reduce((sum, r) => sum + (r.revenue || 0), 0)
-        }));
     };
 
     const applyMetric = (data: any[], metric: string) => {
         if (metric === 'Total') {
             return data.map(d => ({ ...d, value: d.revenue }));
         } else if (metric === 'Average') {
-            const grouped = groupByTimeBucket(data, timeBucket);
-            return grouped.map(d => ({ ...d, value: d.revenue / (timeBucket === 'Day' ? 1 : data.filter(r => r.date === d.date).length || 1) }));
+            return data.map(d => ({
+                ...d,
+                value: d.revenue / (d.count || 1)
+            }));
         } else if (metric === 'Cumulative') {
             let cumulative = 0;
             return data.map(d => {
                 cumulative += d.revenue;
                 return { ...d, value: cumulative };
             });
-        } else { // Moving Average (7-day)
-            return data.map((d, idx) => {
-                const window = data.slice(Math.max(0, idx - 6), idx + 1);
-                const avg = window.reduce((sum, r) => sum + (r.revenue || 0), 0) / window.length;
-                return { ...d, value: avg };
-            });
         }
+        return data;
     };
 
     const chartData = processData();
@@ -133,20 +101,7 @@ export function CategoryTrendChart() {
     const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4'];
 
     // Get holidays within the visible date range
-    const getVisibleHolidays = () => {
-        if (!chartData.length || !showHolidays) return [];
-
-        const dates = chartData.map(d => d.date);
-        const minDate = Math.min(...dates.map(d => new Date(d).getTime()));
-        const maxDate = Math.max(...dates.map(d => new Date(d).getTime()));
-
-        return INDIAN_HOLIDAYS.filter(h => {
-            const hDate = new Date(h.date).getTime();
-            return hDate >= minDate && hDate <= maxDate;
-        });
-    };
-
-    const visibleHolidays = getVisibleHolidays();
+    const visibleHolidays = getVisibleHolidays(chartData, showHolidays);
 
     // Group data by date for recharts
     const chartDataByDate: { [key: string]: any } = {};

@@ -9,7 +9,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { endpoints } from '../../api';
 import { ResizableChart } from '../ResizableChart';
 import { FullscreenModal } from './FullscreenModal';
-import { INDIAN_HOLIDAYS } from '../../constants/holidays';
+import { filterByWeekdays, getVisibleHolidays, groupDataByTimeBucket } from '../../utils/chartUtils';
 
 export function RevenueVsOrdersChart() {
     const [data, setData] = useState<any[]>([]);
@@ -46,65 +46,16 @@ export function RevenueVsOrdersChart() {
         if (!data.length) return [];
 
         // Filter by selected weekdays
-        const filtered = data.filter(row => {
-            const date = new Date(row.date);
-            const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getDay()];
-            return selectedDays.includes(dayName);
-        });
+        const filtered = filterByWeekdays(data, selectedDays);
 
         // Group by time bucket
-        return groupByTimeBucket(filtered, timeBucket);
-    };
-
-    const groupByTimeBucket = (data: any[], bucket: string) => {
-        if (bucket === 'Day') return data;
-
-        const groups: { [key: string]: any[] } = {};
-        data.forEach(row => {
-            const dateStr = row.date;
-            const [year, month, day] = dateStr.split('-').map(Number);
-            let key: string;
-
-            if (bucket === 'Week') {
-                const date = new Date(year, month - 1, day);
-                const dayOfWeek = date.getDay();
-                const weekStart = new Date(year, month - 1, day - dayOfWeek);
-                const weekYear = weekStart.getFullYear();
-                const weekMonth = String(weekStart.getMonth() + 1).padStart(2, '0');
-                const weekDay = String(weekStart.getDate()).padStart(2, '0');
-                key = `${weekYear}-${weekMonth}-${weekDay}`;
-            } else { // Month
-                key = `${year}-${String(month).padStart(2, '0')}-01`;
-            }
-
-            if (!groups[key]) groups[key] = [];
-            groups[key].push(row);
-        });
-
-        return Object.keys(groups).sort().map(key => ({
-            date: key,
-            revenue: groups[key].reduce((sum, r) => sum + (r.revenue || 0), 0),
-            num_orders: groups[key].reduce((sum, r) => sum + (r.num_orders || 0), 0)
-        }));
+        return groupDataByTimeBucket(filtered, timeBucket);
     };
 
     const chartData = processData();
 
     // Get holidays within the visible date range
-    const getVisibleHolidays = () => {
-        if (!chartData.length || !showHolidays) return [];
-
-        const dates = chartData.map(d => d.date);
-        const minDate = Math.min(...dates.map(d => new Date(d).getTime()));
-        const maxDate = Math.max(...dates.map(d => new Date(d).getTime()));
-
-        return INDIAN_HOLIDAYS.filter(h => {
-            const hDate = new Date(h.date).getTime();
-            return hDate >= minDate && hDate <= maxDate;
-        });
-    };
-
-    const visibleHolidays = getVisibleHolidays();
+    const visibleHolidays = getVisibleHolidays(chartData, showHolidays);
 
     return (
         <>
