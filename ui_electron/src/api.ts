@@ -49,20 +49,39 @@ export const endpoints = {
     },
 
     menu: {
-        items: (params?: any) => api.get('/menu/items', { params }), // params: name_search, type_choice, start_date...
+        items: (params?: any) => api.get('/menu/items', { params }),
         types: () => api.get('/menu/types'),
+
+        // New Endpoints
+        itemsView: (params?: any) => api.get('/menu/items-view', { params }),
+        variantsView: (params?: any) => api.get('/menu/variants-view', { params }),
+        matrix: () => api.get('/menu/matrix'),
+        list: () => api.get('/menu/list'),
+        variantsList: () => api.get('/menu/variants/list'),
+
+        mergeHistory: () => api.get('/menu/merge/history'),
+        merge: (data: { source_id: string, target_id: string }) => api.post('/menu/merge', data),
+        undoMerge: (data: { merge_id: number }) => api.post('/menu/merge/undo', data),
+
+        remapCheck: (oid: string) => api.get(`/menu/remap/check/${oid}`),
+        remap: (data: { order_item_id: string, new_menu_item_id: string, new_variant_id: string }) => api.post('/menu/remap', data),
+
+        unverified: () => api.get('/menu/resolutions/unverified'),
+        verify: (data: { menu_item_id: string, new_name?: string, new_type?: string }) => api.post('/menu/resolutions/verify', data),
+    },
+
+    orders: {
+        orders: (params?: any) => api.get('/orders/view', { params }),
+        items: (params?: any) => api.get('/orders/items-view', { params }),
+        customers: (params?: any) => api.get('/orders/customers-view', { params }),
+        restaurants: (params?: any) => api.get('/orders/restaurants-view', { params }),
+        taxes: (params?: any) => api.get('/orders/taxes-view', { params }),
+        discounts: (params?: any) => api.get('/orders/discounts-view', { params }),
     },
 
     sync: {
-        run: () => api.post<JobResponse>('/sync/run'),
-        status: (jobId: string) => api.get<JobResponse>(`/sync/status/${jobId}`),
-    },
-
-    resolutions: {
-        unclustered: () => api.get('/resolutions/unclustered'),
-        merge: (data: { menu_item_id: string, target_menu_item_id: string }) => api.post('/resolutions/merge', data),
-        rename: (data: { menu_item_id: string, new_name: string, new_type: string }) => api.post('/resolutions/rename', data),
-        verify: (data: { menu_item_id: string }) => api.post('/resolutions/verify', data),
+        run: () => api.post('/sync/run'),
+        status: (jobId: string) => api.get(`/sync/status/${jobId}`),
     },
 
     sql: {

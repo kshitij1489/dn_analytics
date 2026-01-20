@@ -1,12 +1,68 @@
+"""
+Pydantic Models for API Request/Response Schemas
+
+This module consolidates all Pydantic models used across routers.
+"""
+
 from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
+from typing import Optional, Any, Dict
+
+
+# --- Job Management Models ---
 
 class JobResponse(BaseModel):
+    """Response model for async job status"""
     job_id: str
     status: str
     message: str
     progress: float
     stats: Optional[Dict[str, Any]] = None
 
+
+# --- SQL Console Models ---
+
 class QueryRequest(BaseModel):
+    """Request model for SQL query execution"""
     query: str
+
+
+# --- Menu Management Models ---
+
+class MergeRequest(BaseModel):
+    """Request to merge two menu items"""
+    source_id: str
+    target_id: str
+
+
+class UndoMergeRequest(BaseModel):
+    """Request to undo a menu item merge"""
+    merge_id: int
+
+
+class RemapRequest(BaseModel):
+    """Request to remap an order item to different menu item/variant"""
+    order_item_id: str
+    new_menu_item_id: str
+    new_variant_id: str
+
+
+class VerifyRequest(BaseModel):
+    """Request to verify a menu item, optionally renaming it"""
+    menu_item_id: str
+    new_name: Optional[str] = None
+    new_type: Optional[str] = None
+
+
+# --- Resolutions Models ---
+
+class ResolutionMergeRequest(BaseModel):
+    """Request to merge menu items via resolutions endpoint"""
+    menu_item_id: str
+    target_menu_item_id: str
+
+
+class RenameRequest(BaseModel):
+    """Request to rename a menu item"""
+    menu_item_id: str
+    new_name: str
+    new_type: str

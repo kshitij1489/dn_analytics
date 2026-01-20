@@ -64,8 +64,6 @@ export default function Insights() {
 
     return (
         <div>
-            <h1>📊 Executive Insights</h1>
-
             {/* KPIs */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
                 <KPICard title="Revenue" value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`} />
@@ -99,55 +97,76 @@ function ResizableChart({
     defaultHeight = 400,
     onFullscreen
 }: {
-    children: React.ReactNode;
-    defaultHeight?: number;
-    onFullscreen: () => void;
+    children: React.ReactNode,
+    defaultHeight?: number,
+    onFullscreen?: () => void
 }) {
-    const containerRef = useRef<HTMLDivElement>(null);
     const [height, setHeight] = useState(defaultHeight);
     const [width, setWidth] = useState(800);
+    const containerRef = useRef<HTMLDivElement>(null);
 
-    // Set initial width to match container width
     useEffect(() => {
         if (containerRef.current) {
-            setWidth(containerRef.current.offsetWidth);
+            setWidth(containerRef.current?.offsetWidth);
         }
     }, []);
 
+    const onResize = (_event: any, { size }: any) => {
+        setHeight(size.height);
+        setWidth(size.width);
+    };
+
     return (
         <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
-            <button
-                onClick={onFullscreen}
-                title="Open in fullscreen"
-                style={{
-                    position: 'absolute',
-                    top: '10px',
-                    right: '10px',
-                    zIndex: 10,
-                    background: '#646cff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    padding: '6px 12px',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 'bold'
-                }}
-            >
-                ⛶ Fullscreen
-            </button>
+            {onFullscreen && (
+                <button
+                    onClick={onFullscreen}
+                    title="Open in fullscreen"
+                    style={{
+                        position: 'absolute',
+                        top: '10px',
+                        right: '10px',
+                        zIndex: 10,
+                        background: 'var(--accent-color)',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '6px 12px',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        fontWeight: 'bold'
+                    }}
+                >
+                    ⛶ Fullscreen
+                </button>
+            )}
             <Resizable
                 height={height}
                 width={width}
-                onResize={(_e, { size }) => {
-                    setHeight(size.height);
-                    setWidth(size.width);
-                }}
+                onResize={onResize}
                 resizeHandles={['s', 'e', 'se', 'sw', 'ne', 'nw', 'n', 'w']}
-                minConstraints={[400, 300]}
-                maxConstraints={[1600, 800]}
+                minConstraints={[100, 200]}
+                maxConstraints={[2000, 800]}
+                draggableOpts={{ enableUserSelectHack: false }}
+                handle={
+                    <div style={{
+                        position: 'absolute', bottom: 0, right: 0, width: '20px', height: '20px', cursor: 'se-resize',
+                        background: 'linear-gradient(135deg, transparent 50%, var(--accent-color) 50%)',
+                        borderRadius: '0 0 4px 0'
+                    }} />
+                }
             >
-                <div style={{ height: `${height}px`, width: `${width}px` }}>
+                <div style={{
+                    width: width + 'px',
+                    height: height + 'px',
+                    position: 'relative',
+                    marginBottom: '20px',
+                    background: 'var(--card-bg)',
+                    padding: '15px',
+                    borderRadius: '12px',
+                    border: '1px solid var(--border-color)',
+                    boxShadow: 'var(--shadow)'
+                }}>
                     {children}
                 </div>
             </Resizable>
@@ -251,6 +270,7 @@ function exportToCSV(data: any[], filename: string, headers?: string[]) {
 }
 
 // Resizable Table Wrapper
+// Resizable Table Wrapper
 function ResizableTableWrapper({
     children,
     onExportCSV,
@@ -260,106 +280,36 @@ function ResizableTableWrapper({
     onExportCSV?: () => void;
     defaultHeight?: number;
 }) {
-    const containerRef = useRef<HTMLDivElement>(null);
+    const [width, setWidth] = useState(1000);
     const [height, setHeight] = useState(defaultHeight);
-    const [width, setWidth] = useState(800);
+    const containerRef = useRef<HTMLDivElement>(null);
 
-    // Drag state
-    const [position, setPosition] = useState({ x: 0, y: 0 });
-    const [isDragging, setIsDragging] = useState(false);
-    const dragStartRef = useRef({ x: 0, y: 0 });
-    const initialPosRef = useRef({ x: 0, y: 0 });
-
-    // Set initial width to match container width
     useEffect(() => {
         if (containerRef.current) {
             setWidth(containerRef.current.offsetWidth);
         }
     }, []);
 
-    // Drag handlers
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-
-            const dx = e.clientX - dragStartRef.current.x;
-            const dy = e.clientY - dragStartRef.current.y;
-
-            setPosition({
-                x: initialPosRef.current.x + dx,
-                y: initialPosRef.current.y + dy
-            });
-        };
-
-        const handleMouseUp = () => {
-            setIsDragging(false);
-            document.body.style.cursor = 'default';
-        };
-
-        if (isDragging) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
-        }
-
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-    }, [isDragging]);
-
-    const handleDragStart = (e: React.MouseEvent) => {
-        e.preventDefault();
-        setIsDragging(true);
-        dragStartRef.current = { x: e.clientX, y: e.clientY };
-        initialPosRef.current = { ...position };
-        document.body.style.cursor = 'grabbing';
+    const onResize = (_event: any, { size }: any) => {
+        setHeight(size.height);
+        setWidth(size.width);
     };
 
     return (
-        <div
-            ref={containerRef}
-            style={{
-                width: '100%',
-                transform: `translate(${position.x}px, ${position.y}px)`,
-                transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-                position: 'relative', // Ensure dragging works smoothly
-                zIndex: isDragging ? 100 : 1 // Bring to front when dragging
-            }}
-        >
+        <div ref={containerRef} style={{ width: '100%', marginBottom: '20px' }}>
             <div style={{
                 display: 'flex',
                 justifyContent: 'flex-end',
                 marginBottom: '10px',
-                alignItems: 'center',
-                gap: '10px'
             }}>
-                {/* Drag Handle */}
-                <div
-                    onMouseDown={handleDragStart}
-                    title="Drag to move"
-                    style={{
-                        cursor: isDragging ? 'grabbing' : 'grab',
-                        padding: '6px 12px',
-                        background: '#333',
-                        borderRadius: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        border: '1px solid #444',
-                        color: '#666'
-                    }}
-                >
-                    <span style={{ fontSize: '16px', lineHeight: 1 }}>⠿</span>
-                </div>
-
                 {onExportCSV && (
                     <button
                         onClick={onExportCSV}
                         title="Export to CSV"
                         style={{
-                            background: '#10b981',
+                            background: '#3B82F6', // Blue
                             border: 'none',
-                            borderRadius: '4px',
+                            borderRadius: '8px', // Curved edges
                             padding: '8px 16px',
                             color: 'white',
                             cursor: 'pointer',
@@ -375,11 +325,8 @@ function ResizableTableWrapper({
             <Resizable
                 height={height}
                 width={width}
-                onResize={(_e, { size }) => {
-                    setHeight(size.height);
-                    setWidth(size.width);
-                }}
-                resizeHandles={['s', 'e', 'se', 'sw', 'ne', 'nw', 'n', 'w']}
+                onResize={onResize}
+                resizeHandles={['s', 'e', 'se']}
                 minConstraints={[400, 300]}
                 maxConstraints={[2400, 1200]}
                 handle={(handleAxis, ref) => (
@@ -387,26 +334,38 @@ function ResizableTableWrapper({
                         ref={ref}
                         className={`react-resizable-handle react-resizable-handle-${handleAxis}`}
                         style={{
-                            zIndex: 1000,
                             position: 'absolute',
-                            userSelect: 'none'
+                            userSelect: 'none',
+                            width: '20px',
+                            height: '20px',
+                            bottom: 0,
+                            right: 0,
+                            cursor: 'se-resize',
+                            zIndex: 10,
+                            // Visual indication of resize handle
+                            background: handleAxis === 'se' ? 'linear-gradient(135deg, transparent 50%, var(--accent-color) 50%)' : 'transparent',
+                            borderRadius: '0 0 4px 0'
                         }}
-                        onClick={(e) => e.stopPropagation()}
                     />
                 )}
             >
                 <div style={{
-                    height: `${height}px`,
-                    width: `${width}px`,
-                    position: 'relative'
+                    width: width + 'px',
+                    height: height + 'px',
+                    position: 'relative',
+                    border: '1px solid #444',
+                    borderRadius: '8px',
+                    background: 'var(--card-bg)', // Ensure match with theme
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    display: 'flex',   // Ensure inner takes full space
+                    flexDirection: 'column'
                 }}>
                     <div style={{
+                        flex: 1,
+                        overflow: 'auto',
                         width: '100%',
                         height: '100%',
-                        overflow: 'auto',
-                        border: '1px solid #444',
-                        borderRadius: '4px',
-                        paddingBottom: '10px' // Add padding so content doesn't overlap bottom handle
+                        paddingBottom: '10px' // Slight padding for content
                     }}>
                         {children}
                     </div>
@@ -418,25 +377,26 @@ function ResizableTableWrapper({
 
 function KPICard({ title, value }: { title: string, value: string | number }) {
     return (
-        <div className="card">
-            <h3 style={{ fontSize: '0.9em', color: '#aaa', margin: '0 0 10px 0' }}>{title}</h3>
-            <div style={{ fontSize: '1.8em', fontWeight: 'bold' }}>{value}</div>
+        <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
+            <h3 style={{ margin: '0 0 10px 0', color: 'var(--text-secondary)', fontSize: '0.9em' }}>{title}</h3>
+            <div style={{ fontSize: '1.8em', fontWeight: 'bold', color: 'var(--accent-color)' }}>{value}</div>
         </div>
     );
 }
 
-function TabButton({ active, onClick, children }: any) {
+function TabButton({ children, active, onClick }: { children: React.ReactNode, active: boolean, onClick: () => void }) {
     return (
         <button
             onClick={onClick}
             style={{
-                padding: '10px 20px',
                 marginRight: '10px',
-                background: active ? '#646cff' : '#333',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
+                background: active ? 'var(--accent-color)' : 'var(--button-bg)',
+                color: active ? 'white' : 'var(--button-text)',
+                border: active ? 'none' : '1px solid var(--border-color)',
+                padding: '8px 16px',
+                borderRadius: '8px', /* Rounded iOS buttons */
+                cursor: 'pointer',
+                fontWeight: '500'
             }}
         >
             {children}
@@ -507,34 +467,33 @@ function DailySalesTab() {
 
     return (
         <div>
-            <h2 style={{ marginBottom: '20px' }}>Daily Sales Performance</h2>
             <ResizableTableWrapper onExportCSV={handleExportCSV}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-                    <thead style={{ position: 'sticky', top: 0, background: '#2d2d2d' }}>
-                        <tr style={{ borderBottom: '2px solid #444', textAlign: 'left' }}>
-                            <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('order_date')}>Date{renderSortIcon('order_date')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('total_revenue')}>Total Revenue{renderSortIcon('total_revenue')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('net_revenue')}>Net Revenue{renderSortIcon('net_revenue')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('tax_collected')}>Tax{renderSortIcon('tax_collected')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('total_orders')}>Orders{renderSortIcon('total_orders')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Website Revenue')}>Website Revenue{renderSortIcon('Website Revenue')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('POS Revenue')}>POS Revenue{renderSortIcon('POS Revenue')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Swiggy Revenue')}>Swiggy Revenue{renderSortIcon('Swiggy Revenue')}</th>
-                            <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Zomato Revenue')}>Zomato Revenue{renderSortIcon('Zomato Revenue')}</th>
+                <table className="standard-table">
+                    <thead>
+                        <tr>
+                            <th onClick={() => handleSort('order_date')}>Date{renderSortIcon('order_date')}</th>
+                            <th className="text-right" onClick={() => handleSort('total_revenue')}>Total Revenue{renderSortIcon('total_revenue')}</th>
+                            <th className="text-right" onClick={() => handleSort('net_revenue')}>Net Revenue{renderSortIcon('net_revenue')}</th>
+                            <th className="text-right" onClick={() => handleSort('tax_collected')}>Tax{renderSortIcon('tax_collected')}</th>
+                            <th className="text-right" onClick={() => handleSort('total_orders')}>Orders{renderSortIcon('total_orders')}</th>
+                            <th className="text-right" onClick={() => handleSort('Website Revenue')}>Website Revenue{renderSortIcon('Website Revenue')}</th>
+                            <th className="text-right" onClick={() => handleSort('POS Revenue')}>POS Revenue{renderSortIcon('POS Revenue')}</th>
+                            <th className="text-right" onClick={() => handleSort('Swiggy Revenue')}>Swiggy Revenue{renderSortIcon('Swiggy Revenue')}</th>
+                            <th className="text-right" onClick={() => handleSort('Zomato Revenue')}>Zomato Revenue{renderSortIcon('Zomato Revenue')}</th>
                         </tr>
                     </thead>
                     <tbody>
                         {sortedData.map((row, idx) => (
-                            <tr key={idx} style={{ borderBottom: '1px solid #333' }}>
-                                <td style={{ padding: '10px' }}>{row.order_date}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row.total_revenue || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row.net_revenue || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row.tax_collected || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>{row.total_orders}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['Website Revenue'] || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['POS Revenue'] || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['Swiggy Revenue'] || 0).toLocaleString()}</td>
-                                <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['Zomato Revenue'] || 0).toLocaleString()}</td>
+                            <tr key={idx}>
+                                <td>{row.order_date}</td>
+                                <td className="text-right">₹{Math.round(row.total_revenue || 0).toLocaleString()}</td>
+                                <td className="text-right">₹{Math.round(row.net_revenue || 0).toLocaleString()}</td>
+                                <td className="text-right">₹{Math.round(row.tax_collected || 0).toLocaleString()}</td>
+                                <td className="text-right">{row.total_orders}</td>
+                                <td className="text-right">₹{Math.round(row['Website Revenue'] || 0).toLocaleString()}</td>
+                                <td className="text-right">₹{Math.round(row['POS Revenue'] || 0).toLocaleString()}</td>
+                                <td className="text-right">₹{Math.round(row['Swiggy Revenue'] || 0).toLocaleString()}</td>
+                                <td className="text-right">₹{Math.round(row['Zomato Revenue'] || 0).toLocaleString()}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -719,36 +678,36 @@ function MenuItemsTab() {
 
             {loading ? <div>Loading...</div> : (
                 <ResizableTableWrapper onExportCSV={handleExportCSV}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-                        <thead style={{ position: 'sticky', top: 0, background: '#2d2d2d' }}>
-                            <tr style={{ borderBottom: '2px solid #444', textAlign: 'left' }}>
-                                <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Item Name')}>Item Name{renderSortIcon('Item Name')}</th>
-                                <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Type')}>Type{renderSortIcon('Type')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('As Addon (Qty)')}>As Addon (Qty){renderSortIcon('As Addon (Qty)')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('As Item (Qty)')}>As Item (Qty){renderSortIcon('As Item (Qty)')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Total Sold (Qty)')}>Total Sold (Qty){renderSortIcon('Total Sold (Qty)')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Total Revenue')}>Total Revenue{renderSortIcon('Total Revenue')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Reorder Count')}>Reorder Count{renderSortIcon('Reorder Count')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Customer (Lifetime)')}>Repeat Customers{renderSortIcon('Repeat Customer (Lifetime)')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Unique Customers')}>Unique Customers{renderSortIcon('Unique Customers')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Reorder Rate %')}>Reorder Rate %{renderSortIcon('Reorder Rate %')}</th>
-                                <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Revenue %')}>Repeat Revenue %{renderSortIcon('Repeat Revenue %')}</th>
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th onClick={() => handleSort('Item Name')}>Item Name{renderSortIcon('Item Name')}</th>
+                                <th onClick={() => handleSort('Type')}>Type{renderSortIcon('Type')}</th>
+                                <th className="text-right" onClick={() => handleSort('As Addon (Qty)')}>As Addon (Qty){renderSortIcon('As Addon (Qty)')}</th>
+                                <th className="text-right" onClick={() => handleSort('As Item (Qty)')}>As Item (Qty){renderSortIcon('As Item (Qty)')}</th>
+                                <th className="text-right" onClick={() => handleSort('Total Sold (Qty)')}>Total Sold (Qty){renderSortIcon('Total Sold (Qty)')}</th>
+                                <th className="text-right" onClick={() => handleSort('Total Revenue')}>Total Revenue{renderSortIcon('Total Revenue')}</th>
+                                <th className="text-right" onClick={() => handleSort('Reorder Count')}>Reorder Count{renderSortIcon('Reorder Count')}</th>
+                                <th className="text-right" onClick={() => handleSort('Repeat Customer (Lifetime)')}>Repeat Customers{renderSortIcon('Repeat Customer (Lifetime)')}</th>
+                                <th className="text-right" onClick={() => handleSort('Unique Customers')}>Unique Customers{renderSortIcon('Unique Customers')}</th>
+                                <th className="text-right" onClick={() => handleSort('Reorder Rate %')}>Reorder Rate %{renderSortIcon('Reorder Rate %')}</th>
+                                <th className="text-right" onClick={() => handleSort('Repeat Revenue %')}>Repeat Revenue %{renderSortIcon('Repeat Revenue %')}</th>
                             </tr>
                         </thead>
                         <tbody>
                             {sortedData.map((row, idx) => (
-                                <tr key={idx} style={{ borderBottom: '1px solid #333' }}>
-                                    <td style={{ padding: '10px' }}>{row["Item Name"]}</td>
-                                    <td style={{ padding: '10px' }}>{row["Type"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["As Addon (Qty)"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["As Item (Qty)"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Total Sold (Qty)"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row["Total Revenue"] || 0).toLocaleString()}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Reorder Count"] || 0}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Repeat Customer (Lifetime)"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Unique Customers"]}</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Reorder Rate %"]}%</td>
-                                    <td style={{ padding: '10px', textAlign: 'right' }}>{row["Repeat Revenue %"]}%</td>
+                                <tr key={idx}>
+                                    <td>{row["Item Name"]}</td>
+                                    <td>{row["Type"]}</td>
+                                    <td className="text-right">{row["As Addon (Qty)"]}</td>
+                                    <td className="text-right">{row["As Item (Qty)"]}</td>
+                                    <td className="text-right">{row["Total Sold (Qty)"]}</td>
+                                    <td className="text-right">₹{Math.round(row["Total Revenue"] || 0).toLocaleString()}</td>
+                                    <td className="text-right">{row["Reorder Count"] || 0}</td>
+                                    <td className="text-right">{row["Repeat Customer (Lifetime)"]}</td>
+                                    <td className="text-right">{row["Unique Customers"]}</td>
+                                    <td className="text-right">{row["Reorder Rate %"]}%</td>
+                                    <td className="text-right">{row["Repeat Revenue %"]}%</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -871,11 +830,13 @@ function CustomerTab() {
                     style={{
                         padding: '10px 20px',
                         marginRight: '10px',
-                        background: customerView === 'loyalty' ? '#646cff' : '#333',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer'
+                        background: customerView === 'loyalty' ? '#EF4444' : 'var(--card-bg)',
+                        color: customerView === 'loyalty' ? 'white' : 'var(--text-color)',
+                        border: customerView === 'loyalty' ? 'none' : '1px solid var(--border-color)',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        fontWeight: '500',
+                        transition: 'all 0.2s'
                     }}
                 >
                     🔄 Customer Retention
@@ -884,11 +845,13 @@ function CustomerTab() {
                     onClick={() => setCustomerView('top')}
                     style={{
                         padding: '10px 20px',
-                        background: customerView === 'top' ? '#646cff' : '#333',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer'
+                        background: customerView === 'top' ? '#EF4444' : 'var(--card-bg)',
+                        color: customerView === 'top' ? 'white' : 'var(--text-color)',
+                        border: customerView === 'top' ? 'none' : '1px solid var(--border-color)',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        fontWeight: '500',
+                        transition: 'all 0.2s'
                     }}
                 >
                     💎 Top Verified Customers
@@ -901,34 +864,34 @@ function CustomerTab() {
             {loading ? <div>Loading...</div> : (
                 customerView === 'loyalty' ? (
                     <ResizableTableWrapper onExportCSV={handleExportLoyaltyCSV}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-                            <thead style={{ position: 'sticky', top: 0, background: '#2d2d2d' }}>
-                                <tr style={{ borderBottom: '2px solid #444', textAlign: 'left' }}>
-                                    <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Month')}>Month{renderSortIcon('Month')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Orders')}>Repeat Orders{renderSortIcon('Repeat Orders')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Total Orders')}>Total Orders{renderSortIcon('Total Orders')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Order Repeat%')}>Order Repeat%{renderSortIcon('Order Repeat%')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Customer Count')}>Repeat Customer Count{renderSortIcon('Repeat Customer Count')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Total Verified Customers')}>Total Verified Customers{renderSortIcon('Total Verified Customers')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Customer %')}>Repeat Customer %{renderSortIcon('Repeat Customer %')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Repeat Revenue')}>Repeat Revenue{renderSortIcon('Repeat Revenue')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Total Revenue')}>Total Revenue{renderSortIcon('Total Revenue')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('Revenue Repeat %')}>Revenue Repeat %{renderSortIcon('Revenue Repeat %')}</th>
+                        <table className="standard-table">
+                            <thead>
+                                <tr>
+                                    <th onClick={() => handleSort('Month')}>Month{renderSortIcon('Month')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Orders')}>Repeat Orders{renderSortIcon('Repeat Orders')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Total Orders')}>Total Orders{renderSortIcon('Total Orders')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Order Repeat%')}>Order Repeat%{renderSortIcon('Order Repeat%')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Customer Count')}>Repeat Customer Count{renderSortIcon('Repeat Customer Count')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Total Verified Customers')}>Total Verified Customers{renderSortIcon('Total Verified Customers')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Customer %')}>Repeat Customer %{renderSortIcon('Repeat Customer %')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Revenue')}>Repeat Revenue{renderSortIcon('Repeat Revenue')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Total Revenue')}>Total Revenue{renderSortIcon('Total Revenue')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Revenue Repeat %')}>Revenue Repeat %{renderSortIcon('Revenue Repeat %')}</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {sortedLoyaltyData.map((row, idx) => (
-                                    <tr key={idx} style={{ borderBottom: '1px solid #333' }}>
-                                        <td style={{ padding: '10px' }}>{row.Month}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Repeat Orders']}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Total Orders']}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Order Repeat%']}%</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Repeat Customer Count']}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Total Verified Customers']}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Repeat Customer %']}%</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['Repeat Revenue'] || 0).toLocaleString()}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row['Total Revenue'] || 0).toLocaleString()}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row['Revenue Repeat %']}%</td>
+                                    <tr key={idx}>
+                                        <td>{row.Month}</td>
+                                        <td className="text-right">{row['Repeat Orders']}</td>
+                                        <td className="text-right">{row['Total Orders']}</td>
+                                        <td className="text-right">{row['Order Repeat%']}%</td>
+                                        <td className="text-right">{row['Repeat Customer Count']}</td>
+                                        <td className="text-right">{row['Total Verified Customers']}</td>
+                                        <td className="text-right">{row['Repeat Customer %']}%</td>
+                                        <td className="text-right">₹{Math.round(row['Repeat Revenue'] || 0).toLocaleString()}</td>
+                                        <td className="text-right">₹{Math.round(row['Total Revenue'] || 0).toLocaleString()}</td>
+                                        <td className="text-right">{row['Revenue Repeat %']}%</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -936,38 +899,32 @@ function CustomerTab() {
                     </ResizableTableWrapper>
                 ) : (
                     <ResizableTableWrapper onExportCSV={handleExportTopCustomersCSV}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-                            <thead style={{ position: 'sticky', top: 0, background: '#2d2d2d' }}>
-                                <tr style={{ borderBottom: '2px solid #444', textAlign: 'left' }}>
-                                    <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('name')}>Customer{renderSortIcon('name')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('total_orders')}>Total Orders{renderSortIcon('total_orders')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('total_spent')}>Total Spent{renderSortIcon('total_spent')}</th>
-                                    <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('last_order_date')}>Last Order Date{renderSortIcon('last_order_date')}</th>
-                                    <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('status')}>Status{renderSortIcon('status')}</th>
-                                    <th style={{ padding: '10px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('favorite_item')}>Favorite Item{renderSortIcon('favorite_item')}</th>
-                                    <th style={{ padding: '10px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('fav_item_qty')}>Fav Item Qty{renderSortIcon('fav_item_qty')}</th>
+                        <table className="standard-table">
+                            <thead>
+                                <tr>
+                                    <th onClick={() => handleSort('name')}>Customer{renderSortIcon('name')}</th>
+                                    <th className="text-right" onClick={() => handleSort('total_orders')}>Total Orders{renderSortIcon('total_orders')}</th>
+                                    <th className="text-right" onClick={() => handleSort('total_spent')}>Total Spent{renderSortIcon('total_spent')}</th>
+                                    <th onClick={() => handleSort('last_order_date')}>Last Order Date{renderSortIcon('last_order_date')}</th>
+                                    <th onClick={() => handleSort('status')}>Status{renderSortIcon('status')}</th>
+                                    <th onClick={() => handleSort('favorite_item')}>Favorite Item{renderSortIcon('favorite_item')}</th>
+                                    <th className="text-right" onClick={() => handleSort('fav_item_qty')}>Fav Item Qty{renderSortIcon('fav_item_qty')}</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {sortedTopCustomers.map((row, idx) => (
-                                    <tr key={idx} style={{ borderBottom: '1px solid #333' }}>
-                                        <td style={{ padding: '10px' }}>{row.name}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row.total_orders}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>₹{Math.round(row.total_spent || 0).toLocaleString()}</td>
-                                        <td style={{ padding: '10px' }}>{row.last_order_date}</td>
-                                        <td style={{ padding: '10px' }}>
-                                            <span style={{
-                                                padding: '2px 8px',
-                                                borderRadius: '3px',
-                                                fontSize: '11px',
-                                                backgroundColor: row.status === 'Returning' ? '#064e3b' : '#422006',
-                                                color: row.status === 'Returning' ? '#6ee7b7' : '#fbbf24'
-                                            }}>
+                                    <tr key={idx}>
+                                        <td>{row.name}</td>
+                                        <td className="text-right">{row.total_orders}</td>
+                                        <td className="text-right">₹{Math.round(row.total_spent || 0).toLocaleString()}</td>
+                                        <td>{row.last_order_date}</td>
+                                        <td>
+                                            <span className={row.status === 'Returning' ? 'status-returning' : 'status-new'}>
                                                 {row.status}
                                             </span>
                                         </td>
-                                        <td style={{ padding: '10px' }}>{row.favorite_item}</td>
-                                        <td style={{ padding: '10px', textAlign: 'right' }}>{row.fav_item_qty}</td>
+                                        <td>{row.favorite_item}</td>
+                                        <td className="text-right">{row.fav_item_qty}</td>
                                     </tr>
                                 ))}
                             </tbody>

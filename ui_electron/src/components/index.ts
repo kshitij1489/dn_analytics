@@ -1,0 +1,15 @@
+/**
+ * Components Barrel Export
+ * 
+ * Re-exports all shared components for easy importing.
+ */
+
+export { ResizableTableWrapper } from './ResizableTableWrapper';
+export { Card, CollapsibleCard } from './Card';
+export { KPICard } from './KPICard';
+export { TabButton } from './TabButton';
+export { Pagination } from './Pagination';
+export { LoadingSpinner, LoadingText } from './LoadingSpinner';
+export { ActionButton } from './ActionButton';
+export { Select, createOptions } from './Select';
+

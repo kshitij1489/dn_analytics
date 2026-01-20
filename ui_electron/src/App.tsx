@@ -6,7 +6,7 @@ import type { JobResponse } from './api';
 // Components
 import Insights from './pages/Insights';
 import Menu from './pages/Menu';
-import Resolutions from './pages/Resolutions';
+import Orders from './pages/Orders';
 import SQLConsole from './pages/SQLConsole';
 import ComingSoon from './pages/ComingSoon';
 
@@ -15,10 +15,20 @@ type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 function App() {
   const [activeTab, setActiveTab] = useState('insights');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
   // Sync State
   const [job, setJob] = useState<JobResponse | null>(null);
   const [polling, setPolling] = useState(false);
+
+  // Theme Config
+  useEffect(() => {
+    if (theme === 'light') {
+      document.body.classList.add('light-mode');
+    } else {
+      document.body.classList.remove('light-mode');
+    }
+  }, [theme]);
 
   useEffect(() => {
     checkConnection();
@@ -105,28 +115,47 @@ function App() {
     }
   };
 
+  const [showSyncStatus, setShowSyncStatus] = useState(false);
+  useEffect(() => {
+    if (job?.status === 'completed') {
+      setShowSyncStatus(true);
+      const timer = setTimeout(() => setShowSyncStatus(false), 30000); // Hide after 30s
+      return () => clearTimeout(timer);
+    }
+  }, [job]);
+
   return (
     <div className="app-container">
       <aside className="sidebar">
-        <div className="logo">Analytics</div>
+        <img
+          src="/logo.png"
+          alt="D&N Dashboard"
+          style={{
+            display: 'block',
+            margin: '0 auto 30px',
+            maxWidth: '100%',
+            objectFit: 'contain',
+            height: 'auto'
+          }}
+        />
         <nav>
           <button className={activeTab === 'insights' ? 'active' : ''} onClick={() => setActiveTab('insights')}>Insights</button>
           <button className={activeTab === 'menu' ? 'active' : ''} onClick={() => setActiveTab('menu')}>Menu</button>
 
           <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>Orders</button>
           <button className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setActiveTab('inventory')}>Inventory & COGS</button>
-
-          <button className={activeTab === 'resolutions' ? 'active' : ''} onClick={() => setActiveTab('resolutions')}>Resolutions</button>
           <button className={activeTab === 'sql' ? 'active' : ''} onClick={() => setActiveTab('sql')}>SQL Console</button>
 
           <button className={activeTab === 'ai_mode' ? 'active' : ''} onClick={() => setActiveTab('ai_mode')}>AI Mode</button>
+
+          <hr style={{ borderTop: '1px solid #444', margin: '15px 0' }} />
 
           {/* Connection Status */}
           <div style={{
             marginTop: '10px',
             padding: '8px 12px',
             fontSize: '12px',
-            backgroundColor: '#2d2d2d',
+            // backgroundColor: '#2d2d2d', Removed black background section
             borderRadius: '4px',
             display: 'flex',
             flexDirection: 'column',
@@ -136,7 +165,7 @@ function App() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span>{status.icon}</span>
-              <span>{status.text}</span>
+              <span style={{ color: 'var(--text-color)' }}>{status.text}</span>
               {connectionStatus === 'disconnected' && (
                 <button
                   onClick={() => checkConnection()}
@@ -163,27 +192,27 @@ function App() {
               title="Sync Database"
               style={{
                 width: '100%',
-                padding: '6px',
-                fontSize: '12px',
-                background: polling ? '#555' : '#646cff',
+                padding: '12px',
+                fontSize: '14px',
+                fontWeight: '600',
+                background: polling ? '#555' : '#E65100', // Dark Orange
                 color: 'white',
                 border: 'none',
-                borderRadius: '3px',
+                borderRadius: '8px',
                 cursor: (polling || connectionStatus !== 'connected') ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '5px'
+                display: 'block',
+                marginTop: '10px',
+                textAlign: 'center'
               }}
             >
-              {polling ? '🔄 Syncing...' : '🔄 Sync DB'}
+              {polling ? 'Syncing...' : 'Sync DB'}
             </button>
 
             {/* Sync Progress */}
             {job && polling && (
               <div style={{ width: '100%', backgroundColor: '#444', height: '4px', borderRadius: '2px', overflow: 'hidden' }}>
                 <div style={{
-                  width: `${Math.round(job.progress * 100)}%`,
+                  width: `${Math.round(job.progress * 100)}% `,
                   backgroundColor: '#10B981',
                   height: '100%',
                   transition: 'width 0.3s ease'
@@ -192,12 +221,13 @@ function App() {
             )}
 
             {/* Sync Result Label */}
-            {job && job.status === 'completed' && !polling && (
+            {job && job.status === 'completed' && !polling && showSyncStatus && (
               <div style={{
                 fontSize: '11px',
-                color: '#aaa',
+                color: 'var(--text-color)', // Adapted to theme
                 textAlign: 'center',
-                marginTop: '4px'
+                marginTop: '4px',
+                fontWeight: 'bold'
               }}>
                 {(job.stats?.count === 0 || job.stats?.orders === 0)
                   ? 'No orders to Update'
@@ -206,18 +236,79 @@ function App() {
               </div>
             )}
           </div>
+
+          <hr style={{ borderTop: '1px solid #444', margin: '15px 0' }} />
+
         </nav>
+
+        {/* Theme Toggle Slider box */}
+        <div style={{ marginTop: 'auto', padding: '0 0 20px 0' }}>
+          <div style={{
+            textAlign: 'center',
+            color: 'var(--text-secondary)',
+            fontSize: '12px',
+            marginBottom: '8px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Appearance
+          </div>
+          <div style={{
+            display: 'flex',
+            background: 'var(--input-bg)',
+            borderRadius: '20px',
+            padding: '4px',
+            border: '1px solid var(--border-color)',
+            userSelect: 'none'
+          }}>
+            <div
+              onClick={() => setTheme('light')}
+              style={{
+                flex: 1,
+                textAlign: 'center',
+                padding: '6px',
+                borderRadius: '16px',
+                background: theme === 'light' ? 'var(--card-bg)' : 'transparent',
+                color: theme === 'light' ? 'var(--text-color)' : 'var(--text-secondary)',
+                boxShadow: theme === 'light' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s',
+                cursor: 'pointer',
+                fontWeight: '600',
+                fontSize: '0.85em'
+              }}
+            >
+              Light
+            </div>
+            <div
+              onClick={() => setTheme('dark')}
+              style={{
+                flex: 1,
+                textAlign: 'center',
+                padding: '6px',
+                borderRadius: '16px',
+                background: theme === 'dark' ? 'var(--card-bg)' : 'transparent',
+                color: theme === 'dark' ? 'var(--text-color)' : 'var(--text-secondary)',
+                boxShadow: theme === 'dark' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s',
+                cursor: 'pointer',
+                fontWeight: '600',
+                fontSize: '0.85em'
+              }}
+            >
+              Dark
+            </div>
+          </div>
+        </div>
       </aside>
       <main className="main-content">
         {activeTab === 'insights' && <Insights />}
         {activeTab === 'menu' && <Menu />}
-        {activeTab === 'orders' && <ComingSoon title="Orders" />}
+        {activeTab === 'orders' && <Orders />}
         {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
-        {activeTab === 'resolutions' && <Resolutions />}
         {activeTab === 'sql' && <SQLConsole />}
         {activeTab === 'ai_mode' && <ComingSoon title="AI Mode" />}
       </main>
-    </div>
+    </div >
   );
 }
 

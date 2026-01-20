@@ -21,6 +21,12 @@ def fetch_paginated_table(conn, table_name, page=1, page_size=50, sort_column=No
             elif table_name == 'variants':
                 sort_column = 'variant_name'
                 sort_direction = 'ASC'
+            elif table_name == 'restaurants':
+                sort_column = 'restaurant_id'
+            elif table_name == 'order_taxes':
+                sort_column = 'created_at'
+            elif table_name == 'order_discounts':
+                sort_column = 'created_at'
             else:
                 sort_column = 'created_at'
         

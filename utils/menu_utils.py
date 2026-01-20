@@ -14,6 +14,7 @@ from utils.id_generator import generate_deterministic_id
 
 
 
+
 def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: bool = False) -> Dict[str, Any]:
     """
     Merge source_id (UUID) into target_id (UUID).
@@ -285,5 +286,41 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
     except Exception as e:
         conn.rollback()
         return {"status": "error", "message": f"Undo failed: {e}"}
+    finally:
+        cursor.close()
+
+def verify_item(conn, item_id: str, new_name: str = None, new_type: str = None) -> Dict[str, Any]:
+    """Mark an item as verified, optionally updating name/type"""
+    cursor = conn.cursor()
+    try:
+        if new_name and new_type:
+            # Check if this new name+type triggers a collision
+            new_id = generate_deterministic_id(new_name, new_type)
+            
+            # If ID changes, we need to handle merge/move logic
+            # For simplicity, if ID matches existing, we merge. If not, we rename.
+            
+            cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = %s", (new_id,))
+            exists = cursor.fetchone()
+            
+            if exists and exists[0] != item_id:
+                # Merge current item into the existing target
+                return merge_menu_items(conn, item_id, new_id)
+            else:
+                 # Just rename and verify
+                cursor.execute("""
+                    UPDATE menu_items 
+                    SET name = %s, type = %s, is_verified = TRUE
+                    WHERE menu_item_id = %s
+                """, (new_name, new_type, item_id))
+        else:
+            cursor.execute("UPDATE menu_items SET is_verified = TRUE WHERE menu_item_id = %s", (item_id,))
+        
+        conn.commit()
+        export_to_backups(conn)
+        return {"status": "success", "message": "Item verified successfully"}
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": f"Verification failed: {e}"}
     finally:
         cursor.close()

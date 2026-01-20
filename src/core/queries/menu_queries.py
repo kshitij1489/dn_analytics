@@ -149,3 +149,33 @@ def fetch_menu_types(conn):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT DISTINCT type FROM menu_items ORDER BY type")
     return [t['type'] for t in cursor.fetchall()]
+
+def fetch_unverified_items(conn):
+    """Fetch all unverified menu items with suggestions"""
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    query = """
+        SELECT 
+            m.menu_item_id, m.name, m.type, m.created_at, m.suggestion_id,
+            s.name as suggestion_name, s.type as suggestion_type
+        FROM menu_items m
+        LEFT JOIN menu_items s ON m.suggestion_id = s.menu_item_id
+        WHERE m.is_verified = FALSE
+        ORDER BY m.name
+    """
+    cursor.execute(query)
+    return pd.DataFrame(cursor.fetchall()) 
+
+def fetch_menu_matrix(conn):
+    """Fetch the full menu matrix"""
+    query = """
+        SELECT 
+            mi.name, mi.type, v.variant_name, miv.price, miv.is_active, 
+            miv.addon_eligible, miv.delivery_eligible, miv.menu_item_id, miv.variant_id
+        FROM menu_item_variants miv
+        JOIN menu_items mi ON miv.menu_item_id = mi.menu_item_id
+        JOIN variants v ON miv.variant_id = v.variant_id
+        ORDER BY mi.type, mi.name, v.variant_name
+    """
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(query)
+    return pd.DataFrame(cursor.fetchall())
