@@ -331,6 +331,22 @@ When I ask for queries, please:
                 >
                     🤖 LLM Prompt
                 </button>
+                <button
+                    onClick={() => alert("Reset DB functionality coming soon!")}
+                    style={{
+                        padding: '12px',
+                        background: '#fee2e2',
+                        color: '#dc2626',
+                        border: 'none',
+                        borderRadius: '25px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                        marginLeft: '10px'
+                    }}
+                >
+                    ⚠️ Reset DB
+                </button>
             </div>
 
             {/* Content Area */}

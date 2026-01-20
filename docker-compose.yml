@@ -27,33 +27,6 @@ services:
       - analytics-network
     restart: unless-stopped
 
-  # Streamlit Application
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: analytics-app
-    environment:
-      DB_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics
-      STREAMLIT_SERVER_PORT: 8501
-      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
-    ports:
-      - "${APP_PORT:-8501}:8501"
-    volumes:
-      - ./src:/app/src
-      - ./run_app.py:/app/run_app.py
-      - ./database:/app/database
-      - ./scripts:/app/scripts
-      # Mount data and utils for live updates
-      - ./data:/app/data
-      - ./utils:/app/utils
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - analytics-network
-    restart: unless-stopped
-
 volumes:
   postgres_data:
     driver: local

@@ -13,8 +13,7 @@ help:
 	@echo "  make restart    - Restart all services"
 	@echo "  make clean      - Stop and remove all containers/volumes"
 	@echo "  make psql       - Access PostgreSQL shell"
-	@echo "  make shell      - Access app container shell"
-	@echo "  make shell      - Access app container shell"
+	@echo "  make psql-shell - Access PostgreSQL shell"
 	@echo "  make sync       - Sync new orders"
 	@echo "  make reload-all - Reload all orders from API (for migrations)"
 
@@ -25,7 +24,7 @@ build:
 # Start services
 up:
 	docker-compose up -d
-	@echo "Services started. App available at http://localhost:8501"
+	@echo "PostgreSQL started on port 5432. Run API with: cd src/api && uvicorn main:app --reload"
 
 # Stop services
 down:
@@ -48,21 +47,21 @@ clean:
 psql:
 	docker-compose exec postgres psql -U postgres -d analytics
 
-# Access app container shell
-shell:
-	docker-compose exec app bash
+# Access postgres container shell
+psql-shell:
+	docker-compose exec postgres bash
 
 
-# Sync new orders
+# Sync new orders (run locally)
 sync:
-	docker-compose exec app python3 services/load_orders.py \
-		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics" \
+	python3 services/load_orders.py \
+		--db-url "postgresql://postgres:postgres@localhost:5432/analytics" \
 		--incremental
 
-# Reload all orders (for migrations)
+# Reload all orders (run locally, for migrations)
 reload-all:
-	docker-compose exec app python3 services/load_orders.py \
-		--db-url "postgresql://postgres:$${POSTGRES_PASSWORD:-postgres}@postgres:5432/analytics"
+	python3 services/load_orders.py \
+		--db-url "postgresql://postgres:postgres@localhost:5432/analytics"
 
 # Rebuild and restart
 rebuild:
