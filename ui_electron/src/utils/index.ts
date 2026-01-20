@@ -12,3 +12,5 @@ export {
     type SortDirection,
     type SortConfig
 } from './sorting';
+export { formatColumnHeader } from './formatColumnHeader';
+

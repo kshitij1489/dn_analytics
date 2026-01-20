@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { endpoints } from '../api';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
+import { formatColumnHeader } from '../utils';
 
 // --- Shared Components ---
 
@@ -449,7 +450,7 @@ function VariantsTab() {
                             <tr>
                                 {displayColumns.map(col => (
                                     <th key={col} onClick={() => handleSort(col)}>
-                                        {col.replace(/_/g, ' ').toUpperCase()}{renderSortIcon(col)}
+                                        {formatColumnHeader(col)}{renderSortIcon(col)}
                                     </th>
                                 ))}
                             </tr>

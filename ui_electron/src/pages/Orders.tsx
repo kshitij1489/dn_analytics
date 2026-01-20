@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { endpoints } from '../api';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
+import { formatColumnHeader } from '../utils';
 
 // --- Shared Components (Duplicated from Menu for now to keep independent) ---
 
@@ -240,7 +241,7 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at' }: { title: s
                             <tr>
                                 {finalColumns.map(col => (
                                     <th key={col} onClick={() => handleSort(col)}>
-                                        {col.replace(/_/g, ' ').toUpperCase()}{renderSortIcon(col)}
+                                        {formatColumnHeader(col)}{renderSortIcon(col)}
                                     </th>
                                 ))}
                             </tr>
