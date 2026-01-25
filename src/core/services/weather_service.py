@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import date, datetime, timedelta
 from src.core.db.connection import get_db_connection
-from src.core.utils.path_helper import get_resource_path
+from src.core.utils.path_helper import get_resource_path, get_data_path
 
 # Open-Meteo Endpoints
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -73,15 +73,64 @@ class WeatherService:
 
     def sync_weather_data(self, city: str = "Gurugram"):
         """
-        Incremental sync (for daily usage).
-        For now, we can just alias this to regenerate to ensure consistency, 
-        or implement smart logic later. Given the user request, 
-        we primarily want strict correctness now.
+        Smart sync for weather data:
+        1. If DB is empty, fetch historical data for the last 365 days.
+        2. If DB has data, find the last date and fetch missing days up to today.
+        3. Refresh forecast snapshots for the last few days and today.
+        4. Export to CSV.
         """
-        # TODO: Optimize to only fetch missing days for production.
-        # For now, per user instruction to "always write forecast", regeneration is safest 
-        # but slow. Let's do a smart sync: Check missing days -> fetch them.
-        return self.regenerate_weather_data(city)
+        conn, _ = get_db_connection()
+        if not conn:
+            return False, "Database connection failed"
+
+        try:
+            lat, lon = self.get_lat_lon(city)
+            today = date.today()
+            
+            # Check for existing data
+            cursor = conn.execute("SELECT MAX(date) FROM weather_daily WHERE city = ?", (city,))
+            row = cursor.fetchone()
+            last_date_str = row[0] if row else None
+
+            if not last_date_str:
+                print(f"Weather DB empty. Initializing with last 365 days for {city}...")
+                start_date = today - timedelta(days=365)
+                start_date_str = start_date.isoformat()
+            else:
+                last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
+                if last_date >= today:
+                    print(f"Weather data up to date ({last_date_str}). Syncing forecast only.")
+                    # Still refresh today and future snapshots
+                    start_date_str = today.isoformat()
+                else:
+                    # Start from the day after the last date
+                    start_date = last_date + timedelta(days=1)
+                    start_date_str = start_date.isoformat()
+                    print(f"Syncing remaining weather data from {start_date_str} to today...")
+
+            # 1. Fetch & Store actuals (Archive)
+            # Fetch up to yesterday (Archive API usually has ~2 day lag for latest actuals, 
+            # but we fetch up to yesterday to maximize coverage and then fill with forecast)
+            archive_end = today - timedelta(days=1)
+            self._fetch_and_store_archive(conn, lat, lon, city, start_date_str, archive_end.isoformat())
+            
+            # 2. Populate/Refresh Forecast Snapshots
+            # We refresh the last 7 days to ensure we have the latest retrospective forecasts
+            # and today's live forecast.
+            forecast_start = today - timedelta(days=7)
+            self._populate_forecast_snapshots(conn, lat, lon, city, forecast_start.isoformat(), today)
+            
+            # 3. Export
+            self.export_weather_csv(conn, city)
+            
+            conn.commit()
+            return True, f"Weather data synced from {start_date_str}."
+            
+        except Exception as e:
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
 
 
     def _clear_data(self, conn):
@@ -89,7 +138,7 @@ class WeatherService:
         conn.execute("DELETE FROM weather_daily")
         
         # Use absolute path handling for frozen app
-        csv_path = get_resource_path(os.path.join("data", "weather_history.csv"))
+        csv_path = get_data_path(os.path.join("data", "weather_history.csv"))
         
         if os.path.exists(csv_path):
             os.remove(csv_path)
@@ -118,7 +167,7 @@ class WeatherService:
         
         for i, d in enumerate(dates):
             conn.execute("""
-                INSERT INTO weather_daily 
+                INSERT OR REPLACE INTO weather_daily 
                 (date, city, temp_max, temp_min, temp_mean, precipitation_sum, rain_sum, wind_speed_max, weather_code, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (
@@ -202,7 +251,7 @@ class WeatherService:
         )
         
         # Use absolute path handling
-        output_dir = get_resource_path("data")
+        output_dir = get_data_path("data")
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
             

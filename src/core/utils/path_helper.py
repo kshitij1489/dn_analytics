@@ -22,7 +22,23 @@ def get_base_path():
 
 def get_resource_path(relative_path):
     """
-    Get absolute path to a resource, works for dev and frozen app.
+    Get absolute path to a bundled resource (read-only).
+    Use this for icons, static config, etc.
     """
     base = get_base_path()
     return os.path.join(base, relative_path)
+
+def get_data_path(relative_path):
+    """
+    Get absolute path to a writable data file.
+    In frozen/release mode, it uses the directory of DB_URL (which Electron sets to userData).
+    """
+    if getattr(sys, 'frozen', False):
+        db_url = os.environ.get("DB_URL")
+        if db_url:
+            # db_url is absolute path to analytics.db
+            base_dir = os.path.dirname(db_url)
+            return os.path.join(base_dir, relative_path)
+    
+    # Fallback to project root in dev
+    return get_resource_path(relative_path)
