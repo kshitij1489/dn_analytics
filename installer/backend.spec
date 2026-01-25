@@ -1,22 +1,32 @@
-# -*- mode: python ; coding: utf-8 -*-
-import sys
 import os
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
 # We are in installers/ folder. Root is one level up.
 project_root = os.path.abspath(os.path.join(os.getcwd(), '..'))
 
+# Collect Prophet & CmdStanPy
+datas = []
+binaries = []
+hiddenimports = []
+
+for pkg in ['prophet', 'cmdstanpy', 'statsmodels']:
+    tmp_ret = collect_all(pkg)
+    datas += tmp_ret[0]
+    binaries += tmp_ret[1]
+    hiddenimports += tmp_ret[2]
+
 a = Analysis(
     ['backend_entry.py'],
     pathex=[project_root],
-    binaries=[],
-    datas=[
+    binaries=binaries,
+    datas=datas + [
         # Data files only (non-Python)
         (os.path.join(project_root, 'data'), 'data'),
         (os.path.join(project_root, 'database'), 'database'),
     ],
-    hiddenimports=[
+    hiddenimports=hiddenimports + [
         # Uvicorn internals
         'uvicorn.logging',
         'uvicorn.loops',

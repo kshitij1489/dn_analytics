@@ -453,3 +453,31 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+
+-- ============================================================================
+-- 19. WEATHER DATA
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS weather_daily (
+    date TEXT,        -- YYYY-MM-DD
+    city TEXT,
+    
+    -- Observed Metrics (Actuals)
+    temp_max DECIMAL(4,1),
+    temp_min DECIMAL(4,1),
+    temp_mean DECIMAL(4,1),
+    precipitation_sum DECIMAL(6,1),
+    rain_sum DECIMAL(6,1),
+    wind_speed_max DECIMAL(4,1),
+    
+    -- Weather Codes (WMO)
+    weather_code INTEGER,
+    
+    -- Forecast Snapshot (JSON) - Predictions for next 7 days made on this date
+    forecast_snapshot TEXT,
+    
+    -- Metadata
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    
+    PRIMARY KEY (date, city)
+);

@@ -10,13 +10,12 @@ from pathlib import Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.db.connection import get_db_connection
+from src.core.utils.path_helper import get_resource_path
 
 def perform_seeding(conn):
     """Restore menu data from JSON backups in data/archive/"""
     # Paths
-    # Paths
-    project_root = Path(__file__).resolve().parent.parent
-    archive_dir = project_root / "data"
+    archive_dir = Path(get_resource_path("data"))
     cluster_state_path = archive_dir / "cluster_state_backup.json"
     id_maps_path = archive_dir / "id_maps_backup.json"
     
@@ -133,8 +132,7 @@ def perform_seeding(conn):
 
 def export_to_backups(conn):
     """Dump database state to JSON backups in data/archive/"""
-    project_root = Path(__file__).resolve().parent.parent
-    archive_dir = project_root / "data"
+    archive_dir = Path(get_resource_path("data"))
     archive_dir.mkdir(parents=True, exist_ok=True)
     
     cluster_state_path = archive_dir / "cluster_state_backup.json"

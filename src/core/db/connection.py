@@ -14,7 +14,7 @@ def get_db_connection(db_url=None):
         
         print(f"Connecting to database at: {os.path.abspath(target_db)}")
         
-        conn = sqlite3.connect(target_db, check_same_thread=False)
+        conn = sqlite3.connect(target_db, check_same_thread=False, timeout=30.0)
         
         # Enable Access to Columns by Name (like RealDictCursor)
         conn.row_factory = sqlite3.Row

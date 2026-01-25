@@ -50,6 +50,7 @@ export const endpoints = {
         customerLoyalty: (params?: any) => api.get('/insights/customer/loyalty', { params }),
         topCustomers: (params?: any) => api.get('/insights/customer/top', { params }),
         avgRevenueByDay: (params?: any) => api.get('/insights/avg_revenue_by_day', { params }),
+        brandAwareness: (params?: any) => api.get('/insights/brand_awareness', { params }),
     },
 
     menu: {

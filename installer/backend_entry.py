@@ -1,6 +1,7 @@
 import os
 import sys
 import multiprocessing
+import logging
 
 # 1. Add the project root to sys.path so we can import 'src'
 #    When running from the source: __file__ is installer/backend_entry.py, so root is ..

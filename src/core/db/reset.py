@@ -1,6 +1,7 @@
 import os
 import sqlite3
 from src.core.db.connection import get_db_connection, DB_PATH
+from src.core.utils.path_helper import get_resource_path
 from scripts.seed_from_backups import perform_seeding
 
 def reset_database():
@@ -13,8 +14,11 @@ def reset_database():
     """
     try:
         # 1. Delete existing DB file
-        if os.path.exists(DB_PATH):
-            os.remove(DB_PATH)
+        # 1. Delete existing DB file
+        target_db = os.environ.get("DB_URL") or DB_PATH
+        if os.path.exists(target_db):
+            os.remove(target_db)
+            print(f"Deleted database at {target_db}")
             
         # 2. Create new connection
         conn, _ = get_db_connection()
@@ -22,8 +26,7 @@ def reset_database():
             raise Exception("Failed to connect/create database")
             
         # 3. Apply Schema
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        schema_path = os.path.join(base_dir, "database", "schema_sqlite.sql")
+        schema_path = get_resource_path(os.path.join("database", "schema_sqlite.sql"))
         
         if os.path.exists(schema_path):
             with open(schema_path, "r") as f:

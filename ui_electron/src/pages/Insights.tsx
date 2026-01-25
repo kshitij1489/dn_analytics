@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
 import { ResizableTableWrapper } from '../components/ResizableTableWrapper';
 import { exportToCSV } from '../utils/csv';
-
-
-
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState('dailySales');
     const [kpis, setKpis] = useState<any>(null);

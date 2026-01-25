@@ -12,15 +12,12 @@ DB_PATH = os.environ.get('DB_URL') or os.path.join(os.getcwd(), 'analytics.db')
 class ConfigUpdate(BaseModel):
     settings: Dict[str, str]
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from src.core.db.connection import get_db_connection
 
 @router.get("/")
 def get_config():
     """Get all configuration settings"""
-    conn = get_db_connection()
+    conn, _ = get_db_connection()
     try:
         # First ensure table exists (idempotent for fresh dbs)
         conn.execute("""
@@ -95,7 +92,7 @@ def verify_config(data: ConfigVerification):
 @router.post("/")
 def update_config(data: ConfigUpdate):
     """Update configuration settings (Upsert)"""
-    conn = get_db_connection()
+    conn, _ = get_db_connection()
     try:
         # Ensure table exists
         conn.execute("""

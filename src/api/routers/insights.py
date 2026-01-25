@@ -126,3 +126,17 @@ def get_avg_revenue_by_day(
     df = insights_queries.fetch_avg_revenue_by_day(conn, start_date, end_date)
     return df_to_json(df)
 
+
+@router.get("/brand_awareness")
+def get_brand_awareness(granularity: str = 'day', conn=Depends(get_db)):
+    """Get new verified customer growth over time.
+    
+    Args:
+        granularity: 'day', 'week', 'month'
+    """
+    from src.core.queries.customer_queries import fetch_brand_awareness
+    data = fetch_brand_awareness(conn, granularity)
+    return {"data": data}
+
+
+

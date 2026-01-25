@@ -144,3 +144,33 @@ def fetch_top_customers(conn):
     """
     cursor = conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+
+def fetch_brand_awareness(conn, granularity: str = 'day'):
+    """
+    Fetch new verified customers count grouped by first_order_date.
+    Granularity: 'day', 'week', 'month'
+    """
+    # SQLite date formatting
+    if granularity == 'month':
+        date_format = '%Y-%m'
+    elif granularity == 'week':
+        # %W returns week number (00-53)
+        date_format = '%Y-%W'
+    else: # day
+        date_format = '%Y-%m-%d'
+
+    query = f"""
+        SELECT 
+            strftime('{date_format}', first_order_date) as date,
+            COUNT(*) as new_customers
+        FROM customers
+        WHERE is_verified = 1
+          AND first_order_date IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1 ASC
+    """
+    
+    cursor = conn.execute(query)
+    rows = [dict(row) for row in cursor.fetchall()]
+    return rows
+
