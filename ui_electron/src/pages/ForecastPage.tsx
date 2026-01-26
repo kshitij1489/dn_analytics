@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
 import { Card, LoadingSpinner, ResizableTableWrapper } from '../components';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
+    ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
 } from 'recharts';
 import './ForecastPage.css';
 
@@ -87,10 +87,13 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     // 1. Historical Actuals (Blue Line)
+    // CRITICAL: Use sale_date as both map key AND set it as 'date' field for chart consistency
     data?.historical.forEach(d => {
-        updateEntry(d.sale_date, 'historical', d.revenue);
-        updateEntry(d.sale_date, 'temp_max', d.temp_max);
-        updateEntry(d.sale_date, 'rain_category', d.rain_category);
+        const dateKey = d.sale_date;
+        updateEntry(dateKey, 'date', dateKey); // Explicitly set the date field
+        updateEntry(dateKey, 'historical', d.revenue);
+        updateEntry(dateKey, 'temp_max', d.temp_max);
+        updateEntry(dateKey, 'rain_category', d.rain_category);
     });
 
     // 2. Weekday Avg (Green Line)
@@ -117,6 +120,18 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
         new Date(a.date).getTime() - new Date(b.date).getTime()
     );
 
+    // DEBUG: Log chart data to console
+    console.log('=== CHART DATA DEBUG ===');
+    console.log('Total data points:', chartData.length);
+    console.log('First 3 dates:', chartData.slice(0, 3).map(d => d.date));
+    console.log('Last 3 dates:', chartData.slice(-3).map(d => d.date));
+    const rainDays = chartData.filter(d => d.rain_category && d.rain_category !== 'none');
+    console.log('Rain days count:', rainDays.length);
+    console.log('Rain days:', rainDays.map(d => ({ date: d.date, category: d.rain_category })));
+    const todayStr = new Date().toISOString().split('T')[0];
+    console.log('Today string:', todayStr);
+    console.log('Today in data?', chartData.some(d => d.date === todayStr));
+
     return (
         <div className="forecast-page">
             <div className="forecast-header">
@@ -138,10 +153,11 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
             <Card title="Revenue Trend - Multi-Algorithm Comparison">
                 <div className="forecast-chart-container">
                     <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={chartData} margin={{ top: 10, right: 30, left: 20, bottom: 0 }}>
+                        <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
                             <XAxis
                                 dataKey="date"
+                                type="category"
                                 tickFormatter={formatDate}
                                 tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
                             />
@@ -165,23 +181,18 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                             <Tooltip
                                 contentStyle={{ backgroundColor: 'var(--card-bg)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
                                 labelFormatter={formatDate}
-                                formatter={(val: number | undefined, name: string | undefined) => {
-                                    if (name === 'Temperature') return [`${val}°C`, name];
-                                    return [formatCurrency(val || 0), name || 'Revenue'];
+                                formatter={(val: any, name: string | undefined, props: any) => {
+                                    const labelName = name || 'Revenue';
+                                    if (labelName === 'Temperature') return [`${parseFloat(val).toFixed(1)}°C`, labelName];
+                                    const entry = props.payload;
+                                    const rainLabel = entry?.rain_category && entry.rain_category !== 'none'
+                                        ? ` (${entry.rain_category.toUpperCase()} RAIN)`
+                                        : '';
+                                    return [`${formatCurrency(val || 0)}${labelName === 'Historical' ? rainLabel : ''}`, labelName];
                                 }}
                             />
                             <Legend />
 
-                            {/* Rain Indicators (Vertical Lines) */}
-                            {chartData.map((entry, index) => {
-                                if (entry.rain_category === 'heavy') {
-                                    return <ReferenceLine key={`heavy-${index}`} x={entry.date} stroke="#3B82F6" strokeWidth={2} label={{ value: '🌧️', position: 'insideTop' }} />;
-                                }
-                                if (entry.rain_category === 'drizzle') {
-                                    return <ReferenceLine key={`drizzle-${index}`} x={entry.date} stroke="#93C5FD" strokeDasharray="3 3" label={{ value: '💧', position: 'insideTop' }} />;
-                                }
-                                return null;
-                            })}
 
                             {/* Historical Line */}
                             <Line
@@ -242,7 +253,33 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                                 dot={false}
                                 connectNulls={true}
                             />
-                        </LineChart>
+
+
+                            {/* Rain Indicators (Vertical Lines) - Light dotted lines */}
+                            {chartData.map((entry) => {
+                                if (entry.rain_category && entry.rain_category !== 'none') {
+                                    const isHeavy = entry.rain_category === 'heavy';
+                                    const color = isHeavy ? "#60A5FA" : "#93C5FD"; // Light blue colors
+                                    return (
+                                        <ReferenceLine
+                                            yAxisId="left"
+                                            key={`rain-${entry.date}`}
+                                            x={entry.date}
+                                            stroke={color}
+                                            strokeWidth={1}
+                                            strokeDasharray="4 4"
+                                            label={{
+                                                value: isHeavy ? '🌧️' : '💧',
+                                                position: 'top',
+                                                fill: color,
+                                                fontSize: 14
+                                            }}
+                                        />
+                                    );
+                                }
+                                return null;
+                            })}
+                        </ComposedChart>
                     </ResponsiveContainer>
                 </div>
             </Card>
