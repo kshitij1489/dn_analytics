@@ -63,4 +63,36 @@ make logs
 - **Database Reset**: Run `make clean && make up` to wipe and re-seed the DB.
 - **New Orders**: Run `make sync` to fetch incremental orders.
 
+## ✨ Functionalities
 
+### 📊 1. Insights & KPIs
+- **Real-time Business Health**: Track Revenue, Total Orders, Average Order Value (AOV), and customer growth at a glance.
+- **Trend Analysis**: Visual graphs showing sales performance over custom time ranges (daily, weekly, monthly).
+
+### ☀️ 2. Today's Dashboard
+- **Live Operation View**: See what is happening in the restaurant *right now*.
+- **Hourly Breakdown**: Track sales peaks and troughs hour-by-hour.
+- **Top Sellers**: Identify the best-performing items of the current day.
+
+### 🔮 3. Smart Forecasting
+- **Sales Predictions**: Uses historical data and weather patterns to forecast future revenue.
+- **Algorithm Comparison**: Compares different forecasting models (Prophet vs. Holt-Winters vs. Weekday Average) to find the most accurate prediction.
+- **Weather Integration**: Correlates sales with historical weather conditions (Temperature, Rain) for smarter inventory planning.
+
+### 🍽 4. Menu Analytics
+- **Pareto Analysis (80/20 Rule)**: Identifies the 20% of items contributing to 80% of revenue.
+- **Item Performance**: Detailed breakdown of "Sold Count", "Revenue Share", and "Repeat Rate" for each dish.
+- **Variant Tracking**: Analyzes performance of different item sizes/flavors (e.g., Small vs. Large).
+- **[Item Clustering Logic](item_clustering.md)**: Intelligent system to normalize messy order names into clean menu items.
+
+### 📝 5. Order Management
+- **Centralized Order History**: Searchable database of all past orders from all sources (Swiggy, Zomato, POS).
+- **Customer Identity**: Tracks customer lifetime value and repeat purchase behavior.
+
+### 🤖 6. AI Assistant & SQL Console
+- **Natural Language Queries**: Ask questions like *"What was the best selling item last Friday?"* and get instant answers.
+- **Advanced SQL Mode**: Direct SQL access for power users to run complex custom queries on the dataset.
+
+### 📦 7. Inventory & Operations
+- **COGS Analysis**: Understand Cost of Goods Sold.
+- **Inventory Tracking**: (In Progress) Monitor stock levels based on sales data.
