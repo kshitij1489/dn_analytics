@@ -1,0 +1,45 @@
+# Environment files
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files
+*.db
+*.sqlite
+sample_payloads/*.json
+raw_data/
+
+# Build artifacts
+dist-backend/
+build-backend/
+ui_electron/dist_electron/
+ui_electron/dist/
+node_modules/
+ui_electron/node_modules/
+
+# Logs
+*.log
+
+# Docker
+.docker/

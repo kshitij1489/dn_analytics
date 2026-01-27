@@ -1,0 +1,6 @@
+-- ============================================================================
+-- Seed Data
+-- ============================================================================
+-- Optional file for initial data.
+-- Currently empty as the request is to support a fresh empty DB.
+-- Add INSERT statements here if needed mainly for testing or static config.

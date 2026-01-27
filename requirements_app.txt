@@ -1,0 +1,13 @@
+# Requirements for Analytics Database Client App
+
+# Core dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Data fetching
+requests>=2.31.0
+
+# Optional: For better table display
+# plotly>=5.17.0
+
