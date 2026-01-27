@@ -1,0 +1,445 @@
+:root {
+  /* Default Dark Mode (Existing) */
+  --bg-color: #1a1a1a;
+  --sidebar-bg: #2d2d2d;
+  --text-color: #ffffff;
+  --text-secondary: #a0a0a0;
+  --accent-color: #0A84FF;
+  /* iOS Dark Mode Blue */
+  --card-bg: #1e1e1e;
+  --border-color: #333;
+  --hover-bg: #3d3d3d;
+  --button-bg: #1a1a1a;
+  --button-text: #ffffff;
+  --input-bg: #2d2d2d;
+  --input-border: #444;
+  --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --table-header-bg: #2d2d2d;
+  /* Dark Grey */
+}
+
+.light-mode {
+  /* iOS-Style Light Mode */
+  --bg-color: #FFFFFF;
+  /* Page White */
+  --sidebar-bg: #F2F2F7;
+  /* Sidebar Light Grey */
+  --text-color: #000000;
+  --text-secondary: #8E8E93;
+  /* System Gray */
+  --accent-color: #007AFF;
+  /* System Blue */
+  --card-bg: #FFFFFF;
+  --border-color: #C6C6C8;
+  /* System Separator */
+  --hover-bg: #E5E5EA;
+  /* System Fill */
+  --button-bg: #FFFFFF;
+  --button-text: #007AFF;
+  --input-bg: #E5E5EA;
+  --input-border: #C6C6C8;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --table-header-bg: #F3F4F6;
+  /* Light Grey */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 250px;
+  background-color: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border-right: 1px solid var(--border-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.logo {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin-bottom: 30px;
+  color: var(--accent-color);
+}
+
+.sidebar nav button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  margin-bottom: 5px;
+  cursor: pointer;
+  border-radius: 8px;
+  /* Slightly more rounded for iOS feel */
+  font-size: 1rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.sidebar nav button:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-color);
+}
+
+.sidebar nav button.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.main-content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  background-color: var(--bg-color);
+}
+
+.card {
+  background-color: var(--card-bg);
+  padding: 20px;
+  border-radius: 12px;
+  /* iOS rounded corners */
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border-color);
+}
+
+h1,
+h2,
+h3 {
+  margin-top: 0;
+  color: var(--text-color);
+}
+
+/* Common inputs/selects styling */
+select,
+input {
+  background-color: var(--input-bg) !important;
+  color: var(--text-color) !important;
+  border: 1px solid var(--input-border) !important;
+  border-radius: 8px !important;
+  padding: 8px !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-secondary);
+  border-radius: 4px;
+  opacity: 0.5;
+}
+
+/* Standard Table Design */
+.standard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text-color);
+  line-height: 1.5;
+}
+
+.standard-table thead {
+  position: sticky;
+  top: 0;
+  background-color: var(--table-header-bg);
+  z-index: 10;
+}
+
+.standard-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  user-select: none;
+  cursor: pointer;
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.standard-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.standard-table tbody tr:hover {
+  background-color: var(--hover-bg);
+}
+
+/* Table Alignment Utilities */
+.standard-table .text-right,
+.standard-table th.text-right,
+.standard-table td.text-right {
+  text-align: right;
+}
+
+.standard-table .text-center,
+.standard-table th.text-center,
+.standard-table td.text-center {
+  text-align: center;
+}
+
+/* Table Secondary Text (IDs, metadata) */
+.standard-table .text-secondary {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Sort Icons */
+.standard-table .sort-icon {
+  opacity: 0.5;
+  margin-left: 4px;
+}
+
+.standard-table .sort-icon.active {
+  opacity: 1;
+}
+
+/* Status Badges */
+.standard-table .status-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.standard-table .status-returning {
+  color: #15803d;
+}
+
+.standard-table .status-new {
+  color: var(--text-color);
+}
+
+/* Boolean Indicators */
+.standard-table .bool-indicator {
+  font-size: 14px;
+}
+
+/* =================================
+   PAGINATION COMPONENT
+   ================================= */
+.pagination-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.pagination-left,
+.pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pagination-select {
+  padding: 5px 10px;
+  background: var(--input-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pagination-info {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.pagination-page {
+  color: var(--text-color);
+  font-size: 0.9em;
+  padding: 0 10px;
+}
+
+.pagination-button {
+  padding: 5px 12px;
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pagination-button:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.pagination-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =================================
+   LOADING SPINNER COMPONENT
+   ================================= */
+.loading-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-small .loading-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.loading-large .loading-spinner {
+  width: 32px;
+  height: 32px;
+  border-width: 3px;
+}
+
+.loading-message {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.loading-text {
+  color: var(--text-secondary);
+  padding: 20px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =================================
+   ACTION BUTTON COMPONENT
+   ================================= */
+.action-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  font-size: 14px;
+}
+
+.action-button-small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.action-button-large {
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+.action-button-primary {
+  background: var(--accent-color);
+  color: white;
+}
+
+.action-button-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.action-button-secondary {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: 1px solid var(--border-color);
+}
+
+.action-button-secondary:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.action-button-danger {
+  background: #dc2626;
+  color: white;
+}
+
+.action-button-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.action-button-success {
+  background: #16a34a;
+  color: white;
+}
+
+.action-button-success:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.action-button-ghost {
+  background: transparent;
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+
+.action-button-ghost:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.action-button-disabled,
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =================================
+   SELECT COMPONENT
+   ================================= */
+.styled-select {
+  padding: 8px 12px;
+  background: var(--input-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  min-width: 120px;
+}
+
+.styled-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.styled-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

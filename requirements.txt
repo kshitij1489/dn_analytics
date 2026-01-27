@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pandas
+python-multipart
+requests
+pyinstaller
+openai
+python-dotenv
+prophet
+statsmodels
