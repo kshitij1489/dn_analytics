@@ -237,14 +237,21 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         # 1. Merge historical regressors
         future = future.merge(df[['ds', 'temp_max', 'rain_sum']], on='ds', how='left')
         
-        # 2. Fill future NaNs with Snapshot data from the LAST row (Today)
+        # 2. Fill future NaNs with Snapshot data from TODAY's row
         # This is CRITICAL because our DB only has data up to Today. 
         # Future 7 days depend on the forecast snapshot stored in today's row.
-        last_row = df.iloc[-1]
+        # NOTE: df.iloc[-1] might be tomorrow (empty row), so we explicitly look up today.
+        today_str = date.today().isoformat()
+        today_rows = df[df['ds'].dt.strftime('%Y-%m-%d') == today_str]
         
-        if last_row.get('forecast_snapshot'):
+        snapshot_str = None
+        if not today_rows.empty:
+            today_row = today_rows.iloc[0]
+            snapshot_str = today_row['forecast_snapshot'] if 'forecast_snapshot' in today_row.index else None
+        
+        if pd.notna(snapshot_str) and snapshot_str:
             try:
-                snapshot = json.loads(last_row['forecast_snapshot'])
+                snapshot = json.loads(snapshot_str)
                 times = snapshot.get('time', [])
                 temps = snapshot.get('temperature_2m_max', [])
                 rains = snapshot.get('precipitation_sum', []) # precipitation_sum includes rain+showers
