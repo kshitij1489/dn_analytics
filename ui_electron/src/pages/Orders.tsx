@@ -194,17 +194,17 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }
     if (title === 'Orders') {
         displayColumns = [
             'order_id', 'petpooja_order_id', 'stream_id', 'event_id', 'aggregate_id', 'customer_id',
-            'restaurant_id', 'occurred_at', 'created_on', 'order_type', 'order_from', 'sub_order_type',
+            'restaurant_id', 'created_on', 'order_type', 'order_from', 'sub_order_type',
             'order_from_id', 'order_status', 'biller', 'assignee', 'table_no', 'token_no', 'no_of_persons',
             'customer_invoice_id', 'core_total', 'tax_total', 'discount_total', 'delivery_charges',
-            'packaging_charge', 'service_charge', 'round_off', 'total', 'comment', 'created_at', 'updated_at'
+            'packaging_charge', 'service_charge', 'round_off', 'total', 'comment'
         ];
     } else if (title === 'Order Items') {
         displayColumns = [
-            'order_item_id', 'order_id', 'menu_item_id', 'variant_id', 'petpooja_itemid', 'itemcode',
+            'order_item_id', 'order_id', 'created_on', 'menu_item_id', 'variant_id', 'petpooja_itemid', 'itemcode',
             'name_raw', 'category_name', 'quantity', 'unit_price', 'total_price', 'tax_amount',
             'discount_amount', 'specialnotes', 'sap_code', 'vendoritemcode', 'match_confidence',
-            'match_method', 'created_at', 'updated_at'
+            'match_method'
         ];
     } else if (title === 'Customers') {
         displayColumns = [
@@ -219,12 +219,12 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }
         ];
     } else if (title === 'Taxes') {
         displayColumns = [
-            'order_tax_id', 'order_id', 'tax_title', 'tax_rate', 'tax_type', 'tax_amount', 'created_at'
+            'order_tax_id', 'order_id', 'created_on', 'tax_title', 'tax_rate', 'tax_type', 'tax_amount'
         ];
     } else if (title === 'Discounts') {
         displayColumns = [
-            'order_discount_id', 'order_id', 'discount_title', 'discount_type', 'discount_rate',
-            'discount_amount', 'created_at'
+            'order_discount_id', 'order_id', 'created_on', 'discount_title', 'discount_type', 'discount_rate',
+            'discount_amount'
         ];
     }
 

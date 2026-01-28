@@ -53,12 +53,28 @@ def fetch_paginated_table(conn, table_name, page=1, page_size=50, sort_column=No
         offset = (page - 1) * page_size
         
         # Data Query
-        query = f"""
-            SELECT * FROM {table_name}
-            {where_clause}
-            ORDER BY {sort_column} {sort_direction}
-            LIMIT {page_size} OFFSET {offset}
-        """
+        if table_name in ('order_items', 'order_taxes', 'order_discounts'):
+            # Special case: JOIN with orders to get created_on
+            alias = "t"
+            # Prefix sort column if it belongs to the child table (most do)
+            safe_sort = f"t.{sort_column}" if sort_column in ['created_at', 'updated_at', 'order_id'] else sort_column
+            if sort_column == 'created_on': safe_sort = 'o.created_on'
+            
+            query = f"""
+                SELECT t.*, o.created_on
+                FROM {table_name} t
+                JOIN orders o ON t.order_id = o.order_id
+                {where_clause.replace(table_name, 't') if where_clause else ''}
+                ORDER BY {safe_sort} {sort_direction}
+                LIMIT {page_size} OFFSET {offset}
+            """
+        else:
+            query = f"""
+                SELECT * FROM {table_name}
+                {where_clause}
+                ORDER BY {sort_column} {sort_direction}
+                LIMIT {page_size} OFFSET {offset}
+            """
         
         cursor = conn.execute(query, params)
         df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
