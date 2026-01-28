@@ -6,8 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from datetime import date, timedelta
 from typing import List, Dict, Any
 import pandas as pd
+import pandas as pd
+from datetime import datetime
 from src.api.routers.config import get_db_connection
 from src.core.services.weather_service import WeatherService
+from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date
 
 import json
 
@@ -35,12 +38,16 @@ def get_rain_cat(mm):
 
 def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
     """Fetch historical sales and weather data as a DataFrame."""
-    end_date = date.today() + timedelta(days=1)
+    # Use business date
+    today_str = get_current_business_date()
+    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+    
+    end_date = today_date + timedelta(days=1)
     start_date = end_date - timedelta(days=days + 1)
     
     # Left join orders with weather_daily
     # We aggregate orders first, then join weather
-    query = """
+    query = f"""
         SELECT 
             d.day as ds,
             COALESCE(sales.revenue, 0) as y,
@@ -62,7 +69,7 @@ def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
         ) d
         LEFT JOIN (
             SELECT 
-                DATE(created_on) as sale_date,
+                {BUSINESS_DATE_SQL} as sale_date,
                 SUM(total) as revenue,
                 COUNT(*) as orders_count
             FROM orders
@@ -104,8 +111,12 @@ def forecast_weekday_avg(df: pd.DataFrame, periods: int = 7) -> List[Dict]:
     # 1. Historical Data (last 30 days from df)
     # 2. Future Data (next 'periods' days)
     
+
     # Filter df to last 30 days for clarity if passed larger df
-    start_date_hist = date.today() - timedelta(days=30)
+    today_str = get_current_business_date()
+    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+    
+    start_date_hist = today_date - timedelta(days=30)
     df_hist = df[df['ds'].dt.date >= start_date_hist].copy()
     
     all_dates = []
@@ -115,7 +126,7 @@ def forecast_weekday_avg(df: pd.DataFrame, periods: int = 7) -> List[Dict]:
         all_dates.append(d)
         
     # Add future dates
-    end_date = date.today()
+    end_date = today_date
     for i in range(periods):
         all_dates.append(end_date + timedelta(days=i))
         
@@ -156,7 +167,9 @@ def forecast_holt_winters(df: pd.DataFrame, periods: int = 7) -> Dict:
         from statsmodels.tsa.holtwinters import ExponentialSmoothing
         
         if len(df) < 14:
-            return {"data": [{"date": (date.today() + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": "Not enough data"}
+            today_str = get_current_business_date()
+            today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+            return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": "Not enough data"}
         
         # Prepare time series with proper date range
         df_copy = df.copy()
@@ -182,7 +195,9 @@ def forecast_holt_winters(df: pd.DataFrame, periods: int = 7) -> Dict:
         results = []
         
         # 1. Historical Fitted Values (Last 30 days)
-        start_date_hist = pd.Timestamp(date.today() - timedelta(days=30))
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+        start_date_hist = pd.Timestamp(today_date - timedelta(days=30))
         # Filter fitted values to >= 30 days ago
         fitted_hist = fitted.fittedvalues[fitted.fittedvalues.index >= start_date_hist]
         
@@ -203,7 +218,9 @@ def forecast_holt_winters(df: pd.DataFrame, periods: int = 7) -> Dict:
         
         return {"data": results, "error": None}
     except Exception as e:
-        return {"data": [{"date": (date.today() + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": str(e)}
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+        return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": str(e)}
 
 def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
     try:
@@ -213,11 +230,16 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
         
         if len(df) < 14:
-             return {"data": [{"date": (date.today() + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": "Not enough data"}
+             today_str = get_current_business_date()
+             today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+             return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": "Not enough data"}
         
         # Filter training data to exclude Today (as it's incomplete)
         # But we keep full 'df' to access Today's forecast snapshot
-        train_df = df[df['ds'].dt.date < date.today()].copy()
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+        
+        train_df = df[df['ds'].dt.date < today_date].copy()
         prophet_df = train_df[['ds', 'y', 'temp_max', 'rain_sum']]
         
         model = Prophet(
@@ -241,7 +263,8 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         # This is CRITICAL because our DB only has data up to Today. 
         # Future 7 days depend on the forecast snapshot stored in today's row.
         # NOTE: df.iloc[-1] might be tomorrow (empty row), so we explicitly look up today.
-        today_str = date.today().isoformat()
+        
+        # today_str is already set above
         today_rows = df[df['ds'].dt.strftime('%Y-%m-%d') == today_str]
         
         snapshot_str = None
@@ -276,7 +299,7 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         # 1. Historical Fitted Values (Last 30 days)
         # 2. Future Forecasts (Today ... +6 days)
         
-        start_date_hist = pd.Timestamp(date.today() - timedelta(days=30))
+        start_date_hist = pd.Timestamp(today_date - timedelta(days=30))
         # Filter: ds >= 30 days ago
         forecast_period = forecast[forecast['ds'] >= start_date_hist]
         
@@ -307,7 +330,9 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         
         return {"data": results, "error": None}
     except Exception as e:
-        return {"data": [{"date": (date.today() + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": str(e)}
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+        return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": str(e)}
 
 
 @router.get("/")
@@ -319,9 +344,12 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         df = get_historical_data(conn, days=90)
         
         # Exclude Today from historical "truth" to prevent partial data from skewing stats
-        df_history = df[df['ds'].dt.date < date.today()]
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
         
-        history_30d = df_history[df_history['ds'] >= pd.Timestamp(date.today() - timedelta(days=30))]
+        df_history = df[df['ds'].dt.date < today_date]
+        
+        history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
         
 
         history_rows = [
@@ -354,7 +382,7 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         
         # Calculate Projected Revenue/Orders only for FUTURE dates (next 7 days)
         # forecast_weekday now includes history, so we must filter.
-        future_start_date = date.today().isoformat()
+        future_start_date = today_str
         
         # Filter for summary stats
         future_weekday = [f for f in forecast_weekday if f['date'] >= future_start_date]
@@ -364,7 +392,7 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         
         return {
             "summary": {
-                "generated_at": date.today().isoformat(),
+                "generated_at": today_str,
                 "projected_7d_revenue": total_projected_revenue,
                 "projected_7d_orders": total_projected_orders
             },

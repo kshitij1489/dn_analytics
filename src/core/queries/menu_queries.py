@@ -1,4 +1,5 @@
 import pandas as pd
+from datetime import datetime, timedelta
 
 def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None, end_date=None, selected_weekdays=None):
     """Fetch Menu Analytics (Reorder stats, revenue, etc) with filtering"""
@@ -9,15 +10,18 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
     
     if start_date:
         order_filter_sql += " AND o.created_on >= ?"
-        order_params.append(start_date)
+        # Business day starts at 5:00 AM
+        order_params.append(f"{start_date} 05:00:00")
     if end_date:
-        # Include the full end day
+        # Business day ends at 4:59:59 AM NEXT day
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        end_str = end_dt.strftime("%Y-%m-%d")
         order_filter_sql += " AND o.created_on <= ?"
-        order_params.append(f"{end_date} 23:59:59")
+        order_params.append(f"{end_str} 04:59:59")
     if selected_weekdays and len(selected_weekdays) < 7:
         placeholders = ",".join("?" for _ in selected_weekdays)
-        # SQLite %w: 0-6 (Sun-Sat). Postgres/Input might differ. Assuming input matches standard conventions.
-        order_filter_sql += f" AND TRIM(strftime('%w', o.created_on)) IN ({placeholders})"
+        # Shift -5 hours so late night "Sunday" orders count as Sunday
+        order_filter_sql += f" AND TRIM(strftime('%w', o.created_on, '-5 hours')) IN ({placeholders})"
         order_params.extend(selected_weekdays)
 
     # 2. Build item-level filters

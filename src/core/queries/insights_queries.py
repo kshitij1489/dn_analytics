@@ -1,9 +1,18 @@
 import pandas as pd
+from src.core.utils.business_date import (
+    BUSINESS_DATE_SQL, 
+    get_current_business_date, 
+    get_business_date_range
+)
 
 def fetch_kpis(conn):
     """Fetch Top-level KPIs: Revenue, Orders, Avg Order, Total Customers"""
-    # SQLite: DATE(CURRENT_TIMESTAMP, 'localtime')
-    cursor = conn.execute("""
+    
+    # Get range for "today" (Business Date)
+    today_str = get_current_business_date()
+    start_dt, end_dt = get_business_date_range(today_str)
+    
+    query = f"""
         SELECT 
             COUNT(*) as total_orders,
             SUM(total) as total_revenue,
@@ -13,20 +22,22 @@ def fetch_kpis(conn):
                 SELECT COALESCE(SUM(total), 0) 
                 FROM orders 
                 WHERE order_status = 'Success' 
-                AND date(created_on) = date('now')
+                AND created_on >= ? AND created_on <= ?
             ) as today_revenue
         FROM orders
         WHERE order_status = 'Success'
-    """)
+    """
+    cursor = conn.execute(query, (start_dt, end_dt))
     row = cursor.fetchone()
     return dict(row) if row else None
 
 def fetch_daily_sales(conn):
     """Fetch Daily Sales Performance"""
     # SQLite: sum(case when ...), date(...)
-    cursor = conn.execute("""
+    # Use business date grouping
+    cursor = conn.execute(f"""
         SELECT 
-            date(created_on) as order_date,
+            {BUSINESS_DATE_SQL} as order_date,
             SUM(total) as total_revenue,
             SUM(total - tax_total) as net_revenue,
             SUM(tax_total) as tax_collected,
@@ -44,9 +55,9 @@ def fetch_daily_sales(conn):
 
 def fetch_sales_trend(conn):
     """Fetch daily sales trend data (Revenue & Orders)"""
-    cursor = conn.execute("""
+    cursor = conn.execute(f"""
         SELECT 
-            date(created_on) as date,
+            {BUSINESS_DATE_SQL} as date,
             SUM(total) as revenue,
             COUNT(*) as num_orders
         FROM orders
@@ -58,9 +69,9 @@ def fetch_sales_trend(conn):
 
 def fetch_category_trend(conn):
     """Fetch daily sales by category"""
-    cursor = conn.execute("""
+    cursor = conn.execute(f"""
         SELECT 
-            date(o.created_on) as date,
+            {BUSINESS_DATE_SQL} as date,
             mi.type as category,
             SUM(oi.total_price) as revenue
         FROM orders o
@@ -180,7 +191,7 @@ def fetch_hourly_revenue_data(conn, days=None):
     
     query = f"""
         WITH total_days AS (
-            SELECT COUNT(DISTINCT date(created_on)) as day_count
+            SELECT COUNT(DISTINCT {BUSINESS_DATE_SQL}) as day_count
             FROM orders
             WHERE order_status = 'Success'
             {day_filter}
@@ -218,17 +229,19 @@ def fetch_order_source_data(conn):
 
 def fetch_hourly_revenue_by_date(conn, date_str: str):
     """Fetch Hourly Revenue for a specific date"""
+    start_dt, end_dt = get_business_date_range(date_str)
+    
     cursor = conn.execute("""
         SELECT 
             CAST(strftime('%H', created_on) AS INTEGER) as hour_num,
             SUM(total) as revenue
         FROM orders
         WHERE order_status = 'Success'
-          AND date(created_on) = ?
+          AND created_on >= ? AND created_on <= ?
         GROUP BY 1
         ORDER BY CASE WHEN CAST(strftime('%H', created_on) AS INTEGER) = 0 THEN 24 
                       ELSE CAST(strftime('%H', created_on) AS INTEGER) END
-    """, (date_str,))
+    """, (start_dt, end_dt))
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
 

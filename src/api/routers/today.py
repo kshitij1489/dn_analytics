@@ -6,6 +6,7 @@ from datetime import date
 from fastapi import APIRouter, Depends
 from src.api.dependencies import get_db
 from src.core.utils.reorder_utils import get_returning_customer_ids, get_reorder_item_counts
+from src.core.utils.business_date import get_current_business_date, get_business_date_range
 
 router = APIRouter(prefix="/api/today", tags=["today"])
 
@@ -15,7 +16,8 @@ def get_today_summary(conn=Depends(get_db)):
     """
     Get today's summary: revenue, orders by source, reorder customer count.
     """
-    today_str = date.today().isoformat()
+    today_str = get_current_business_date()
+    start_dt, end_dt = get_business_date_range(today_str)
     
     # Total revenue and orders
     totals_query = """
@@ -24,9 +26,9 @@ def get_today_summary(conn=Depends(get_db)):
             COUNT(*) as total_orders
         FROM orders
         WHERE order_status = 'Success'
-          AND DATE(created_on) = ?
+          AND created_on >= ? AND created_on <= ?
     """
-    cursor = conn.execute(totals_query, (today_str,))
+    cursor = conn.execute(totals_query, (start_dt, end_dt))
     row = cursor.fetchone()
     total_revenue = row[0] if row else 0
     total_orders = row[1] if row else 0
@@ -39,11 +41,11 @@ def get_today_summary(conn=Depends(get_db)):
             COALESCE(SUM(total), 0) as revenue
         FROM orders
         WHERE order_status = 'Success'
-          AND DATE(created_on) = ?
+          AND created_on >= ? AND created_on <= ?
         GROUP BY order_from
         ORDER BY revenue DESC
     """
-    cursor = conn.execute(source_query, (today_str,))
+    cursor = conn.execute(source_query, (start_dt, end_dt))
     sources = [
         {"source": row[0], "orders": row[1], "revenue": float(row[2])}
         for row in cursor.fetchall()
@@ -57,10 +59,10 @@ def get_today_summary(conn=Depends(get_db)):
         SELECT COUNT(DISTINCT customer_id)
         FROM orders
         WHERE order_status = 'Success'
-          AND DATE(created_on) = ?
+          AND created_on >= ? AND created_on <= ?
           AND customer_id IS NOT NULL
     """
-    cursor = conn.execute(unique_customers_query, (today_str,))
+    cursor = conn.execute(unique_customers_query, (start_dt, end_dt))
     total_customers = cursor.fetchone()[0] or 0
     
     return {
@@ -78,7 +80,8 @@ def get_today_menu_items(conn=Depends(get_db)):
     """
     Get menu items sold today with quantities and reorder counts.
     """
-    today_str = date.today().isoformat()
+    today_str = get_current_business_date()
+    start_dt, end_dt = get_business_date_range(today_str)
     
     # Get reorder counts for all items
     reorder_counts = get_reorder_item_counts(conn, today_str)
@@ -95,11 +98,11 @@ def get_today_menu_items(conn=Depends(get_db)):
         JOIN orders o ON oi.order_id = o.order_id
         LEFT JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
         WHERE o.order_status = 'Success'
-          AND DATE(o.created_on) = ?
+          AND o.created_on >= ? AND o.created_on <= ?
         GROUP BY oi.menu_item_id, item_name, category
         ORDER BY qty_sold DESC
     """
-    cursor = conn.execute(query, (today_str,))
+    cursor = conn.execute(query, (start_dt, end_dt))
     
     items = []
     for row in cursor.fetchall():
@@ -122,7 +125,8 @@ def get_today_customers(conn=Depends(get_db)):
     Get customer list for today with order details.
     Sorted: verified customers first, then by order value descending.
     """
-    today_str = date.today().isoformat()
+    today_str = get_current_business_date()
+    start_dt, end_dt = get_business_date_range(today_str)
     
     # Get returning customer IDs
     returning_ids = get_returning_customer_ids(conn, today_str)
@@ -135,7 +139,7 @@ def get_today_customers(conn=Depends(get_db)):
                 SUM(o.total) as order_value
             FROM orders o
             WHERE o.order_status = 'Success'
-              AND DATE(o.created_on) = ?
+              AND o.created_on >= ? AND o.created_on <= ?
             GROUP BY o.customer_id
         ),
         customer_items AS (
@@ -146,7 +150,7 @@ def get_today_customers(conn=Depends(get_db)):
             LEFT JOIN order_items oi ON o.order_id = oi.order_id
             LEFT JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
             WHERE o.order_status = 'Success'
-              AND DATE(o.created_on) = ?
+              AND o.created_on >= ? AND o.created_on <= ?
             GROUP BY o.customer_id
         )
         SELECT 
@@ -164,7 +168,7 @@ def get_today_customers(conn=Depends(get_db)):
             c.is_verified DESC,
             co.order_value DESC
     """
-    cursor = conn.execute(query, (today_str, today_str))
+    cursor = conn.execute(query, (start_dt, end_dt, start_dt, end_dt))
     
     customers = []
     for row in cursor.fetchall():

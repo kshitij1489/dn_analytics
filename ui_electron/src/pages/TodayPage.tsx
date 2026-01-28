@@ -107,8 +107,8 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
         <div className="today-page">
             {/* Header */}
             <div className="today-header">
-                <h1>📅 Today's Snapshot</h1>
-                <span className="today-date">{summary?.date}</span>
+                <h1>📅 Business Day Snapshot</h1>
+                <span className="today-date">{summary?.date} <span style={{ fontSize: '0.6em', opacity: 0.8 }}>(5 AM - 5 AM)</span></span>
             </div>
 
             {/* KPI Cards */}

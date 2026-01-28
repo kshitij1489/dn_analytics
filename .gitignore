@@ -44,3 +44,5 @@ ui_electron/dist/
 # Docker
 .docker/
 node_modules
+.vite/
+.antigravity/

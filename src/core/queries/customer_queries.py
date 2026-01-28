@@ -1,4 +1,5 @@
 import pandas as pd
+from src.core.utils.business_date import BUSINESS_DATE_SQL
 
 def fetch_customer_reorder_rate(conn):
     """Fetch global customer reorder rate"""
@@ -45,7 +46,7 @@ def fetch_customer_loyalty(conn):
         monthly_stats AS (
             -- 2. Aggregate raw sums in the CTE
             SELECT 
-                strftime('%Y-%m', created_on) as month_sort,
+                strftime('%Y-%m', created_on, '-5 hours') as month_sort,
                 
                 COUNT(*) as total_orders,
                 SUM(CASE WHEN o_rank > 1 THEN 1 ELSE 0 END) as repeat_orders,
@@ -161,7 +162,7 @@ def fetch_brand_awareness(conn, granularity: str = 'day'):
 
     query = f"""
         SELECT 
-            strftime('{date_format}', first_order_date) as date,
+            strftime('{date_format}', first_order_date, '-5 hours') as date,
             COUNT(*) as new_customers
         FROM customers
         WHERE is_verified = 1

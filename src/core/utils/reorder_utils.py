@@ -4,6 +4,7 @@ These functions are designed to be reusable across different parts of the applic
 """
 from datetime import datetime
 from typing import Set, Dict
+from src.core.utils.business_date import get_business_date_range
 
 
 def get_returning_customer_ids(conn, date: str) -> Set[int]:
@@ -17,21 +18,23 @@ def get_returning_customer_ids(conn, date: str) -> Set[int]:
     Returns:
         Set of customer_ids who are returning customers for that date
     """
+    start_dt, end_dt = get_business_date_range(date)
+    
     query = """
         SELECT DISTINCT o.customer_id
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         WHERE c.is_verified = 1
           AND o.order_status = 'Success'
-          AND DATE(o.created_on) = ?
+          AND o.created_on >= ? AND o.created_on <= ?
           AND EXISTS (
               SELECT 1 FROM orders prev
               WHERE prev.customer_id = o.customer_id
                 AND prev.order_status = 'Success'
-                AND DATE(prev.created_on) < ?
+                AND prev.created_on < ?
           )
     """
-    cursor = conn.execute(query, (date, date))
+    cursor = conn.execute(query, (start_dt, end_dt, start_dt))
     return {row[0] for row in cursor.fetchall()}
 
 
@@ -47,6 +50,8 @@ def get_reorder_item_counts(conn, date: str) -> Dict[str, int]:
     Returns:
         Dict mapping menu_item_id to reorder count
     """
+    start_dt, end_dt = get_business_date_range(date)
+    
     query = """
         SELECT 
             oi.menu_item_id,
@@ -56,7 +61,7 @@ def get_reorder_item_counts(conn, date: str) -> Dict[str, int]:
         JOIN customers c ON o.customer_id = c.customer_id
         WHERE c.is_verified = 1
           AND o.order_status = 'Success'
-          AND DATE(o.created_on) = ?
+          AND o.created_on >= ? AND o.created_on <= ?
           AND oi.menu_item_id IS NOT NULL
           AND EXISTS (
               SELECT 1 
@@ -64,12 +69,12 @@ def get_reorder_item_counts(conn, date: str) -> Dict[str, int]:
               JOIN orders prev_o ON prev_oi.order_id = prev_o.order_id
               WHERE prev_o.customer_id = o.customer_id
                 AND prev_o.order_status = 'Success'
-                AND DATE(prev_o.created_on) < ?
+                AND prev_o.created_on < ?
                 AND prev_oi.menu_item_id = oi.menu_item_id
           )
         GROUP BY oi.menu_item_id
     """
-    cursor = conn.execute(query, (date, date))
+    cursor = conn.execute(query, (start_dt, end_dt, start_dt))
     return {row[0]: row[1] for row in cursor.fetchall()}
 
 
@@ -85,12 +90,14 @@ def is_returning_customer(conn, customer_id: int, before_date: str) -> bool:
     Returns:
         True if customer has orders before that date
     """
+    start_dt, _ = get_business_date_range(before_date)
+    
     query = """
         SELECT 1 FROM orders
         WHERE customer_id = ?
           AND order_status = 'Success'
-          AND DATE(created_on) < ?
+          AND created_on < ?
         LIMIT 1
     """
-    cursor = conn.execute(query, (customer_id, before_date))
+    cursor = conn.execute(query, (customer_id, start_dt))
     return cursor.fetchone() is not None
