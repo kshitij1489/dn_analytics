@@ -55,8 +55,8 @@ def verify_config(data: ConfigVerification):
         try:
             import openai
             client = openai.OpenAI(api_key=api_key)
-            # minimal call to check auth
-            client.models.list(limit=1) 
+            # minimal call to check auth (list models; no limit param in SDK)
+            client.models.list()
             return {"status": "success", "message": "✅ OpenAI Connection Successful!"}
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Connection Failed: {str(e)}")
