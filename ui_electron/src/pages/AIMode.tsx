@@ -9,12 +9,24 @@ import {
 
 interface Message {
     role: 'user' | 'ai';
-    content: any; // Text string or Data object
-    type?: 'text' | 'table' | 'chart';
+    content: any; // Text string, Data object, or array of parts when type='multi'
+    type?: 'text' | 'table' | 'chart' | 'multi';
     sql_query?: string;
     explanation?: string;
     log_id?: string;
     feedback?: 'positive' | 'negative';
+    corrected_prompt?: string; // Phase 5.1: spelling-corrected question (when shown)
+    query_status?: 'complete' | 'incomplete' | 'ignored'; // Phase 8
+    pending_clarification_question?: string; // Phase 8: when incomplete
+    previous_query_ignored?: boolean; // Phase 8: true when backend says user sent new query after clarification
+}
+
+/** One part of a multi-part AI response (Phase 3) */
+interface ResponsePart {
+    type: 'text' | 'table' | 'chart';
+    content: any;
+    explanation?: string;
+    sql_query?: string;
 }
 
 const SUGGESTED_QUERIES = [
@@ -24,6 +36,8 @@ const SUGGESTED_QUERIES = [
     "Show me orders from Swiggy in the last 7 days",
     "Average order value for dine-in orders"
 ];
+
+const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
 export default function AIMode() {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -56,7 +70,14 @@ export default function AIMode() {
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
             }));
 
-            const res = await endpoints.ai.chat({ prompt: queryPrompt, history });
+            const lastMsg = messages[messages.length - 1];
+            const lastAiWasClarification = lastMsg?.role === 'ai' && lastMsg?.query_status === 'incomplete';
+
+            const res = await endpoints.ai.chat({
+                prompt: queryPrompt,
+                history,
+                last_ai_was_clarification: lastAiWasClarification
+            });
 
             const aiMsg: Message = {
                 role: 'ai',
@@ -65,7 +86,11 @@ export default function AIMode() {
                 type: res.data.type as any,
                 sql_query: res.data.sql_query,
                 explanation: res.data.explanation,
-                log_id: res.data.log_id
+                log_id: res.data.log_id,
+                corrected_prompt: res.data.corrected_prompt,
+                query_status: res.data.query_status,
+                pending_clarification_question: res.data.pending_clarification_question,
+                previous_query_ignored: res.data.previous_query_ignored
             };
 
             setMessages(prev => [...prev, aiMsg]);
@@ -176,6 +201,17 @@ export default function AIMode() {
                             maxWidth: '85%',
                             alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                         }}>
+                            {/* Phase 8: notice when user moved on from a clarification */}
+                            {msg.role === 'ai' && msg.previous_query_ignored && (
+                                <div style={{
+                                    fontSize: '0.8rem',
+                                    color: 'var(--text-secondary)',
+                                    fontStyle: 'italic',
+                                    marginBottom: '8px',
+                                }}>
+                                    Previous question was left unanswered.
+                                </div>
+                            )}
                             {/* Message Bubble */}
                             <div className="card" style={{
                                 background: msg.role === 'user' ? 'var(--accent-color)' : 'var(--card-bg)',
@@ -185,6 +221,17 @@ export default function AIMode() {
                                 marginBottom: '5px',
                                 boxShadow: '0 2px 10px rgba(0,0,0,0.05)'
                             }}>
+                                {/* Phase 5.1: corrected question (subtle) */}
+                                {msg.role === 'ai' && msg.corrected_prompt && (
+                                    <div style={{
+                                        fontSize: '0.85rem',
+                                        color: 'var(--text-secondary)',
+                                        marginBottom: '10px',
+                                        fontStyle: 'italic'
+                                    }}>
+                                        You asked: {msg.corrected_prompt}
+                                    </div>
+                                )}
                                 {/* Content Renderer */}
                                 {msg.role === 'user' && (
                                     <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
@@ -192,13 +239,130 @@ export default function AIMode() {
                                     </div>
                                 )}
 
-                                {msg.role === 'ai' && (msg.type === 'text' || !msg.type) && (
+                                {/* Multi-part response (Phase 3) */}
+                                {msg.role === 'ai' && msg.type === 'multi' && Array.isArray(msg.content) && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                        {(msg.content as ResponsePart[]).map((part, partIdx) => (
+                                            <div key={partIdx}>
+                                                {part.type === 'text' && (
+                                                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>{part.content}</div>
+                                                )}
+                                                {part.type === 'table' && (() => {
+                                                    const rows = part.content || [];
+                                                    const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+                                                    const isSingleValue = rows.length === 1 && columns.length <= 2;
+                                                    const isSmallTable = rows.length <= 10;
+                                                    if (isSingleValue) {
+                                                        const value = rows[0][columns[columns.length - 1]];
+                                                        const label = columns.length === 2 ? rows[0][columns[0]] : columns[0];
+                                                        return (
+                                                            <div>
+                                                                {part.explanation && <div style={{ marginBottom: '10px' }}>{part.explanation}</div>}
+                                                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--accent-color)', padding: '10px 0' }}>
+                                                                    {typeof value === 'number' ? value.toLocaleString() : value}
+                                                                </div>
+                                                                {columns.length === 2 && <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{label}</div>}
+                                                            </div>
+                                                        );
+                                                    }
+                                                    if (isSmallTable) {
+                                                        return (
+                                                            <div>
+                                                                {part.explanation && <div style={{ marginBottom: '15px' }}>{part.explanation}</div>}
+                                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                                                                    <thead>
+                                                                        <tr>
+                                                                            {columns.map(col => (
+                                                                                <th key={col} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '2px solid var(--border-color)', fontWeight: 600 }}>
+                                                                                    {col.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                                                                                </th>
+                                                                            ))}
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {rows.map((row: Record<string, unknown>, i: number) => (
+                                                                            <tr key={i}>
+                                                                                {columns.map(col => (
+                                                                                    <td key={col} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>
+                                                                                        {typeof row[col] === 'number' ? Number(row[col]).toLocaleString() : String(row[col] ?? '—')}
+                                                                                    </td>
+                                                                                ))}
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '8px' }}>{rows.length} row{rows.length !== 1 ? 's' : ''}</div>
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return (
+                                                        <div>
+                                                            {part.explanation && <div style={{ marginBottom: '15px' }}>{part.explanation}</div>}
+                                                            <ClientSideDataTable data={rows} columns={columns} filenamePrefix="ai_data" />
+                                                        </div>
+                                                    );
+                                                })()}
+                                                {part.type === 'chart' && (() => {
+                                                    const config = part.content || {};
+                                                    const chartData = config.data || [];
+                                                    const chartType = config.chart_type || 'bar';
+                                                    const xKey = config.x_key || 'label';
+                                                    const yKey = config.y_key || 'value';
+                                                    const title = config.title || 'Chart';
+                                                    const tooltipStyle = { backgroundColor: 'rgba(0,0,0,0.85)', border: '1px solid #444', borderRadius: '8px', color: '#fff' };
+                                                    return (
+                                                        <div>
+                                                            <div style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '15px' }}>{title}</div>
+                                                            <div style={{ height: '300px', width: '100%' }}>
+                                                                <ResponsiveContainer width="100%" height="100%">
+                                                                    {chartType === 'bar' ? (
+                                                                        <BarChart data={chartData}>
+                                                                            <CartesianGrid strokeDasharray="3 3" stroke="#444" />
+                                                                            <XAxis dataKey={xKey} stroke="#aaa" />
+                                                                            <YAxis stroke="#aaa" />
+                                                                            <Tooltip contentStyle={tooltipStyle} />
+                                                                            <Legend />
+                                                                            <Bar dataKey={yKey} fill="#3B82F6" name={yKey} />
+                                                                        </BarChart>
+                                                                    ) : chartType === 'line' ? (
+                                                                        <LineChart data={chartData}>
+                                                                            <CartesianGrid strokeDasharray="3 3" stroke="#444" />
+                                                                            <XAxis dataKey={xKey} stroke="#aaa" />
+                                                                            <YAxis stroke="#aaa" />
+                                                                            <Tooltip contentStyle={tooltipStyle} />
+                                                                            <Legend />
+                                                                            <Line type="monotone" dataKey={yKey} stroke="#3B82F6" strokeWidth={2} dot={{ r: 4 }} name={yKey} />
+                                                                        </LineChart>
+                                                                    ) : (
+                                                                        <PieChart>
+                                                                            <Pie data={chartData} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={100}
+                                                                                label={({ name, percent }: { name: string; percent?: number }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                                                                                {chartData.map((_: unknown, index: number) => (
+                                                                                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                                                                ))}
+                                                                            </Pie>
+                                                                            <Tooltip contentStyle={tooltipStyle} />
+                                                                            <Legend />
+                                                                        </PieChart>
+                                                                    )}
+                                                                </ResponsiveContainer>
+                                                            </div>
+                                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '10px' }}>{chartData.length} data point{chartData.length !== 1 ? 's' : ''}</div>
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {msg.role === 'ai' && msg.type !== 'multi' && (msg.type === 'text' || !msg.type) && (
                                     <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
                                         {msg.content}
                                     </div>
                                 )}
 
-                                {msg.role === 'ai' && msg.type === 'table' && (() => {
+                                {msg.role === 'ai' && msg.type !== 'multi' && msg.type === 'table' && (() => {
                                     const rows = msg.content || [];
                                     const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
                                     const isSingleValue = rows.length === 1 && columns.length <= 2;
@@ -306,7 +470,7 @@ export default function AIMode() {
                                 })()}
 
                                 {/* Chart Renderer */}
-                                {msg.role === 'ai' && msg.type === 'chart' && (() => {
+                                {msg.role === 'ai' && msg.type !== 'multi' && msg.type === 'chart' && (() => {
                                     const config = msg.content || {};
                                     const chartData = config.data || [];
                                     const chartType = config.chart_type || 'bar';

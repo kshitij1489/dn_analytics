@@ -98,7 +98,7 @@ export const endpoints = {
     },
 
     ai: {
-        chat: (data: { prompt: string, history?: any[] }) => api.post('/ai/chat', data),
+        chat: (data: { prompt: string, history?: any[]; last_ai_was_clarification?: boolean }) => api.post('/ai/chat', data),
         feedback: (data: { log_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
     },
 

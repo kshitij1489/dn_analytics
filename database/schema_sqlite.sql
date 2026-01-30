@@ -337,14 +337,19 @@ CREATE TABLE IF NOT EXISTS merge_history (
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS ai_logs (
     log_id TEXT PRIMARY KEY, -- UUID as TEXT
-    user_query TEXT NOT NULL,
+    user_query TEXT NOT NULL, -- effective query used (corrected/rewritten)
     intent TEXT,
     sql_generated TEXT,
-    response_type TEXT, -- 'text', 'table', 'chart'
-    response_payload TEXT, -- JSONB as TEXT
+    response_type TEXT, -- 'text', 'table', 'chart', 'multi'
+    response_payload TEXT, -- JSON summary or small payload (Phase 6: avoid large result data)
     error_message TEXT,
     execution_time_ms INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    -- Phase 6: pipeline metadata for debug/eval/cache (no large result data)
+    raw_user_query TEXT, -- original prompt from user (before spelling/follow-up)
+    corrected_query TEXT, -- after spelling + optional follow-up rewrite (= user_query)
+    action_sequence TEXT, -- JSON array e.g. ["RUN_SQL"]
+    explanation TEXT -- natural-language explanation(s) from pipeline
 );
 
 CREATE TABLE IF NOT EXISTS ai_feedback (

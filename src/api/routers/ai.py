@@ -15,7 +15,12 @@ async def chat(request: AIQueryRequest, conn=Depends(get_db)):
     Handles Intent Classification -> Execution -> Response.
     """
     try:
-        response = await process_chat(request.prompt, conn, request.history)
+        response = await process_chat(
+            request.prompt,
+            conn,
+            request.history,
+            last_ai_was_clarification=request.last_ai_was_clarification or False,
+        )
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

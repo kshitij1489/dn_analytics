@@ -75,16 +75,21 @@ class AIQueryRequest(BaseModel):
     """Request model for AI natural language query"""
     prompt: str
     history: Optional[list] = None   # List of {"role": "user"|"ai", "content": ...}
+    last_ai_was_clarification: Optional[bool] = None  # Phase 8: True if last AI message was a clarification question
 
 
 class AIResponse(BaseModel):
     """Unified response model for all AI interactions"""
-    type: str  # 'text', 'table', 'chart'
-    content: Any 
+    type: str  # 'text', 'table', 'chart', 'multi'
+    content: Any
     explanation: Optional[str] = None
     sql_query: Optional[str] = None
     log_id: Optional[str] = None
     confidence: float = 1.0
+    corrected_prompt: Optional[str] = None  # Phase 5.1: spelling-corrected question (when shown in UI)
+    query_status: Optional[str] = None  # Phase 8: "complete" | "incomplete" | "ignored"
+    pending_clarification_question: Optional[str] = None  # Phase 8: when query_status=incomplete, the question we asked
+    previous_query_ignored: Optional[bool] = None  # Phase 8: True when user sent a new query after we asked for clarification
 
 
 class AIFeedbackRequest(BaseModel):
