@@ -19,7 +19,11 @@ from ai_mode.prompt_ai_mode import SUMMARY_GENERATION_PROMPT, REPORT_GENERATION_
 
 def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Execute RUN_SQL: generate SQL, run it, explain. Returns (part, updated_context)."""
-    sql_query = generate_sql(conn, prompt)
+    try:
+        sql_query = generate_sql(conn, prompt)
+    except ValueError as e:
+        part = {"type": "text", "content": str(e)}
+        return part, add_part(context, "text", part["content"])
     try:
         df = pd.read_sql_query(sql_query, conn)
         explanation = generate_explanation(conn, prompt, sql_query, df)
@@ -112,7 +116,11 @@ def run_generate_summary(prompt: str, context: Dict[str, Any], conn) -> Tuple[Di
         part = {"type": "text", "content": "AI not configured. Please add an API Key in Configuration."}
         return part, add_part(context, "text", part["content"])
 
-    rows, sql_used = _get_data_for_summary(prompt, context, conn)
+    try:
+        rows, sql_used = _get_data_for_summary(prompt, context, conn)
+    except ValueError as e:
+        part = {"type": "text", "content": str(e)}
+        return part, add_part(context, "text", part["content"])
     if not rows:
         part = {"type": "text", "content": "I couldn't get any data to summarize. Try asking for a specific time range or metric."}
         return part, add_part(context, "text", part["content"])
@@ -176,7 +184,11 @@ def run_generate_report(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dic
     parts_desc = _describe_parts_for_report(context)
     # If no prior data, get some via SQL so the report has something to work with
     if not context.get("parts"):
-        rows, sql_used = _get_data_for_summary(prompt, context, conn)
+        try:
+            rows, sql_used = _get_data_for_summary(prompt, context, conn)
+        except ValueError as e:
+            part = {"type": "text", "content": str(e)}
+            return part, add_part(context, "text", part["content"])
         if rows:
             data_preview = json.dumps(rows[:30], default=str)
             if len(rows) > 30:

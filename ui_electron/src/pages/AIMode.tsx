@@ -336,7 +336,7 @@ export default function AIMode() {
                                                                     ) : (
                                                                         <PieChart>
                                                                             <Pie data={chartData} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={100}
-                                                                                label={({ name, percent }: { name: string; percent?: number }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                                                                                label={({ name, percent }: { name?: string; percent?: number }) => `${name ?? 'Unknown'}: ${((percent ?? 0) * 100).toFixed(0)}%`}>
                                                                                 {chartData.map((_: unknown, index: number) => (
                                                                                     <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                                                                                 ))}
@@ -534,7 +534,7 @@ export default function AIMode() {
                                                                 cx="50%"
                                                                 cy="50%"
                                                                 outerRadius={100}
-                                                                label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
+                                                                label={({ name, percent }: { name?: string; percent?: number }) => `${name ?? 'Unknown'}: ${((percent ?? 0) * 100).toFixed(0)}%`}
                                                             >
                                                                 {chartData.map((_: any, index: number) => (
                                                                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -597,7 +597,7 @@ export default function AIMode() {
                                                     border: 'none',
                                                     cursor: msg.feedback ? 'default' : 'pointer',
                                                     fontSize: '1rem',
-                                                    filter: msg.feedback === 'negative' ? 'grayscale(100%) opactiy(0.3)' : 'none',
+                                                    filter: msg.feedback === 'negative' ? 'grayscale(100%) opacity(0.3)' : 'none',
                                                     opacity: msg.feedback === 'negative' ? 0.3 : 1,
                                                     padding: '2px',
                                                     transition: 'all 0.2s'

@@ -10,11 +10,11 @@ from ai_mode.schema import get_schema_context
 
 
 def generate_sql(conn, prompt: str) -> str:
-    """Generate SQL from natural language."""
+    """Generate SQL from natural language. Raises ValueError if API not configured."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
-        return "ERROR: API Key Missing"
+        raise ValueError("API Key not configured. Please add an OpenAI API Key in Configuration.")
 
     schema = get_schema_context()
     today = datetime.now().strftime('%Y-%m-%d')
