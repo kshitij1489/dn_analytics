@@ -47,7 +47,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 
 ## Task List
 
-### Phase 1: Spelling correction & pipeline
+### Spelling correction & pipeline
 
 - [x] **1.1** Add a spelling/grammar correction step in `ai_service.py` (before `classify_intent`).
   - Input: raw user `prompt`; output: corrected string.
@@ -55,13 +55,13 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 - [x] **1.2** Add a prompt in `services/prompts.py` for correction (e.g. “Correct typos and fix obvious grammar; preserve meaning and return only the corrected question”).
 - [x] **1.3** Use the corrected text for all downstream steps (intent, SQL, chart, etc.) and optionally log both raw and corrected in `ai_logs` for debugging.
 
-### Phase 2: Intent & action vocabulary
+### Intent & action vocabulary
 
 - [x] **2.1** Define an explicit list of **actions** (e.g. `RUN_SQL`, `GENERATE_CHART`, `GENERATE_SUMMARY`, `GENERATE_REPORT`, `GENERAL_CHAT`, `ASK_CLARIFICATION`). Map current intents to these.
 - [x] **2.2** Extend the router prompt in `prompts.py` so the LLM returns **intent + suggested sequence** (e.g. one or more actions in order), or a single action for now.
 - [x] **2.3** Add a simple **action planner** in `ai_service.py`: given intent (and later, multiple intents), return an ordered list of action identifiers.
 
-### Phase 3: Multi-step execution
+### Multi-step execution
 
 - [x] **3.1** Refactor `process_chat` so it:
   - Takes corrected prompt + history.
@@ -70,19 +70,19 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 - [x] **3.2** Define **context** passed between steps: e.g. previous SQL result, previous chart config, or summary text, so “follow-up” actions can use prior results.
 - [x] **3.3** Combine results from multiple actions into one `AIResponse` (e.g. one table + one chart + one summary), or define a **multi-part** response format (e.g. `content` as list of `{ type, content }`) and update the UI to render it.
 
-### Phase 4: New result types (reports / summaries)
+### New result types (reports / summaries)
 
 - [x] **4.1** Add **SUMMARY** (and optionally **REPORT**) as action types: e.g. “Summarize last week’s sales” → run SQL or use existing insights, then pass data + user question to LLM to produce short summary text.
 - [x] **4.2** Return these as `type: "text"` with structured explanation, or introduce `type: "summary"` / `type: "report"` if you want different UI (e.g. PDF export later).
 - [x] **4.3** Ensure “reports” can pull from existing SQL/charts/summaries (reuse Phase 3 context) so the brain can combine tables + charts + narrative.
 
-### Phase 5: UI & observability
+### UI & observability
 
 - [x] **5.1** If you expose “corrected question” in the API response, optionally show it in the UI (e.g. “You asked: …” with corrected version in subtle text).
 - [x] **5.2** Support multi-part responses in `AIMode.tsx`: e.g. loop over `content[]` and render each part (text, table, chart) in order.
 - [x] **5.3** Add minimal logging/tracing (e.g. intent, action list, which step failed) so you can debug the brain without touching the DB every time.
 
-### Phase 6: Debug / evaluation / cache metadata storage
+### Pipeline metadata storage (debug / evaluation / cache)
 
 **Goal:** Persist pipeline metadata (not large result data) so you can debug, evaluate the flow, and later cache outputs of individual steps.
 
@@ -107,7 +107,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 - [x] **6.2** In the orchestrator (or logging module), after the pipeline runs, persist: raw prompt, corrected prompt, intent, action_sequence, SQL text from each step that generated SQL, and explanation(s). Do **not** persist full table/chart result payloads.
 - [x] **6.3** Per-step metadata: action_sequence stored as JSON; explanation(s) from parts concatenated. Payload summary (type + row_count / parts count) when content is large.
 
-### Phase 7: Follow-up / context rewriting (insufficient information from current message)
+### Follow-up & context rewriting (insufficient information from current message)
 
 **Goal:** Detect when the current user message is a **follow-up** to a previous query (e.g. “and yesterday?” after “Total Orders for today”) and rewrite it into a **standalone query** using conversation history, so the system does not treat it as insufficient information alone.
 
@@ -124,7 +124,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 - [x] **7.3** Wire the rewriter into the pipeline: after spelling correction (or as part of it), if follow-up detected → rewrite using history → use rewritten query for intent classification and all downstream steps. Ensure the rewritten query is what gets logged (e.g. in Phase 6) as the “effective” user question for that turn.
 - [x] **7.4** Define how much history to use (e.g. last N user + AI pairs) and handle edge cases (e.g. first message, or no clear previous question).
 
-### Phase 8: Incomplete queries and clarification lifecycle (complete / incomplete / ignored)
+### Clarification lifecycle (incomplete / complete / ignored)
 
 **Goal:** Handle **insufficient information** by marking each user query as **complete** or **incomplete**, and support a **clarification lifecycle**: ask for missing info → user replies or ignores → mark complete, incomplete, or ignored and move on.
 
@@ -155,13 +155,13 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 
 ## Order of implementation (suggested)
 
-1. **Phase 1** — Spelling correction (small change, clear win).
-2. **Phase 2** — Action vocabulary + planner (still single-step under the hood).
-3. **Phase 4.1–4.2** — Summary (and optionally report) as a new action type.
-4. **Phase 3** — Multi-step execution + context; then Phase 4.3 and 5.
-5. **Phase 6** — Debug/eval metadata storage (raw query, corrected query, intent, action_sequence, SQL text, explanation; no large result payloads).
-6. **Phase 7** — Follow-up / context rewriting: detect “and yesterday?”-style follow-ups, rewrite using previous question from history (e.g. “Total Orders for yesterday”).
-7. **Phase 8** — Incomplete-query lifecycle: mark queries complete / incomplete / ignored; ask for clarification when needed; treat next message as reply-to-clarification or new query; mark ignored when user moves on.
+1. **Spelling correction** — Small change, clear win.
+2. **Intent & action vocabulary** — Action vocabulary + planner (still single-step under the hood).
+3. **New result types** — Summary (and optionally report) as a new action type.
+4. **Multi-step execution** — Multi-step execution + context; then reports and UI.
+5. **Pipeline metadata storage** — Debug/eval (raw query, corrected query, intent, action_sequence, SQL text, explanation; no large result payloads).
+6. **Follow-up & context rewriting** — Detect “and yesterday?”-style follow-ups, rewrite using previous question from history (e.g. “Total Orders for yesterday”).
+7. **Clarification lifecycle** — Mark queries complete / incomplete / ignored; ask for clarification when needed; treat next message as reply-to-clarification or new query; mark ignored when user moves on.
 
 This gets you “one search for everything in the DB (tables, charts, summary/reports)” with a clear path to multi-step and richer reports later.
 
@@ -171,7 +171,7 @@ This gets you “one search for everything in the DB (tables, charts, summary/re
 
 - Your flow **(1) UI → (2) Python API as brain → (3) spelling → intent → action sequence → execute → result to UI** is correct.
 - You already have: UI → API, intent recognition, single-step SQL + chart + general chat, and response back to UI.
-- Add: **spelling correction**, **explicit action sequence (and later multi-step execution)**, **summary/report** result types, **Phase 6** pipeline metadata storage (for debug, evaluation, and future step caching), **Phase 7** follow-up/context rewriting (rewrite “and yesterday?” using previous question), and **Phase 8** incomplete-query lifecycle (complete / incomplete / ignored; clarification flow; ignore when user moves on). The task list above breaks that into concrete steps you can tick off.
+- Add: **spelling correction**, **explicit action sequence (and later multi-step execution)**, **summary/report** result types, **pipeline metadata storage** (for debug, evaluation, and future step caching), **follow-up/context rewriting** (rewrite “and yesterday?” using previous question), and **clarification lifecycle** (complete / incomplete / ignored; clarification flow; ignore when user moves on). The task list above breaks that into concrete steps you can tick off.
 
 ---
 
@@ -208,13 +208,13 @@ Use this to trace code paths when reviewing the implementation.
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  1. raw_prompt = prompt                                                           │
 │  2. prompt = correct_query(conn, prompt)           ← ai_mode/spelling.py          │
-│  3. [Phase 8] If last_ai_was_clarification && history:                            │
+│  3. [Reply-to-clarification] If last_ai_was_clarification && history:             │
 │       clarification_text = get_last_ai_message(history)     ← followup.py         │
-│       previous_user_question = get_previous_user_question(history)                 │
-│       If is_reply_to_clarification(conn, prompt, clarification_text):             │
-│         prompt = rewrite_with_context(conn, prompt, previous_user_question)       │
-│       Else: previous_query_ignored = True (new query; previous left unanswered)   │
-│  4. [Phase 7] prompt = resolve_follow_up(conn, prompt, history)  ← followup.py    │
+│       previous_user_question = get_previous_user_question(history)                │
+│       is_reply, prompt = resolve_reply_to_clarification(...)  ← one LLM            │
+│       handled_reply_to_clarification = True; if not is_reply: previous_query_ignored │
+│  4. [Follow-up rewrite] If NOT handled_reply_to_clarification:                    │
+│       prompt = resolve_follow_up(conn, prompt, history)                           │
 │       (if current message is follow-up e.g. "and yesterday?" → rewrite to         │
 │        standalone using previous user question)                                   │
 │  5. classification = classify_intent(conn, prompt, history)  ← intent.py          │
@@ -240,12 +240,12 @@ Use this to trace code paths when reviewing the implementation.
 │ followup.py         │   │ intent.py            │   │ handlers.py                  │
 ├─────────────────────┤   ├─────────────────────┤   ├─────────────────────────────┤
 │ get_last_ai_message │   │ classify_intent()    │   │ run_run_sql → sql_gen, DB    │
-│ get_previous_user_  │   │   → SYSTEM_ROUTER_  │   │ run_generate_chart → chart    │
-│   question          │   │   PROMPT, returns   │   │ run_generate_summary         │
-│ is_follow_up        │   │   intent + optional  │   │ run_generate_report          │
-│ rewrite_with_context│   │   actions[]         │   │ run_ask_clarification         │
+│ get_previous_user_  │   │   INTENT_            │   │ run_generate_chart → chart    │
+│   question          │   │   CLASSIFICATION_   │   │ run_generate_summary         │
+│ is_follow_up        │   │   PROMPT → intent,   │   │ run_generate_report          │
+│ rewrite_with_context│   │   reason             │   │ run_ask_clarification         │
 │ resolve_follow_up   │   │                     │   │ run_general_chat             │
-│ is_reply_to_        │   │                     │   │ (each returns part+context)   │
+│ resolve_reply_to_   │   │                     │   │ (each returns part+context)   │
 │   clarification     │   │                     │   │ context: last_table_data,     │
 │ (LLM prompts in     │   │                     │   │ last_sql, last_chart_config   │
 │  prompt_ai_mode.py) │   │                     │   │                              │
@@ -277,7 +277,7 @@ Use this to trace code paths when reviewing the implementation.
 |------|----------------|-------|
 | UI → API | User message + history + `last_ai_was_clarification` sent to backend | `AIMode.tsx` → `routers/ai.py` |
 | Spelling | Raw prompt corrected (small LLM) | `orchestrator` → `spelling.correct_query` |
-| Reply vs new query | If last AI was clarification: reply → merge with previous question; else → mark previous ignored | `orchestrator` + `followup.is_reply_to_clarification`, `rewrite_with_context` |
+| Reply vs new query | If last AI was clarification: one LLM call decides + rewrites (clarification + previous question + current msg); else → previous ignored | `orchestrator` + `followup.resolve_reply_to_clarification` |
 | Follow-up rewrite | If message is follow-up (e.g. "and yesterday?"), rewrite to full question using history | `followup.resolve_follow_up` → `is_follow_up`, `rewrite_with_context` |
 | Intent | Classify intent (+ optional actions[]) | `intent.classify_intent` |
 | Plan | Resolve action sequence from classification | `planner.plan_actions` |

@@ -6,7 +6,7 @@ import json
 from typing import Dict, Any, List
 
 from ai_mode.client import get_ai_client, get_ai_model
-from ai_mode.prompt_ai_mode import SYSTEM_ROUTER_PROMPT
+from ai_mode.prompt_ai_mode import INTENT_CLASSIFICATION_PROMPT
 
 
 def classify_intent(conn, prompt: str, history: List[Dict] = None) -> Dict[str, Any]:
@@ -20,7 +20,7 @@ def classify_intent(conn, prompt: str, history: List[Dict] = None) -> Dict[str, 
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_ROUTER_PROMPT},
+                {"role": "system", "content": INTENT_CLASSIFICATION_PROMPT},
                 {"role": "user", "content": prompt}
             ],
             temperature=0,

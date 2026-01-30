@@ -17,39 +17,81 @@ from ai_mode.chart import generate_chart_config
 from ai_mode.prompt_ai_mode import SUMMARY_GENERATION_PROMPT, REPORT_GENERATION_PROMPT
 
 
+def _clarification_part(content: str, sql_query: str = None) -> Dict[str, Any]:
+    """Build a part that asks for clarification; orchestrator will set query_status=incomplete."""
+    part = {"type": "text", "content": content, "clarification": True}
+    if sql_query is not None:
+        part["sql_query"] = sql_query
+    return part
+
+
+def _get_filter_value_hints(conn) -> str:
+    """Query distinct values for common filter columns to help user correct typos (e.g. Dine-in vs Dine In)."""
+    hints = []
+    for column, label in [("order_type", "Order type"), ("order_from", "Order source")]:
+        try:
+            df = pd.read_sql_query(
+                f"SELECT DISTINCT {column} FROM orders WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1",
+                conn,
+            )
+            if not df.empty:
+                values = [str(v) for v in df.iloc[:, 0].tolist()]
+                hints.append(f"{label}: {', '.join(values)}")
+        except Exception:
+            pass
+    if not hints:
+        return ""
+    return " Valid values: " + "; ".join(hints) + "."
+
+
 def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Execute RUN_SQL: generate SQL, run it, explain. Returns (part, updated_context)."""
+    """Execute RUN_SQL: generate SQL, run it, explain. Returns (part, updated_context). May return clarification part on error, empty result, or when we cannot answer."""
     try:
         sql_query = generate_sql(conn, prompt)
     except ValueError as e:
-        part = {"type": "text", "content": str(e)}
+        part = _clarification_part(str(e))
         return part, add_part(context, "text", part["content"])
     try:
         df = pd.read_sql_query(sql_query, conn)
-        explanation = generate_explanation(conn, prompt, sql_query, df)
-        part = {
-            "type": "table",
-            "content": df_to_json(df),
-            "explanation": explanation,
-            "sql_query": sql_query,
-        }
-        new_ctx = add_part(context, "table", part["content"], explanation, sql_query)
-        return part, new_ctx
     except Exception as e:
-        part = {
-            "type": "text",
-            "content": f"I tried to query the database but encountered an error: {str(e)}",
-            "sql_query": sql_query,
-        }
+        part = _clarification_part(
+            f"I couldn't run that query: {str(e)}. Please rephrase or check what you're asking.",
+            sql_query=sql_query,
+        )
         new_ctx = add_part(context, "text", part["content"], None, sql_query)
         return part, new_ctx
+    if df.empty:
+        hints = _get_filter_value_hints(conn)
+        part = _clarification_part(
+            "No data found for that query. Please double-check filter values (e.g. order type might be 'Dine In' not 'Dine-in', or date range)."
+            + hints,
+            sql_query=sql_query,
+        )
+        new_ctx = add_part(context, "text", part["content"], None, sql_query)
+        return part, new_ctx
+    explanation = generate_explanation(conn, prompt, sql_query, df)
+    part = {
+        "type": "table",
+        "content": df_to_json(df),
+        "explanation": explanation,
+        "sql_query": sql_query,
+    }
+    new_ctx = add_part(context, "table", part["content"], explanation, sql_query)
+    return part, new_ctx
 
 
 def run_generate_chart(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Execute GENERATE_CHART: generate chart config and data. Returns (part, updated_context)."""
+    """Execute GENERATE_CHART: generate chart config and data. Returns (part, updated_context). May return clarification part on error or empty data."""
     chart_config = generate_chart_config(conn, prompt)
     if "error" in chart_config:
-        part = {"type": "text", "content": f"I couldn't generate the chart: {chart_config['error']}"}
+        part = _clarification_part(f"I couldn't generate the chart: {chart_config['error']}. Please rephrase or check filters.")
+        new_ctx = add_part(context, "text", part["content"])
+        return part, new_ctx
+    data = chart_config.get("data")
+    if data is None or (isinstance(data, list) and len(data) == 0):
+        part = _clarification_part(
+            "No data for that chart. Please check filter values (e.g. order type, date range) or rephrase."
+        )
         new_ctx = add_part(context, "text", part["content"])
         return part, new_ctx
     part = {
@@ -63,9 +105,22 @@ def run_generate_chart(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict
 
 def run_ask_clarification(prompt: str, context: Dict[str, Any], conn,
                           reason: str = "I need a bit more info.") -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Execute ASK_CLARIFICATION: return a text part asking for more detail."""
-    part = {"type": "text", "content": reason}
+    """Execute ASK_CLARIFICATION: return a text part asking for more detail. Part has clarification=True so orchestrator sets query_status=incomplete."""
+    part = {"type": "text", "content": reason, "clarification": True}
     new_ctx = add_part(context, "text", reason)
+    return part, new_ctx
+
+
+OUT_OF_SCOPE_MESSAGE = (
+    "We can only answer questions related to our restaurant analytics data "
+    "(orders, revenue, menu items, trends, etc.). Please ask something about our system."
+)
+
+
+def run_out_of_scope(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Execute OUT_OF_SCOPE: return a fixed message that we only answer questions about our system."""
+    part = {"type": "text", "content": OUT_OF_SCOPE_MESSAGE}
+    new_ctx = add_part(context, "text", part["content"])
     return part, new_ctx
 
 

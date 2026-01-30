@@ -12,7 +12,7 @@ from ai_mode.client import get_ai_client, get_ai_model
 from ai_mode.prompt_ai_mode import (
     FOLLOW_UP_DETECTION_PROMPT,
     CONTEXT_REWRITE_PROMPT,
-    IS_REPLY_TO_CLARIFICATION_PROMPT,
+    REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT,
 )
 
 # Phase 7.4: how much history to use (last N user+ai pairs)
@@ -140,35 +140,42 @@ def resolve_follow_up(
     return rewritten if rewritten else prompt
 
 
-def is_reply_to_clarification(
-    conn, current_message: str, clarification_text: str
-) -> bool:
+def resolve_reply_to_clarification(
+    conn,
+    clarification_text: str,
+    previous_user_question: str,
+    current_message: str,
+) -> tuple[bool, str]:
     """
-    Determine if current_message is a direct reply to the clarification question
-    (e.g. "yesterday", "last week") rather than a new query (e.g. "Show me top items").
-    Phase 8. Returns False on error or no API.
+    Single LLM call: decide if current_message is a reply to the clarification,
+    and if so rewrite previous_user_question + answer into one standalone query.
+    Returns (is_reply_to_clarification, effective_query). On error returns (False, current_message).
     """
-    if not current_message or not clarification_text:
-        return False
+    if not current_message or not clarification_text or not previous_user_question:
+        return (False, current_message or "")
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
-        return False
+        return (False, current_message)
     try:
-        user_content = f"""Assistant had asked: {clarification_text}
+        user_content = f"""Assistant asked: {clarification_text}
+Previous user question: {previous_user_question}
 User now said: {current_message}"""
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": IS_REPLY_TO_CLARIFICATION_PROMPT},
+                {"role": "system", "content": REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT},
                 {"role": "user", "content": user_content},
             ],
             temperature=0,
-            max_tokens=150,
+            max_tokens=300,
             response_format={"type": "json_object"},
         )
         out = json.loads(response.choices[0].message.content or "{}")
-        return out.get("is_reply", False)
+        is_reply = out.get("is_reply_to_clarification", False)
+        rewritten = (out.get("rewritten_query") or "").strip()
+        effective = rewritten if (is_reply and rewritten) else current_message
+        return (is_reply, effective)
     except Exception as e:
-        print(f"⚠️ Reply-to-clarification check failed, treating as new query: {e}")
-        return False
+        print(f"⚠️ Reply-to-clarification failed, treating as new query: {e}")
+        return (False, current_message)

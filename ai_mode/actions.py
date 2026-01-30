@@ -14,6 +14,7 @@ GENERATE_SUMMARY = "GENERATE_SUMMARY"   # Phase 4
 GENERATE_REPORT = "GENERATE_REPORT"     # Phase 4
 GENERAL_CHAT = "GENERAL_CHAT"
 ASK_CLARIFICATION = "ASK_CLARIFICATION"
+OUT_OF_SCOPE = "OUT_OF_SCOPE"
 
 ALL_ACTIONS = frozenset({
     RUN_SQL,
@@ -22,6 +23,7 @@ ALL_ACTIONS = frozenset({
     GENERATE_REPORT,
     GENERAL_CHAT,
     ASK_CLARIFICATION,
+    OUT_OF_SCOPE,
 })
 
 
@@ -37,5 +39,6 @@ def intent_to_actions(intent: str) -> List[str]:
         "REPORT_REQUEST": [GENERATE_REPORT],
         "CLARIFICATION_NEEDED": [ASK_CLARIFICATION],
         "GENERAL_CHAT": [GENERAL_CHAT],
+        "OUT_OF_SCOPE": [OUT_OF_SCOPE],
     }
     return mapping.get(intent, [GENERAL_CHAT])

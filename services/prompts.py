@@ -4,9 +4,13 @@ Import from ai_mode.prompt_ai_mode for new code.
 """
 
 from ai_mode.prompt_ai_mode import (
-    SYSTEM_ROUTER_PROMPT,
+    INTENT_CLASSIFICATION_PROMPT,
     SQL_GENERATION_PROMPT,
     CHART_GENERATION_PROMPT,
 )
 
-__all__ = ["SYSTEM_ROUTER_PROMPT", "SQL_GENERATION_PROMPT", "CHART_GENERATION_PROMPT"]
+__all__ = [
+    "INTENT_CLASSIFICATION_PROMPT",
+    "SQL_GENERATION_PROMPT",
+    "CHART_GENERATION_PROMPT",
+]

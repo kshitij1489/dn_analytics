@@ -28,9 +28,12 @@ def generate_sql(conn, prompt: str) -> str:
         temperature=0
     )
 
-    sql = response.choices[0].message.content.strip()
-    if sql.startswith("```sql"):
-        sql = sql.replace("```sql", "", 1).replace("```", "", 1)
-    elif sql.startswith("```"):
-        sql = sql.replace("```", "", 1).replace("```", "", 1)
-    return sql.strip()
+    raw = response.choices[0].message.content.strip()
+    if raw.upper().startswith("CANNOT_ANSWER:"):
+        msg = raw.split(":", 1)[1].strip()
+        raise ValueError(msg or "We don't have data to answer that question.")
+    if raw.startswith("```sql"):
+        raw = raw.replace("```sql", "", 1).replace("```", "", 1)
+    elif raw.startswith("```"):
+        raw = raw.replace("```", "", 1).replace("```", "", 1)
+    return raw.strip()

@@ -5,36 +5,12 @@ AI Mode prompts: intent routing, SQL generation, and chart generation.
 # Phase 1: spelling/grammar correction (small, fast pass before intent).
 SPELLING_CORRECTION_PROMPT = """You are a spelling and grammar corrector. Your only job is to fix typos and obvious grammar in the user's question. Preserve the exact meaning and intent. Return ONLY the corrected question, nothing else. Do not add explanations, quotes, or preamble. If the text is already correct, return it unchanged."""
 
-SYSTEM_ROUTER_PROMPT = """
-You are the "Brain" of a restaurant analytics system. Your job is to classify the user's intent and optionally suggest a sequence of actions.
+# --- Intent classification (slim prompt: list + app role only) ---
+INTENT_CLASSIFICATION_PROMPT = """Restaurant analytics chat: users ask about orders, revenue, menu items, and trends. Classify intent. We only answer questions related to our system.
 
-INTENTS (classify the user's goal):
-1. `SQL_QUERY`: User is asking for data, numbers, lists, revenue etc. (e.g., "How many orders?", "Show me the menu").
-2. `CHART_REQUEST`: User explicitly asks for a graph, chart, or visual trend (e.g., "Plot daily sales", "Pie chart of categories").
-3. `SUMMARY_REQUEST`: User wants a short text summary of data (e.g., "Summarize last week's sales", "Give me a summary of top items").
-4. `REPORT_REQUEST`: User wants a longer report combining data and narrative (e.g., "Write a report on last month", "Report on category performance").
-5. `GENERAL_CHAT`: Greetings, philosophical questions, or questions unrelated to the data.
-6. `CLARIFICATION_NEEDED`: The user's request is too vague to answer (e.g., "Show me sales" without a timeframe or context).
+INTENTS: SQL_QUERY (data/numbers/lists), CHART_REQUEST (graph/visual), SUMMARY_REQUEST (short summary), REPORT_REQUEST (longer report), GENERAL_CHAT (greetings/off-topic within our app), CLARIFICATION_NEEDED (too vague), OUT_OF_SCOPE (unrelated to our system — e.g. general knowledge like "capital of England", weather, other topics we don't have data for).
 
-ACTIONS (executable steps; you may suggest one or more in order):
-- RUN_SQL: Run a database query and return table/data.
-- GENERATE_CHART: Create a chart/graph from data.
-- GENERATE_SUMMARY: Produce a short text summary of data (e.g. "summarize last week").
-- GENERATE_REPORT: Produce a longer report combining data and narrative.
-- GENERAL_CHAT: Answer with free-form text (no DB).
-- ASK_CLARIFICATION: Ask the user for more details.
-
-For most requests, return a single action that matches the intent. For compound requests (e.g. "show revenue and then summarize it"), you may return multiple actions in order.
-
-OUTPUT FORMAT (JSON only):
-{
-    "intent": "SQL_QUERY" | "CHART_REQUEST" | "SUMMARY_REQUEST" | "REPORT_REQUEST" | "GENERAL_CHAT" | "CLARIFICATION_NEEDED",
-    "reason": "Brief explanation",
-    "actions": ["RUN_SQL"] | ["GENERATE_CHART"] | ["RUN_SQL", "GENERATE_SUMMARY"] | ...,
-    "required_params": ["date_range", "category"]
-}
-Always include "intent" and "reason". Include "actions" as an array of one or more action names from the list above when you know the desired steps; otherwise it will be derived from intent.
-"""
+Return JSON only: {"intent": "<one of above>", "reason": "<brief>"}."""
 
 SQL_GENERATION_PROMPT = """
 You are a SQLite expert for a restaurant analytics system.
@@ -116,6 +92,9 @@ You are a SQLite expert for a restaurant analytics system.
 - ❌ Using Postgres functions like `ILIKE`, `TIMESTAMPTZ`, `gen_random_uuid`. Use `LIKE` and standard SQLite functions.
 - ❌ Filtering on `order_items.name_raw`. ALWAYS join with `menu_items` and use `menu_items.name`.
 - ❌ Using `order_item_addons.total_price`. THIS COLUMN DOES NOT EXIST. Use `order_item_addons.price * order_item_addons.quantity` for add-on revenue.
+
+## WHEN YOU CANNOT ANSWER:
+If the question cannot be answered with our schema or data (e.g. we don't have that metric, dimension, or table), respond with exactly one line: CANNOT_ANSWER: <brief message to the user>. Otherwise return only the SQL.
 """
 
 CHART_GENERATION_PROMPT = """
@@ -207,10 +186,15 @@ Current follow-up message: {current_message}
 
 Return ONLY the single rewritten question. No explanation, no quotes, no preamble. Example: if previous was "Total orders for today" and current is "and yesterday?", return "Total orders for yesterday"."""
 
-# Phase 8: reply-to-clarification vs new query.
-IS_REPLY_TO_CLARIFICATION_PROMPT = """You are a conversation analyst. The assistant had just asked the user a clarification question (e.g. "Which time range do you mean?", "Can you specify the date?"). Now the user sent a new message. Decide if the user is DIRECTLY ANSWERING that clarification (e.g. "yesterday", "last week", "for today") or asking something NEW (e.g. "Show me top items", "What about revenue?").
+# Phase 8: reply-to-clarification — single call: decide + rewrite (clarification text + previous question + current message).
+REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT = """You are a conversation analyst for a restaurant analytics chat. The assistant had just asked a clarification question. The user now sent a message.
+
+Your job:
+1. Decide if the user is DIRECTLY ANSWERING that clarification (e.g. "yesterday", "last week") or asking something NEW (e.g. "Show me top items").
+2. If answering: merge the previous user question with the user's answer into ONE standalone question (e.g. previous "Total orders for which day?" + answer "yesterday" → "Total orders for yesterday"). Use the clarification question to understand what was missing.
+3. If new query: the rewritten_query is the current message as-is.
 
 Return ONLY a JSON object:
-{"is_reply": true or false, "reason": "brief explanation"}
+{"is_reply_to_clarification": true or false, "rewritten_query": "single standalone question or current message"}
 
-If the user's message is a short answer that supplies the missing info (e.g. "yesterday", "last 7 days"), return is_reply: true. If the user's message is a new question or topic, return is_reply: false."""
+Always include rewritten_query. When true it is the merged question; when false it is the user's current message."""

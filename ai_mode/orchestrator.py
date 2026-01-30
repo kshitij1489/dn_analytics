@@ -10,8 +10,7 @@ from ai_mode.followup import (
     resolve_follow_up,
     get_last_ai_message,
     get_previous_user_question,
-    is_reply_to_clarification,
-    rewrite_with_context,
+    resolve_reply_to_clarification,
 )
 from ai_mode.intent import classify_intent
 from ai_mode.planner import plan_actions
@@ -22,6 +21,7 @@ from ai_mode.actions import (
     GENERATE_REPORT,
     ASK_CLARIFICATION,
     GENERAL_CHAT,
+    OUT_OF_SCOPE,
 )
 from ai_mode.context import empty_context
 from ai_mode.handlers import (
@@ -30,6 +30,7 @@ from ai_mode.handlers import (
     run_generate_summary,
     run_generate_report,
     run_ask_clarification,
+    run_out_of_scope,
     run_general_chat,
 )
 from ai_mode.logging import log_interaction
@@ -40,6 +41,7 @@ ACTION_HANDLERS = {
     GENERATE_SUMMARY: run_generate_summary,
     GENERATE_REPORT: run_generate_report,
     ASK_CLARIFICATION: run_ask_clarification,
+    OUT_OF_SCOPE: run_out_of_scope,
     GENERAL_CHAT: run_general_chat,
 }
 
@@ -51,8 +53,8 @@ async def process_chat(
     last_ai_was_clarification: bool = False,
 ) -> AIResponse:
     """
-    Main orchestrator: correct → (Phase 8: reply-to-clarification vs new query) →
-    Phase 7 follow-up rewrite → classify intent → plan actions → execute → response.
+    Main orchestrator: correct → (reply-to-clarification if applicable; else follow-up rewrite) →
+    classify intent → plan actions → execute → response.
     """
     raw_prompt = prompt
     prompt = correct_query(conn, prompt)
@@ -60,21 +62,25 @@ async def process_chat(
     query_status_this_turn = "complete"
     pending_clarification_question = None
 
-    # Phase 8: if last AI was a clarification, decide reply vs new query
+    # Reply-to-clarification: if last AI was a clarification, one LLM call to decide + rewrite
+    handled_reply_to_clarification = False
     if last_ai_was_clarification and history:
         clarification_text = get_last_ai_message(history)
         previous_user_question = get_previous_user_question(history)
         if clarification_text and previous_user_question:
-            if is_reply_to_clarification(conn, prompt, clarification_text):
-                prompt = rewrite_with_context(conn, prompt, previous_user_question)
-                if prompt:
-                    print(f"[AI Mode] reply-to-clarification merged: {prompt!r}")
+            is_reply, prompt = resolve_reply_to_clarification(
+                conn, clarification_text, previous_user_question, prompt
+            )
+            handled_reply_to_clarification = True
+            if is_reply:
+                print(f"[AI Mode] reply-to-clarification merged: {prompt!r}")
             else:
                 previous_query_ignored = True
                 print(f"[AI Mode] new query after clarification (previous ignored)")
 
-    # Phase 7: if current message is a follow-up (e.g. "and yesterday?"), rewrite using previous question from history
-    prompt = resolve_follow_up(conn, prompt, history)
+    # Follow-up rewrite: only if we didn't handle reply-to-clarification — e.g. "and yesterday?" → full question
+    if not handled_reply_to_clarification:
+        prompt = resolve_follow_up(conn, prompt, history)
 
     classification = classify_intent(conn, prompt, history)
     intent = classification.get("intent", "GENERAL_CHAT")
@@ -95,11 +101,12 @@ async def process_chat(
                     prompt, context, conn,
                     reason=reason,
                 )
-                query_status_this_turn = "incomplete"
-                pending_clarification_question = reason
             else:
                 part, context = handler(prompt, context, conn)
             parts.append(part)
+            if part.get("clarification"):
+                query_status_this_turn = "incomplete"
+                pending_clarification_question = part["content"]
         except Exception as e:
             print(f"[AI Mode] step failed: action={action} error={e}")
             raise
