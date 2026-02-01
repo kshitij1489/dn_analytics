@@ -11,10 +11,15 @@ import pandas as pd
 from src.api.utils import df_to_json
 
 from ai_mode.context import add_part
+from ai_mode.client import get_ai_client, get_ai_model
 from ai_mode.sql_gen import generate_sql
 from ai_mode.explanation import generate_explanation
 from ai_mode.chart import generate_chart_config
-from ai_mode.prompt_ai_mode import SUMMARY_GENERATION_PROMPT, REPORT_GENERATION_PROMPT
+from ai_mode.prompt_ai_mode import (
+    SUMMARY_GENERATION_PROMPT,
+    REPORT_GENERATION_PROMPT,
+    NO_DATA_HINT_PROMPT,
+)
 
 
 def _clarification_part(content: str, sql_query: str = None) -> Dict[str, Any]:
@@ -25,23 +30,79 @@ def _clarification_part(content: str, sql_query: str = None) -> Dict[str, Any]:
     return part
 
 
-def _get_filter_value_hints(conn) -> str:
-    """Query distinct values for common filter columns to help user correct typos (e.g. Dine-in vs Dine In)."""
-    hints = []
-    for column, label in [("order_type", "Order type"), ("order_from", "Order source")]:
-        try:
-            df = pd.read_sql_query(
-                f"SELECT DISTINCT {column} FROM orders WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1",
-                conn,
-            )
-            if not df.empty:
-                values = [str(v) for v in df.iloc[:, 0].tolist()]
-                hints.append(f"{label}: {', '.join(values)}")
-        except Exception:
-            pass
-    if not hints:
-        return ""
-    return " Valid values: " + "; ".join(hints) + "."
+def _is_effectively_empty(df: pd.DataFrame) -> bool:
+    """True if no rows, or every cell is null/NaN (e.g. SELECT AVG(...) with zero matching rows returns one row of NULL)."""
+    if df.empty:
+        return True
+    return df.isna().all().all()
+
+
+# Columns we can show "valid values" for when a query returns no data. Add (table, column, label) to extend.
+# Set to [] to show no hints and only the next-steps message.
+# TODO: These hints will be replaced with a learned cache (e.g. cached distinct values or LLM-suggested hints).
+FILTER_HINT_COLUMNS: List[Tuple[str, str, str]] = [
+    # orders: type, source, status (commonly filtered)
+    ("orders", "order_type", "Order type"),
+    ("orders", "order_from", "Order source"),
+    ("orders", "order_status", "Order status"),
+    ("orders", "sub_order_type", "Sub order type"),
+    # menu_items: category/type (e.g. Beverage, Main)
+    ("menu_items", "type", "Menu category/type"),
+]
+
+NO_DATA_NEXT_STEPS = (
+    " You can ask e.g. \"What order types do we have?\" or \"What are the valid values for order source?\" "
+    "to see options for a specific field."
+)
+
+
+def _suggest_no_data_hint(conn, user_prompt: str, sql_query: str) -> str:
+    """
+    Use LLM to suggest a short, smart hint. Valid values come from FILTER_HINT_COLUMNS (or NO_DATA_NEXT_STEPS).
+    TODO: Will be replaced with a learned cache (e.g. precomputed or cached hints).
+    """
+    # Build valid values string from FILTER_HINT_COLUMNS; to be replaced with learned cache.
+    if not FILTER_HINT_COLUMNS:
+        valid_values_str = NO_DATA_NEXT_STEPS
+    else:
+        hints: List[str] = []
+        for table, column, label in FILTER_HINT_COLUMNS:
+            try:
+                df = pd.read_sql_query(
+                    f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1",
+                    conn,
+                )
+                if not df.empty:
+                    values = [str(v) for v in df.iloc[:, 0].tolist()]
+                    hints.append(f"{label}: {', '.join(values)}")
+            except Exception:
+                pass
+        valid_values_str = " Valid values: " + "; ".join(hints) + "." if hints else NO_DATA_NEXT_STEPS
+
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
+    if not client:
+        return valid_values_str
+    try:
+        user_content = f"""User asked: {user_prompt}
+
+SQL that returned no data: {sql_query}
+
+Valid values from our system: {valid_values_str}"""
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": NO_DATA_HINT_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.3,
+            max_tokens=150,
+        )
+        suggestion = (response.choices[0].message.content or "").strip()
+        return " " + suggestion if suggestion else valid_values_str
+    except Exception as e:
+        print(f"⚠️ No-data hint suggestion failed, using raw hints: {e}")
+        return valid_values_str
 
 
 def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -60,11 +121,11 @@ def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, A
         )
         new_ctx = add_part(context, "text", part["content"], None, sql_query)
         return part, new_ctx
-    if df.empty:
-        hints = _get_filter_value_hints(conn)
+    if _is_effectively_empty(df):
+        smart_hint = _suggest_no_data_hint(conn, prompt, sql_query)
         part = _clarification_part(
-            "No data found for that query. Please double-check filter values (e.g. order type might be 'Dine In' not 'Dine-in', or date range)."
-            + hints,
+            "No data found for that query. Please double-check filter values or rephrase."
+            + smart_hint,
             sql_query=sql_query,
         )
         new_ctx = add_part(context, "text", part["content"], None, sql_query)

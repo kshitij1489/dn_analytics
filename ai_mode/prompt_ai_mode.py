@@ -12,6 +12,16 @@ INTENTS: SQL_QUERY (data/numbers/lists), CHART_REQUEST (graph/visual), SUMMARY_R
 
 Return JSON only: {"intent": "<one of above>", "reason": "<brief>"}."""
 
+# No-data hint: LLM suggests a short, smart hint using the cached valid values (for future: replace with cached list).
+NO_DATA_HINT_PROMPT = """Restaurant analytics: the user's query returned no data. You are given their question, the SQL that ran, and the valid values for filter columns (from our system).
+
+Your job: suggest ONE short, helpful hint or follow-up. Examples:
+- If they used a wrong value (e.g. "Dine-in" vs "Dine In"): "Did you mean 'Dine In'? Try: Average order value for Dine In orders."
+- If valid values are listed: briefly mention the relevant one and a sample rephrase.
+- If no valid values given: suggest they ask e.g. "What order types do we have?"
+
+Return ONLY the suggestion (one sentence). No preamble, no quotes around the whole thing."""
+
 SQL_GENERATION_PROMPT = """
 You are a SQLite expert for a restaurant analytics system.
 
