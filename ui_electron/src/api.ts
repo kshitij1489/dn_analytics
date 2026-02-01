@@ -105,6 +105,7 @@ export const endpoints = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             }),
+        suggestions: (limit?: number) => api.get('/ai/suggestions', { params: { limit } }),
         feedback: (data: { log_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
     },
 

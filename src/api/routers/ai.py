@@ -68,6 +68,24 @@ async def chat_stream(request: AIQueryRequest, conn=Depends(get_db)):
     )
 
 
+@router.get("/suggestions")
+def get_suggestions(limit: int = 10, conn=Depends(get_db)):
+    """Get popular/recent queries for suggestions."""
+    try:
+        cursor = conn.execute("""
+            SELECT user_query, COUNT(*) as freq, MAX(created_at) as last_used
+            FROM ai_logs
+            WHERE user_query IS NOT NULL AND user_query != ''
+            GROUP BY user_query
+            ORDER BY freq DESC, last_used DESC
+            LIMIT ?
+        """, (limit,))
+        return [{"query": row["user_query"], "frequency": row["freq"]} for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting suggestions: {e}")
+        return []
+
+
 @router.post("/feedback")
 def submit_feedback(feedback: AIFeedbackRequest, conn=Depends(get_db)):
     """Save user feedback for a query result"""

@@ -19,6 +19,7 @@ interface Message {
     query_status?: 'complete' | 'incomplete' | 'ignored'; // Phase 8
     pending_clarification_question?: string; // Phase 8: when incomplete
     previous_query_ignored?: boolean; // Phase 8: true when backend says user sent new query after clarification
+    message_id?: string; // Phase 5: for persistence and undo
 }
 
 /** One part of a multi-part AI response (Phase 3) */
@@ -63,14 +64,32 @@ export default function AIMode() {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [suggestions, setSuggestions] = useState<{ query: string; frequency: number }[]>([]);
+
     useEffect(() => {
         scrollToBottom();
     }, [messages, loading]);
 
-    // Load conversation list on mount
+    // Load conversation list and active conversation on mount
     useEffect(() => {
         loadConversations();
+
+        // Auto-load last active conversation
+        const lastConvId = localStorage.getItem('ai_active_conversation');
+        if (lastConvId) {
+            loadConversation(lastConvId);
+        }
     }, []);
+
+    // Persist active conversation ID
+    useEffect(() => {
+        if (conversationId) {
+            localStorage.setItem('ai_active_conversation', conversationId);
+        } else {
+            localStorage.removeItem('ai_active_conversation');
+        }
+    }, [conversationId]);
 
     const loadConversations = async () => {
         try {
@@ -81,10 +100,20 @@ export default function AIMode() {
         }
     };
 
+    const loadSuggestions = async () => {
+        try {
+            const res = await endpoints.ai.suggestions(10);
+            setSuggestions(res.data || []);
+        } catch (err) {
+            console.error('Failed to load suggestions:', err);
+        }
+    };
+
     const startNewConversation = async () => {
         setMessages([]);
         setConversationId(null);
         setLastFailedPrompt(null);
+        localStorage.removeItem('ai_active_conversation');
     };
 
     const loadConversation = async (id: string) => {
@@ -98,6 +127,7 @@ export default function AIMode() {
                 explanation: m.explanation,
                 log_id: m.log_id,
                 query_status: m.query_status,
+                message_id: m.message_id
             }));
             setMessages(msgs);
             setConversationId(id);
@@ -105,25 +135,28 @@ export default function AIMode() {
             setLastFailedPrompt(null);
         } catch (err) {
             console.error('Failed to load conversation:', err);
+            // If 404, clear invalid local storage
+            localStorage.removeItem('ai_active_conversation');
         }
     };
 
-    const persistMessage = async (msg: Message) => {
-        if (!conversationId) return;
+    const deleteConversation = async (id: string, e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent triggering loadConversation
+        if (!confirm('Are you sure you want to delete this conversation?')) return;
+
         try {
-            await endpoints.conversations.addMessage(conversationId, {
-                role: msg.role,
-                content: msg.content,
-                type: msg.type,
-                sql_query: msg.sql_query,
-                explanation: msg.explanation,
-                log_id: msg.log_id,
-                query_status: msg.query_status,
-            });
+            await endpoints.conversations.delete(id);
+            setConversations(prev => prev.filter(c => c.conversation_id !== id));
+
+            if (conversationId === id) {
+                startNewConversation();
+            }
         } catch (err) {
-            console.error('Failed to persist message:', err);
+            console.error('Failed to delete conversation:', err);
         }
     };
+
+
 
     const handleRetry = () => {
         if (lastFailedPrompt) {
@@ -131,11 +164,30 @@ export default function AIMode() {
         }
     };
 
-    const handleUndo = () => {
+    const handleUndo = async () => {
         if (messages.length < 2) return;
-        // Remove last AI + user pair
+
+        // Remove from server if persisted
+        const lastAiMsg = messages[messages.length - 1];
+        const lastUserMsg = messages[messages.length - 2];
+
+        // Optimistically remove from UI
         setMessages(prev => prev.slice(0, -2));
         setLastFailedPrompt(null);
+
+        if (conversationId) {
+            try {
+                // Best effort deletion
+                if (lastAiMsg.message_id) {
+                    await endpoints.conversations.deleteMessage(conversationId, lastAiMsg.message_id);
+                }
+                if (lastUserMsg.message_id) {
+                    await endpoints.conversations.deleteMessage(conversationId, lastUserMsg.message_id);
+                }
+            } catch (err) {
+                console.error('Failed to delete undone messages', err);
+            }
+        }
     };
 
     const handleAsk = async (customPrompt?: string) => {
@@ -155,7 +207,13 @@ export default function AIMode() {
         }
 
         // Add User Message
-        const userMsg: Message = { role: 'user', content: queryPrompt };
+        const userMsg: Message = {
+            role: 'user',
+            content: queryPrompt,
+            message_id: currentConvId ? crypto.randomUUID() : undefined // Temp ID until confirmed? Or just rely on server response if we sync properly. 
+            // Actually, for better persistence tracking we should await the server response or just trust the append order.
+            // Simplified: We'll persist async and not block UI.
+        };
         setMessages(prev => [...prev, userMsg]);
         setPrompt('');
         setLoading(true);
@@ -163,11 +221,22 @@ export default function AIMode() {
 
         // Persist user message
         if (currentConvId) {
-            persistMessage({ ...userMsg, type: 'text' });
+            // We need the ID back from server to support Undo properly later?
+            // For now, let's assume valid deletion requires IDs which we only get if we wait. 
+            // But we want optimistic UI. 
+            // Better strategy: Fire and forget for now, but for Undo to work perfectly we'd need to store the returned IDs.
+            // Let's await to get the ID.
+            endpoints.conversations.addMessage(currentConvId, { ...userMsg, type: 'text' })
+                .then(res => {
+                    // Update the message in state with the real ID
+                    setMessages(prev => prev.map(m => m === userMsg ? { ...m, message_id: res.data.message_id } : m));
+                })
+                .catch(err => console.error('Failed to persist user msg', err));
         }
 
+        const isStreamingRequest = queryPrompt.toLowerCase().includes('report') || queryPrompt.toLowerCase().includes('summary');
+
         try {
-            // Prepare History for Context
             const history = messages.slice(-10).map(m => ({
                 role: m.role,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
@@ -176,35 +245,109 @@ export default function AIMode() {
             const lastMsg = messages[messages.length - 1];
             const lastAiWasClarification = lastMsg?.role === 'ai' && lastMsg?.query_status === 'incomplete';
 
-            const res = await endpoints.ai.chat({
-                prompt: queryPrompt,
-                history,
-                last_ai_was_clarification: lastAiWasClarification
-            });
+            if (isStreamingRequest) {
+                // HANDLE STREAMING
+                const aiMsgPlaceholder: Message = { role: 'ai', content: '', type: 'text' };
+                setMessages(prev => [...prev, aiMsgPlaceholder]);
 
-            const aiMsg: Message = {
-                role: 'ai',
-                content: res.data.content,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                type: res.data.type as any,
-                sql_query: res.data.sql_query,
-                explanation: res.data.explanation,
-                log_id: res.data.log_id,
-                corrected_prompt: res.data.corrected_prompt,
-                query_status: res.data.query_status,
-                pending_clarification_question: res.data.pending_clarification_question,
-                previous_query_ignored: res.data.previous_query_ignored
-            };
+                const response = await endpoints.ai.chatStream({
+                    prompt: queryPrompt,
+                    history,
+                    last_ai_was_clarification: lastAiWasClarification
+                });
 
-            setMessages(prev => [...prev, aiMsg]);
+                if (!response.body) throw new Error("No response body");
 
-            // Persist AI message
-            if (currentConvId) {
-                persistMessage(aiMsg);
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let accumulatedContent = '';
+                let finalResponseData: any = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                if (data.type === 'chunk') {
+                                    accumulatedContent += data.content;
+                                    setMessages(prev => {
+                                        const newMsgs = [...prev];
+                                        newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], content: accumulatedContent };
+                                        return newMsgs;
+                                    });
+                                } else if (data.type === 'complete') {
+                                    // Fallback or final full update
+                                    accumulatedContent = data.content;
+                                    finalResponseData = data.response;
+                                } else if (data.type === 'error') {
+                                    throw new Error(data.message);
+                                }
+                            } catch (e) {
+                                // console.error('Error parsing SSE', e);
+                            }
+                        }
+                    }
+                }
+
+                // Finalize AI message persistence
+                const finalAiMsg = {
+                    ...aiMsgPlaceholder,
+                    content: accumulatedContent,
+                    ...(finalResponseData || {}) // Merge any metadata if available
+                };
+
+                if (currentConvId) {
+                    endpoints.conversations.addMessage(currentConvId, {
+                        ...finalAiMsg,
+                        type: 'text',
+                        query_status: 'complete'
+                    } as any).then(res => {
+                        setMessages(prev => prev.map(m => m === aiMsgPlaceholder ? { ...finalAiMsg, message_id: res.data.message_id } : m));
+                    });
+
+                    loadConversations(); // Refresh list to update timestamps
+                }
+
+            } else {
+                // HANDLE STANDARD REQUEST
+                const res = await endpoints.ai.chat({
+                    prompt: queryPrompt,
+                    history,
+                    last_ai_was_clarification: lastAiWasClarification
+                });
+
+                const aiMsg: Message = {
+                    role: 'ai',
+                    content: res.data.content,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    type: res.data.type as any,
+                    sql_query: res.data.sql_query,
+                    explanation: res.data.explanation,
+                    log_id: res.data.log_id,
+                    corrected_prompt: res.data.corrected_prompt,
+                    query_status: res.data.query_status,
+                    pending_clarification_question: res.data.pending_clarification_question,
+                    previous_query_ignored: res.data.previous_query_ignored
+                };
+
+                setMessages(prev => [...prev, aiMsg]);
+
+                // Persist AI message
+                if (currentConvId) {
+                    endpoints.conversations.addMessage(currentConvId, aiMsg)
+                        .then(res => {
+                            setMessages(prev => prev.map(m => m === aiMsg ? { ...m, message_id: res.data.message_id } : m));
+                        });
+
+                    loadConversations();
+                }
             }
-
-            // Refresh conversation list
-            loadConversations();
         } catch (err: any) {
             const errorMsg: Message = {
                 role: 'ai',
@@ -297,6 +440,75 @@ export default function AIMode() {
                     >
                         ➕ New Chat
                     </button>
+                    {/* Suggestions */}
+                    <div style={{ position: 'relative' }}>
+                        <button
+                            onClick={() => {
+                                setShowSuggestions(!showSuggestions);
+                                if (!showSuggestions) loadSuggestions();
+                            }}
+                            style={{
+                                padding: '8px 16px',
+                                background: showSuggestions ? 'var(--primary-color)' : 'var(--card-bg)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                color: showSuggestions ? 'white' : 'var(--text-color)',
+                                fontSize: '0.85rem'
+                            }}
+                        >
+                            💡 Suggestions
+                        </button>
+
+                        {/* Suggestions Dropdown */}
+                        {showSuggestions && (
+                            <div style={{
+                                position: 'absolute',
+                                right: 0,
+                                top: '45px',
+                                width: '300px',
+                                background: 'var(--card-bg)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '12px',
+                                padding: '16px',
+                                boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                                zIndex: 1000
+                            }}>
+                                <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>Popular Queries</h3>
+                                {suggestions.length === 0 ? (
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No suggestions available</p>
+                                ) : (
+                                    suggestions.map((s, i) => (
+                                        <div
+                                            key={i}
+                                            onClick={() => {
+                                                handleAsk(s.query);
+                                                setShowSuggestions(false);
+                                            }}
+                                            style={{
+                                                padding: '8px 10px',
+                                                marginBottom: '6px',
+                                                background: 'var(--bg-color)',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer',
+                                                fontSize: '0.85rem',
+                                                color: 'var(--text-color)',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center'
+                                            }}
+                                        >
+                                            <span style={{ flex: 1, marginRight: '10px' }}>{s.query}</span>
+                                            <span style={{ fontSize: '0.75rem', opacity: 0.7, background: 'rgba(0,0,0,0.1)', padding: '2px 6px', borderRadius: '10px' }}>
+                                                {s.frequency}x
+                                            </span>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        )}
+                    </div>
+
                     {/* Undo */}
                     {messages.length >= 2 && (
                         <button
@@ -364,13 +576,37 @@ export default function AIMode() {
                                     background: conv.conversation_id === conversationId ? 'var(--primary-color)' : 'var(--bg-color)',
                                     borderRadius: '8px',
                                     cursor: 'pointer',
-                                    color: conv.conversation_id === conversationId ? 'white' : 'var(--text-color)'
+                                    color: conv.conversation_id === conversationId ? 'white' : 'var(--text-color)',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    position: 'relative'
                                 }}
                             >
-                                <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{conv.title || 'Untitled'}</div>
-                                <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: '4px' }}>
-                                    {conv.message_count} messages
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontWeight: 500, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {conv.title || 'Untitled'}
+                                    </div>
+                                    <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: '4px' }}>
+                                        {conv.message_count} messages
+                                    </div>
                                 </div>
+                                <button
+                                    onClick={(e) => deleteConversation(conv.conversation_id, e)}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontSize: '1rem',
+                                        padding: '4px',
+                                        marginLeft: '8px',
+                                        opacity: 0.6,
+                                        color: 'inherit'
+                                    }}
+                                    title="Delete conversation"
+                                >
+                                    🗑️
+                                </button>
                             </div>
                         ))
                     )}
