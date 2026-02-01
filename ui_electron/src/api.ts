@@ -99,7 +99,31 @@ export const endpoints = {
 
     ai: {
         chat: (data: { prompt: string, history?: any[]; last_ai_was_clarification?: boolean }) => api.post('/ai/chat', data),
+        chatStream: (data: { prompt: string, history?: any[]; last_ai_was_clarification?: boolean }) =>
+            fetch(`${API_BASE_URL}/ai/chat/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }),
         feedback: (data: { log_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
+    },
+
+    conversations: {
+        create: (data?: { title?: string }) => api.post('/conversations', data || {}),
+        list: (params?: { limit?: number; offset?: number }) => api.get('/conversations', { params }),
+        getMessages: (conversationId: string) => api.get(`/conversations/${conversationId}`),
+        addMessage: (conversationId: string, data: {
+            role: string;
+            content: any;
+            type?: string;
+            sql_query?: string;
+            explanation?: string;
+            log_id?: string;
+            query_status?: string;
+        }) => api.post(`/conversations/${conversationId}/messages`, data),
+        delete: (conversationId: string) => api.delete(`/conversations/${conversationId}`),
+        deleteMessage: (conversationId: string, messageId: string) =>
+            api.delete(`/conversations/${conversationId}/messages/${messageId}`),
     },
 
     config: {

@@ -39,11 +39,25 @@ const SUGGESTED_QUERIES = [
 
 const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
+interface Conversation {
+    conversation_id: string;
+    title: string;
+    started_at: string;
+    updated_at: string;
+    message_count: number;
+}
+
 export default function AIMode() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [prompt, setPrompt] = useState('');
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    // Conversation persistence state
+    const [conversationId, setConversationId] = useState<string | null>(null);
+    const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [showHistory, setShowHistory] = useState(false);
+    const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -53,15 +67,104 @@ export default function AIMode() {
         scrollToBottom();
     }, [messages, loading]);
 
+    // Load conversation list on mount
+    useEffect(() => {
+        loadConversations();
+    }, []);
+
+    const loadConversations = async () => {
+        try {
+            const res = await endpoints.conversations.list({ limit: 20 });
+            setConversations(res.data || []);
+        } catch (err) {
+            console.error('Failed to load conversations:', err);
+        }
+    };
+
+    const startNewConversation = async () => {
+        setMessages([]);
+        setConversationId(null);
+        setLastFailedPrompt(null);
+    };
+
+    const loadConversation = async (id: string) => {
+        try {
+            const res = await endpoints.conversations.getMessages(id);
+            const msgs: Message[] = (res.data || []).map((m: any) => ({
+                role: m.role,
+                content: m.content,
+                type: m.type || 'text',
+                sql_query: m.sql_query,
+                explanation: m.explanation,
+                log_id: m.log_id,
+                query_status: m.query_status,
+            }));
+            setMessages(msgs);
+            setConversationId(id);
+            setShowHistory(false);
+            setLastFailedPrompt(null);
+        } catch (err) {
+            console.error('Failed to load conversation:', err);
+        }
+    };
+
+    const persistMessage = async (msg: Message) => {
+        if (!conversationId) return;
+        try {
+            await endpoints.conversations.addMessage(conversationId, {
+                role: msg.role,
+                content: msg.content,
+                type: msg.type,
+                sql_query: msg.sql_query,
+                explanation: msg.explanation,
+                log_id: msg.log_id,
+                query_status: msg.query_status,
+            });
+        } catch (err) {
+            console.error('Failed to persist message:', err);
+        }
+    };
+
+    const handleRetry = () => {
+        if (lastFailedPrompt) {
+            handleAsk(lastFailedPrompt);
+        }
+    };
+
+    const handleUndo = () => {
+        if (messages.length < 2) return;
+        // Remove last AI + user pair
+        setMessages(prev => prev.slice(0, -2));
+        setLastFailedPrompt(null);
+    };
+
     const handleAsk = async (customPrompt?: string) => {
         const queryPrompt = customPrompt || prompt;
         if (!queryPrompt.trim()) return;
+
+        // Create conversation if this is the first message
+        let currentConvId = conversationId;
+        if (!currentConvId && messages.length === 0) {
+            try {
+                const res = await endpoints.conversations.create({ title: queryPrompt.slice(0, 50) });
+                currentConvId = res.data.conversation_id;
+                setConversationId(currentConvId);
+            } catch (err) {
+                console.error('Failed to create conversation:', err);
+            }
+        }
 
         // Add User Message
         const userMsg: Message = { role: 'user', content: queryPrompt };
         setMessages(prev => [...prev, userMsg]);
         setPrompt('');
         setLoading(true);
+        setLastFailedPrompt(null);
+
+        // Persist user message
+        if (currentConvId) {
+            persistMessage({ ...userMsg, type: 'text' });
+        }
 
         try {
             // Prepare History for Context
@@ -94,13 +197,22 @@ export default function AIMode() {
             };
 
             setMessages(prev => [...prev, aiMsg]);
+
+            // Persist AI message
+            if (currentConvId) {
+                persistMessage(aiMsg);
+            }
+
+            // Refresh conversation list
+            loadConversations();
         } catch (err: any) {
             const errorMsg: Message = {
                 role: 'ai',
-                content: "Sorry, I encountered an error processing your request.",
+                content: "Sorry, I encountered an error processing your request. Click 'Retry' to try again.",
                 type: 'text'
             };
             setMessages(prev => [...prev, errorMsg]);
+            setLastFailedPrompt(queryPrompt);
         } finally {
             setLoading(false);
         }
@@ -143,13 +255,127 @@ export default function AIMode() {
             <div style={{
                 padding: '20px 0',
                 borderBottom: '1px solid var(--border-color)',
-                marginBottom: '20px'
+                marginBottom: '20px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
             }}>
-                <h1 style={{ fontSize: '1.8rem', margin: 0 }}>✨ AI Assistant</h1>
-                <p style={{ margin: '5px 0 0', color: 'var(--text-secondary)' }}>
-                    Ask questions, generate reports, and analyze your data.
-                </p>
+                <div>
+                    <h1 style={{ fontSize: '1.8rem', margin: 0 }}>✨ AI Assistant</h1>
+                    <p style={{ margin: '5px 0 0', color: 'var(--text-secondary)' }}>
+                        Ask questions, generate reports, and analyze your data.
+                    </p>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    {/* History Toggle */}
+                    <button
+                        onClick={() => setShowHistory(!showHistory)}
+                        style={{
+                            padding: '8px 16px',
+                            background: showHistory ? 'var(--primary-color)' : 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            color: showHistory ? 'white' : 'var(--text-color)',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        📜 History
+                    </button>
+                    {/* New Chat */}
+                    <button
+                        onClick={startNewConversation}
+                        style={{
+                            padding: '8px 16px',
+                            background: 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            color: 'var(--text-color)',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        ➕ New Chat
+                    </button>
+                    {/* Undo */}
+                    {messages.length >= 2 && (
+                        <button
+                            onClick={handleUndo}
+                            style={{
+                                padding: '8px 16px',
+                                background: 'var(--card-bg)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                color: 'var(--text-color)',
+                                fontSize: '0.85rem'
+                            }}
+                        >
+                            ↩️ Undo
+                        </button>
+                    )}
+                    {/* Retry */}
+                    {lastFailedPrompt && (
+                        <button
+                            onClick={handleRetry}
+                            style={{
+                                padding: '8px 16px',
+                                background: '#ef4444',
+                                border: 'none',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                color: 'white',
+                                fontSize: '0.85rem'
+                            }}
+                        >
+                            🔄 Retry
+                        </button>
+                    )}
+                </div>
             </div>
+
+            {/* History Sidebar */}
+            {showHistory && (
+                <div style={{
+                    position: 'fixed',
+                    right: '20px',
+                    top: '80px',
+                    width: '300px',
+                    maxHeight: '400px',
+                    overflowY: 'auto',
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                    zIndex: 1000
+                }}>
+                    <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>Recent Conversations</h3>
+                    {conversations.length === 0 ? (
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No conversations yet</p>
+                    ) : (
+                        conversations.map(conv => (
+                            <div
+                                key={conv.conversation_id}
+                                onClick={() => loadConversation(conv.conversation_id)}
+                                style={{
+                                    padding: '10px',
+                                    marginBottom: '8px',
+                                    background: conv.conversation_id === conversationId ? 'var(--primary-color)' : 'var(--bg-color)',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    color: conv.conversation_id === conversationId ? 'white' : 'var(--text-color)'
+                                }}
+                            >
+                                <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{conv.title || 'Untitled'}</div>
+                                <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: '4px' }}>
+                                    {conv.message_count} messages
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            )}
 
             {/* Chat Area */}
             <div style={{

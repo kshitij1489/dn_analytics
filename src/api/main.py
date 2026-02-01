@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, weather
+from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, weather, conversations
 
 app = FastAPI(title="Analytics Backend")
 
@@ -37,9 +37,34 @@ def startup_db_check():
                 PRIMARY KEY (date, city)
             );
             """)
+            # Migration: AI Conversations tables
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT,
+                started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                synced_at TEXT
+            );
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_messages (
+                message_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES ai_conversations(conversation_id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                type TEXT,
+                sql_query TEXT,
+                explanation TEXT,
+                log_id TEXT,
+                query_status TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id);")
             conn.commit()
             conn.close()
-            print("Startup: Verified weather_daily schema.")
+            print("Startup: Verified weather_daily and ai_conversations schema.")
     except Exception as e:
         print(f"Startup DB Check Failed: {e}")
 
@@ -63,6 +88,7 @@ app.include_router(config.router, prefix="/api/config", tags=["Config"])
 app.include_router(today.router)
 app.include_router(forecast.router, prefix="/api/forecast", tags=["Forecast"])
 app.include_router(weather.router, prefix="/api/weather", tags=["Weather"])
+app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
 
 @app.get("/api/health")
 def health():

@@ -361,6 +361,34 @@ CREATE TABLE IF NOT EXISTS ai_feedback (
 );
 
 -- ============================================================================
+-- 15b. AI CONVERSATIONS (Persistence)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ai_conversations (
+    conversation_id TEXT PRIMARY KEY, -- UUID as TEXT
+    title TEXT, -- Auto-generated or user-defined title
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    synced_at TEXT -- NULL = never synced to master server
+);
+
+CREATE TABLE IF NOT EXISTS ai_messages (
+    message_id TEXT PRIMARY KEY, -- UUID as TEXT
+    conversation_id TEXT NOT NULL REFERENCES ai_conversations(conversation_id) ON DELETE CASCADE,
+    role TEXT NOT NULL, -- 'user' or 'ai'
+    content TEXT NOT NULL, -- JSON blob (text, table data, chart config, etc.)
+    type TEXT, -- 'text', 'table', 'chart', 'multi'
+    sql_query TEXT,
+    explanation TEXT,
+    log_id TEXT REFERENCES ai_logs(log_id) ON DELETE SET NULL,
+    query_status TEXT, -- 'complete', 'incomplete', 'ignored'
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_ai_conversations_updated ON ai_conversations(updated_at);
+CREATE INDEX IF NOT EXISTS idx_ai_conversations_synced ON ai_conversations(synced_at);
+
+-- ============================================================================
 -- 16. VIEWS
 -- ============================================================================
 
