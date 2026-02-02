@@ -15,7 +15,7 @@ declare global {
     }
 }
 
-type Tab = 'ai_models' | 'integrations' | 'repository' | 'updates';
+type Tab = 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
 type UpdateStatus = 'checking' | 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error' | null;
 
 export default function Configuration() {
@@ -23,6 +23,7 @@ export default function Configuration() {
     const [settings, setSettings] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [selectedDbSection, setSelectedDbSection] = useState<string | null>(null);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -105,6 +106,52 @@ export default function Configuration() {
         }
     };
 
+    const handleResetSection = async (section: string) => {
+        if (!window.confirm(`Are you sure you want to reset the ${section} database?`)) return;
+        if (!window.confirm(`Confirm: This will clear all local data for ${section}. This cannot be undone.`)) return;
+
+        try {
+            const res = await endpoints.config.resetDb(section.toLowerCase());
+            alert(`✅ ${res.data.message}`);
+            setSelectedDbSection(null);
+        } catch (e: any) {
+            const errorMsg = e.response?.data?.detail || "Reset Failed";
+            alert(`❌ ${errorMsg}`);
+        }
+    };
+
+
+    const handleResetIntegrations = async () => {
+        if (!window.confirm("Are you sure you want to reset all integration settings?")) return;
+        if (!window.confirm("This will clear all configured URLs and API keys for external services.")) return;
+
+        try {
+            const res = await endpoints.config.resetDb("integrations");
+            alert(`✅ ${res.data.message}`);
+            // Reload settings to reflect changes
+            loadSettings();
+        } catch (e: any) {
+            const errorMsg = e.response?.data?.detail || "Reset Failed";
+            alert(`❌ ${errorMsg}`);
+        }
+    };
+
+
+    const handleResetAIModels = async () => {
+        if (!window.confirm("Are you sure you want to reset all AI Model settings?")) return;
+        if (!window.confirm("This will clear all configured API keys and model selections.")) return;
+
+        try {
+            const res = await endpoints.config.resetDb("ai_models");
+            alert(`✅ ${res.data.message}`);
+            // Reload settings to reflect changes
+            loadSettings();
+        } catch (e: any) {
+            const errorMsg = e.response?.data?.detail || "Reset Failed";
+            alert(`❌ ${errorMsg}`);
+        }
+    };
+
     const renderTestButton = (type: string) => (
         <button
             onClick={() => handleTestConnection(type)}
@@ -176,6 +223,30 @@ export default function Configuration() {
                     { id: 'integrations', label: '🔌 Integrations' },
                     { id: 'repository', label: '📦 Repository' },
                     {
+                        id: 'databases',
+                        label: (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <ellipse cx="11" cy="5" rx="8" ry="3"></ellipse>
+                                    <path d="M3 5v14c0 1.66 3.58 3 8 3 .48 0 .95-.02 1.4-.05"></path>
+                                    <path d="M3 10c0 1.66 3.58 3 8 3 .48 0 .95-.02 1.4-.05"></path>
+                                    <path d="M3 15c0 1.66 3.58 3 8 3"></path>
+                                    <path d="M19 5v7"></path>
+                                    <circle cx="18" cy="18" r="3"></circle>
+                                    <path d="M18 15v1"></path>
+                                    <path d="M18 20v1"></path>
+                                    <path d="M21 18h-1"></path>
+                                    <path d="M15 18h-1"></path>
+                                    <path d="m16 16 .7.7"></path>
+                                    <path d="m19.3 19.3.7.7"></path>
+                                    <path d="m19.3 16.7.7-.7"></path>
+                                    <path d="m16 20 .7-.7"></path>
+                                </svg>
+                                Databases
+                            </span>
+                        )
+                    },
+                    {
                         id: 'updates',
                         label: (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -231,7 +302,47 @@ export default function Configuration() {
                             {renderInput("API Key", "gemini_api_key", "password", "AIza...")}
                             {renderInput("Model Name", "gemini_model", "text", "gemini-1.5-pro")}
 
-                            {renderSaveButton()}
+                            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <button
+                                    onClick={handleResetAIModels}
+                                    style={{
+                                        padding: '10px 20px',
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        color: '#ef4444',
+                                        border: '1px solid #ef4444',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontSize: '1em',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M3 6h18"></path>
+                                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                    </svg>
+                                    Reset
+                                </button>
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    style={{
+                                        padding: '10px 20px',
+                                        background: 'var(--accent-color)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: saving ? 'wait' : 'pointer',
+                                        fontSize: '1em',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    {saving ? "Saving..." : "Save Changes"}
+                                </button>
+                            </div>
                         </Card>
                     )}
 
@@ -257,7 +368,47 @@ export default function Configuration() {
                             {renderInput("Warehouse URL", "integration_warehouse_url", "url")}
                             {renderInput("Warehouse API Key", "integration_warehouse_key", "password")}
 
-                            {renderSaveButton()}
+                            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <button
+                                    onClick={handleResetIntegrations}
+                                    style={{
+                                        padding: '10px 20px',
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        color: '#ef4444',
+                                        border: '1px solid #ef4444',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontSize: '1em',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M3 6h18"></path>
+                                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                    </svg>
+                                    Reset
+                                </button>
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    style={{
+                                        padding: '10px 20px',
+                                        background: 'var(--accent-color)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: saving ? 'wait' : 'pointer',
+                                        fontSize: '1em',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    {saving ? "Saving..." : "Save Changes"}
+                                </button>
+                            </div>
                         </Card>
                     )}
 
@@ -271,6 +422,180 @@ export default function Configuration() {
 
                             {renderSaveButton()}
                         </Card>
+                    )}
+
+                    {activeTab === 'databases' && (
+                        <Card title="Database Connections">
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Configure database connections and settings.</p>
+                            <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px', marginBottom: '40px' }}>
+                                {[
+                                    { name: 'Orders', status: 'Active' },
+                                    { name: 'Inventory', status: 'Active' },
+                                    { name: 'COGS', status: 'Active' },
+                                    { name: 'Warehouse', status: 'Active' },
+                                    { name: 'AI Mode', status: 'Active' }
+                                ].map(section => (
+                                    <div
+                                        key={section.name}
+                                        onClick={() => setSelectedDbSection(section.name)}
+                                        style={{
+                                            background: 'var(--input-bg)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: '12px',
+                                            padding: '20px',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '10px',
+                                            cursor: 'pointer',
+                                            transition: 'transform 0.2s ease, border-color 0.2s ease',
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.transform = 'translateY(-2px)';
+                                            e.currentTarget.style.borderColor = 'var(--accent-color)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                            e.currentTarget.style.borderColor = 'var(--border-color)';
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <h4 style={{ margin: 0 }}>{section.name}</h4>
+                                            <span style={{
+                                                fontSize: '0.75rem',
+                                                background: '#10B981',
+                                                color: 'white',
+                                                padding: '2px 8px',
+                                                borderRadius: '10px',
+                                                fontWeight: 600
+                                            }}>
+                                                {section.status}
+                                            </span>
+                                        </div>
+                                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
+                                            Local database storage for {section.name} modules.
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
+
+                            <div style={{ padding: '20px', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                <h4 style={{ color: '#ef4444', marginTop: 0 }}>Caution</h4>
+                                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '15px' }}>
+                                    Resetting the local database will clear all locally stored data, configurations, and chat logs. This action cannot be undone.
+                                </p>
+                                <button
+                                    onClick={() => {
+                                        if (window.confirm("Are you sure you want to delete the local database?")) {
+                                            if (window.confirm("Are you sure you would like to clear the DB from this app, locally. (Under construction)")) {
+                                                endpoints.resetAll().then(res => {
+                                                    alert(`✅ ${res.data.message}`);
+                                                    window.location.reload();
+                                                }).catch(err => {
+                                                    alert(`❌ Reset Failed: ${err.message}`);
+                                                });
+                                            }
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '10px 20px',
+                                        background: 'rgba(239, 68, 68, 0.85)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+                                        <path d="M12 2.5l10 18H2l10-18z" fill="#facc15" stroke="black" strokeWidth="1.5" strokeLinejoin="round" />
+                                        <circle cx="12" cy="14.5" r="1.5" fill="black" />
+                                        <path d="M12 14.5l-2.5-4.3a5 5 0 0 1 5 0L12 14.5z" fill="black" />
+                                        <path d="M12 14.5l-5 0a5 5 0 0 0 2.5 4.3L12 14.5z" fill="black" />
+                                        <path d="M12 14.5l2.5 4.3a5 5 0 0 0 2.5-4.3L12 14.5z" fill="black" />
+                                    </svg>
+                                    Delete ALL
+                                </button>
+                            </div>
+                        </Card>
+                    )}
+
+                    {/* Database Section Reset Modal */}
+                    {selectedDbSection && (
+                        <div style={{
+                            position: 'fixed',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'rgba(0,0,0,0.7)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 2000,
+                            backdropFilter: 'blur(4px)'
+                        }} onClick={() => setSelectedDbSection(null)}>
+                            <div style={{
+                                background: 'var(--card-bg)',
+                                width: '400px',
+                                padding: '30px',
+                                borderRadius: '16px',
+                                border: '1px solid var(--border-color)',
+                                boxShadow: '0 20px 50px rgba(0,0,0,0.4)',
+                                position: 'relative'
+                            }} onClick={e => e.stopPropagation()}>
+                                <h3 style={{ marginTop: 0, marginBottom: '10px' }}>{selectedDbSection} Database</h3>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '25px' }}>
+                                    Manage local storage and settings for the {selectedDbSection} module.
+                                </p>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    <button
+                                        onClick={() => handleResetSection(selectedDbSection)}
+                                        style={{
+                                            padding: '12px',
+                                            background: 'rgba(239, 68, 68, 0.1)',
+                                            color: '#ef4444',
+                                            border: '1px solid rgba(239, 68, 68, 0.2)',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            fontWeight: 600,
+                                            transition: 'all 0.2s ease'
+                                        }}
+                                        onMouseEnter={e => {
+                                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                                        }}
+                                        onMouseLeave={e => {
+                                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+                                        }}
+                                    >
+                                        🗑️ Reset {selectedDbSection}
+                                    </button>
+
+
+                                    <button
+                                        onClick={() => setSelectedDbSection(null)}
+                                        style={{
+                                            padding: '12px',
+                                            background: 'var(--bg-color)',
+                                            color: 'var(--text-color)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            fontWeight: 500
+                                        }}
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     )}
 
                     {activeTab === 'updates' && (

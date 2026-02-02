@@ -1,9 +1,9 @@
 """
-Legacy re-export: AI Mode prompts now live in ai_mode.prompt_ai_mode.
-Import from ai_mode.prompt_ai_mode for new code.
+Legacy re-export: AI Mode prompts now live in ai_mode.prompts.prompt_ai_mode.
+Import from ai_mode.prompts.prompt_ai_mode for new code.
 """
 
-from ai_mode.prompt_ai_mode import (
+from ai_mode.prompts.prompt_ai_mode import (
     INTENT_CLASSIFICATION_PROMPT,
     SQL_GENERATION_PROMPT,
     CHART_GENERATION_PROMPT,

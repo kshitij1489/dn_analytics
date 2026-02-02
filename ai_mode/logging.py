@@ -48,9 +48,10 @@ def log_interaction(
     Log the AI interaction to the database.
     Phase 6: stores raw_user_query, corrected_query, action_sequence, explanation;
     limits response_payload to a summary when large (no full result data).
+    Returns query_id (one per user query + AI response).
     """
     try:
-        log_id = str(uuid.uuid4())
+        query_id = str(uuid.uuid4())
 
         payload = None
         if isinstance(response.content, (dict, list)):
@@ -66,13 +67,13 @@ def log_interaction(
 
         query_sql = """
             INSERT INTO ai_logs
-            (log_id, user_query, intent, sql_generated, response_type, response_payload, error_message, created_at,
+            (query_id, user_query, intent, sql_generated, response_type, response_payload, error_message, created_at,
              raw_user_query, corrected_query, action_sequence, explanation)
-            VALUES (:log_id, :query, :intent, :sql, :type, :payload, :error, datetime('now'),
+            VALUES (:query_id, :query, :intent, :sql, :type, :payload, :error, datetime('now'),
                     :raw_user_query, :corrected_query, :action_sequence, :explanation)
         """
         conn.execute(query_sql, {
-            "log_id": log_id,
+            "query_id": query_id,
             "query": query,
             "intent": intent,
             "sql": sql,
@@ -85,16 +86,24 @@ def log_interaction(
             "explanation": explanation,
         })
         conn.commit()
-        return log_id
+        return query_id
     except Exception as e:
         # Phase 6: if new columns missing (migration not run), fall back to minimal insert
         if "raw_user_query" in str(e) or "no such column" in str(e).lower():
             try:
                 return _log_interaction_fallback(conn, query, intent, response, sql, error)
             except Exception as e2:
-                print(f"❌ Error logging interaction (fallback): {str(e2)}")
+                try:
+                    from src.core.error_log import get_error_logger
+                    get_error_logger().exception("Error logging interaction (fallback)")
+                except Exception:
+                    pass
                 return None
-        print(f"❌ Error logging interaction: {str(e)}")
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().exception("Error logging interaction")
+        except Exception:
+            pass
         return None
 
 
@@ -102,7 +111,7 @@ def _log_interaction_fallback(
     conn, query: str, intent: str, response: AIResponse, sql: str = None, error: str = None
 ) -> Optional[str]:
     """Fallback insert when Phase 6 columns are not present (pre-migration)."""
-    log_id = str(uuid.uuid4())
+    query_id = str(uuid.uuid4())
     payload = None
     if isinstance(response.content, (dict, list)):
         payload = json.dumps(response.content)
@@ -113,11 +122,11 @@ def _log_interaction_fallback(
 
     query_sql = """
         INSERT INTO ai_logs
-        (log_id, user_query, intent, sql_generated, response_type, response_payload, error_message, created_at)
-        VALUES (:log_id, :query, :intent, :sql, :type, :payload, :error, datetime('now'))
+        (query_id, user_query, intent, sql_generated, response_type, response_payload, error_message, created_at)
+        VALUES (:query_id, :query, :intent, :sql, :type, :payload, :error, datetime('now'))
     """
     conn.execute(query_sql, {
-        "log_id": log_id,
+        "query_id": query_id,
         "query": query,
         "intent": intent,
         "sql": sql,
@@ -126,4 +135,4 @@ def _log_interaction_fallback(
         "error": error
     })
     conn.commit()
-    return log_id
+    return query_id

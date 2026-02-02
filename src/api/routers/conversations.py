@@ -40,7 +40,7 @@ class MessageCreate(BaseModel):
     type: Optional[str] = "text"  # 'text', 'table', 'chart', 'multi'
     sql_query: Optional[str] = None
     explanation: Optional[str] = None
-    log_id: Optional[str] = None
+    query_id: Optional[str] = None
     query_status: Optional[str] = None
 
 
@@ -53,7 +53,7 @@ class MessageResponse(BaseModel):
     type: Optional[str]
     sql_query: Optional[str]
     explanation: Optional[str]
-    log_id: Optional[str]
+    query_id: Optional[str]
     query_status: Optional[str]
     created_at: str
 
@@ -128,7 +128,7 @@ def get_conversation_messages(conversation_id: str, conn=Depends(get_db)):
     cursor = conn.execute("""
         SELECT 
             message_id, conversation_id, role, content, type,
-            sql_query, explanation, log_id, query_status, created_at
+            sql_query, explanation, query_id, query_status, created_at
         FROM ai_messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC
@@ -152,7 +152,7 @@ def get_conversation_messages(conversation_id: str, conn=Depends(get_db)):
             type=row["type"],
             sql_query=row["sql_query"],
             explanation=row["explanation"],
-            log_id=row["log_id"],
+            query_id=row["query_id"],
             query_status=row["query_status"],
             created_at=row["created_at"] or ""
         ))
@@ -179,11 +179,11 @@ def add_message(conversation_id: str, request: MessageCreate, conn=Depends(get_d
     conn.execute("""
         INSERT INTO ai_messages (
             message_id, conversation_id, role, content, type,
-            sql_query, explanation, log_id, query_status
+            sql_query, explanation, query_id, query_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         message_id, conversation_id, request.role, content_str, request.type,
-        request.sql_query, request.explanation, request.log_id, request.query_status
+        request.sql_query, request.explanation, request.query_id, request.query_status
     ))
     
     # Update conversation's updated_at
@@ -202,7 +202,7 @@ def add_message(conversation_id: str, request: MessageCreate, conn=Depends(get_d
         type=request.type,
         sql_query=request.sql_query,
         explanation=request.explanation,
-        log_id=request.log_id,
+        query_id=request.query_id,
         query_status=request.query_status,
         created_at=""
     )

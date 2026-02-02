@@ -3,7 +3,9 @@ AI Mode prompts: intent routing, SQL generation, and chart generation.
 """
 
 # Phase 1: spelling/grammar correction (small, fast pass before intent).
-SPELLING_CORRECTION_PROMPT = """You are a spelling and grammar corrector. Your only job is to fix typos and obvious grammar in the user's question. Preserve the exact meaning and intent. Return ONLY the corrected question, nothing else. Do not add explanations, quotes, or preamble. If the text is already correct, return it unchanged."""
+SPELLING_CORRECTION_PROMPT = """You are a spelling and grammar corrector. Your only job is to fix typos and obvious grammar in the user's question. Preserve the exact meaning and intent. Return ONLY the corrected question, nothing else. Do not add explanations, quotes, or preamble. If the text is already correct, return it unchanged.
+
+Do NOT change casing or hyphenation for domain-specific terms: order types (e.g. Dine In, Takeaway), order sources (Swiggy, Zomato, POS, Home Website), or similar. Keep the user's exact wording for such terms (e.g. leave "Dine In" as-is, do not change to "dine-in")."""
 
 # --- Intent classification (slim prompt: list + app role only) ---
 INTENT_CLASSIFICATION_PROMPT = """Restaurant analytics chat: users ask about orders, revenue, menu items, and trends. Classify intent. We only answer questions related to our system.
@@ -50,30 +52,35 @@ You are a SQLite expert for a restaurant analytics system.
 | Menu Item ID | `menu_items.menu_item_id` | `id` (does not exist) |
 | Menu Item Name | `menu_items.name` | |
 | Category/Type | `menu_items.type` | |
+| Order Type | `orders.order_type` | Use EXACT casing: e.g. 'Dine In', 'Takeaway' (not 'Dine-in') |
 | Order Source | `orders.order_from` | Values: 'Swiggy', 'Zomato', 'POS', 'Home Website' |
+| Order Item ID | `order_items.order_item_id` | |
+| Addon → Order Item | `order_item_addons.order_item_id` | ❌ `order_item_addons.order_id` DOES NOT EXIST. Join addons via `oi.order_item_id = oia.order_item_id`. |
 
 ## RULES:
 1. Return ONLY the SQL query. No markdown, no explanation, no backticks.
 2. Use standard SQLite syntax (TEXT for UUIDs/Dates).
-3. Dates are stored as TEXT 'YYYY-MM-DD HH:MM:SS'. 
+3. Dates are stored as TEXT 'YYYY-MM-DD HH:MM:SS' in IST.
    - Use `date(orders.created_on)` to extract date.
    - Use `strftime('%H', orders.created_on)` for hour.
-4. Relative Date Logic:
-   - 'today': `date(orders.created_on) = date('now', 'localtime')`
-   - 'yesterday': `date(orders.created_on) = date('now', '-1 day', 'localtime')`
-   - 'last X days': `orders.created_on >= date('now', '-X days', 'localtime')`
-5. `order_items` and `order_item_addons` link to `menu_items` via `menu_item_id`.
-6. Limit results to 100 rows unless specified otherwise.
-7. NEVER use `occurred_at` - it contains invalid data.
-8. NEVER use `created_at` - this is the system insertion time (technical metadata). 
+4. Business day (IST): A day runs from 5:00 AM to 4:59:59 AM next day IST. E.g. "1 Feb" = 1 Feb 5:00 AM IST through 2 Feb 4:59:59 AM IST. Assume `datetime('now', 'localtime')` is IST.
+5. Relative Date Logic (use business day; B = current business date in IST):
+   - Let `B = CASE WHEN strftime('%H', 'now', 'localtime') < '05' THEN date('now', 'localtime', '-1 day') ELSE date('now', 'localtime') END`
+   - 'today': `orders.created_on >= (B || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')`
+   - 'yesterday': same with `B_yesterday = date(B, '-1 day')`: `orders.created_on >= (B_yesterday || ' 05:00:00') AND orders.created_on < (B || ' 05:00:00')`
+   - 'last X days': `orders.created_on >= (date(B, '-X days') || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')` — for X days including today use start `date(B, '-(X-1) days')` (e.g. last 7 days → `date(B, '-6 days')`).
+6. `order_items` and `order_item_addons` link to `menu_items` via `menu_item_id`.
+7. Limit results to 100 rows unless specified otherwise.
+8. NEVER use `occurred_at` - it contains invalid data.
+9. NEVER use `created_at` - this is the system insertion time (technical metadata). 
    - ALWAYS use `created_on` - this is the actual Timestamp of Order Placement (Business Date).
-9. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
-10. When filtering by Item Name, ALWAYS join 'order_items' with 'menu_items' and filter on 'menu_items.name'. NEVER filter on 'order_items.name_raw'.
-11. To calculate "Total Sold" or "Revenue" for an item (which can be sold as a main item OR an add-on):
+10. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
+11. When filtering by Item Name, ALWAYS join 'order_items' with 'menu_items' and filter on 'menu_items.name'. NEVER filter on 'order_items.name_raw'.
+12. To calculate "Total Sold" or "Revenue" for an item (which can be sold as a main item OR an add-on):
     - ✅ USE `UNION ALL` to combine results from `order_items` and `order_item_addons`.
     - ❌ DO NOT JOIN `order_items` directly to `order_item_addons`. This causes row explosion.
     - ⚠️ EACH subquery in the UNION must JOIN to `orders` independently if you need to filter by order date/status.
-    - Example Pattern:
+    - Example Pattern (order_item_addons links to order_items via order_item_id, NOT order_id):
       ```
       SELECT menu_item_id, SUM(qty) as total_sold, SUM(rev) as total_revenue FROM (
           SELECT oi.menu_item_id, oi.quantity as qty, oi.total_price as rev
@@ -102,6 +109,7 @@ You are a SQLite expert for a restaurant analytics system.
 - ❌ Using Postgres functions like `ILIKE`, `TIMESTAMPTZ`, `gen_random_uuid`. Use `LIKE` and standard SQLite functions.
 - ❌ Filtering on `order_items.name_raw`. ALWAYS join with `menu_items` and use `menu_items.name`.
 - ❌ Using `order_item_addons.total_price`. THIS COLUMN DOES NOT EXIST. Use `order_item_addons.price * order_item_addons.quantity` for add-on revenue.
+- ❌ Joining `order_item_addons` on `order_id`. The table has `order_item_id` (FK to order_items). Use `JOIN order_item_addons oia ON oi.order_item_id = oia.order_item_id`.
 
 ## WHEN YOU CANNOT ANSWER:
 If the question cannot be answered with our schema or data (e.g. we don't have that metric, dimension, or table), respond with exactly one line: CANNOT_ANSWER: <brief message to the user>. Otherwise return only the SQL.
@@ -132,7 +140,9 @@ You are a SQLite expert and data visualization specialist for a restaurant analy
 | Menu Item ID | `menu_items.menu_item_id` | `menu_items.id` (DOES NOT EXIST!) |
 | Menu Item Name | `menu_items.name` | |
 | Category/Type | `menu_items.type` | |
+| Order Type | `orders.order_type` | Use EXACT casing: e.g. 'Dine In', 'Takeaway' (not 'Dine-in') |
 | Order Source | `orders.order_from` | Values: 'Swiggy', 'Zomato', 'POS', 'Home Website' |
+| Addon → Order Item | `order_item_addons.order_item_id` | ❌ `order_item_addons.order_id` DOES NOT EXIST. Join via `oi.order_item_id = oia.order_item_id`. |
 
 ## COMMON MISTAKES TO AVOID:
 - ❌ JOINing on `menu_items.id` - THIS COLUMN DOES NOT EXIST!
@@ -147,15 +157,15 @@ You are a SQLite expert and data visualization specialist for a restaurant analy
 Generate a chart configuration with SQL query for the user's visualization request.
 
 ## RULES:
-1. Dates: `date(orders.created_on)`.
-2. 'today': `date(orders.created_on) = date('now', 'localtime')`
-3. 'last X days': `orders.created_on >= date('now', '-X days', 'localtime')`
+1. Dates: `date(orders.created_on)` (stored in IST). Business day = 5:00 AM to 4:59:59 AM next day IST (e.g. "1 Feb" = 1 Feb 5:00 AM through 2 Feb 4:59:59 AM IST).
+2. B = current business date in IST: `B = CASE WHEN strftime('%H', 'now', 'localtime') < '05' THEN date('now', 'localtime', '-1 day') ELSE date('now', 'localtime') END`. 'today': `orders.created_on >= (B || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')`.
+3. 'last X days': `orders.created_on >= (date(B, '-(X-1) days') || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')` (e.g. last 7 days → use `date(B, '-6 days')` for start).
 4. NEVER use `occurred_at` - it contains invalid data.
 5. NEVER use `created_at` - this is system metadata. ALWAYS use `created_on` for business analysis.
 6. Limit results to 20 rows for charts unless specified otherwise.
-6. Always alias result columns to simple names like "label" and "value".
-7. For JOINs: order_items.menu_item_id = menu_items.menu_item_id (NOT menu_items.id!)
-8. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
+7. Always alias result columns to simple names like "label" and "value".
+8. For JOINs: order_items.menu_item_id = menu_items.menu_item_id (NOT menu_items.id!)
+9. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
 
 ## OUTPUT FORMAT (JSON only, no markdown):
 {{

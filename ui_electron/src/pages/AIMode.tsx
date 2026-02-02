@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { endpoints } from '../api';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { endpoints, type DebugLogEntry } from '../api';
 import { LoadingSpinner, ActionButton } from '../components';
 import { ClientSideDataTable } from '../components/ClientSideDataTable';
 import {
@@ -13,7 +13,7 @@ interface Message {
     type?: 'text' | 'table' | 'chart' | 'multi';
     sql_query?: string;
     explanation?: string;
-    log_id?: string;
+    query_id?: string;
     feedback?: 'positive' | 'negative';
     corrected_prompt?: string; // Phase 5.1: spelling-corrected question (when shown)
     query_status?: 'complete' | 'incomplete' | 'ignored'; // Phase 8
@@ -59,6 +59,31 @@ export default function AIMode() {
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [showHistory, setShowHistory] = useState(false);
     const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
+    const [showDebug, setShowDebug] = useState(false);
+    const [debugLogEntries, setDebugLogEntries] = useState<DebugLogEntry[]>([]);
+
+    const loadDebugLogs = useCallback(async () => {
+        try {
+            const res = await endpoints.ai.getDebugLogs();
+            setDebugLogEntries(res.data?.entries ?? []);
+        } catch (err) {
+            console.error('Failed to load debug logs:', err);
+            setDebugLogEntries([]);
+        }
+    }, []);
+
+    const handleDebug = async () => {
+        const next = !showDebug;
+        setShowDebug(next);
+        if (next) {
+            try {
+                await endpoints.ai.initDebug();
+                await loadDebugLogs();
+            } catch (error) {
+                console.error('Failed to init debug:', error);
+            }
+        }
+    };
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -67,9 +92,30 @@ export default function AIMode() {
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [suggestions, setSuggestions] = useState<{ query: string; frequency: number }[]>([]);
 
+    const historyTriggerRef = useRef<HTMLButtonElement>(null);
+    const historyPanelRef = useRef<HTMLDivElement>(null);
+    const suggestionsContainerRef = useRef<HTMLDivElement>(null);
+
     useEffect(() => {
         scrollToBottom();
     }, [messages, loading]);
+
+    // Close History and Suggestions when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            const target = e.target as Node;
+            if (showHistory
+                && historyTriggerRef.current && !historyTriggerRef.current.contains(target)
+                && historyPanelRef.current && !historyPanelRef.current.contains(target)) {
+                setShowHistory(false);
+            }
+            if (showSuggestions && suggestionsContainerRef.current && !suggestionsContainerRef.current.contains(target)) {
+                setShowSuggestions(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showHistory, showSuggestions]);
 
     // Load conversation list and active conversation on mount
     useEffect(() => {
@@ -125,7 +171,7 @@ export default function AIMode() {
                 type: m.type || 'text',
                 sql_query: m.sql_query,
                 explanation: m.explanation,
-                log_id: m.log_id,
+                query_id: m.query_id,
                 query_status: m.query_status,
                 message_id: m.message_id
             }));
@@ -262,35 +308,68 @@ export default function AIMode() {
                 const decoder = new TextDecoder();
                 let accumulatedContent = '';
                 let finalResponseData: any = null;
+                const parts: ResponsePart[] = []; // accumulate parts for multi-part display during stream
+                let sseBuffer = ''; // buffer for SSE so we don't lose events split across reads
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const chunk = decoder.decode(value);
-                    const lines = chunk.split('\n\n');
+                    sseBuffer += decoder.decode(value, { stream: true });
+                    const eventBlocks = sseBuffer.split('\n\n');
+                    sseBuffer = eventBlocks.pop() ?? ''; // keep incomplete block for next read
 
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.substring(6));
-                                if (data.type === 'chunk') {
-                                    accumulatedContent += data.content;
-                                    setMessages(prev => {
-                                        const newMsgs = [...prev];
-                                        newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], content: accumulatedContent };
-                                        return newMsgs;
-                                    });
-                                } else if (data.type === 'complete') {
-                                    // Fallback or final full update
-                                    accumulatedContent = data.content;
-                                    finalResponseData = data.response;
-                                } else if (data.type === 'error') {
-                                    throw new Error(data.message);
+                    for (const line of eventBlocks) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const data = JSON.parse(line.substring(6));
+
+                            if (data.type === 'status') {
+                                // Status events could drive a status line or toast later
+                            } else if (data.type === 'chunk') {
+                                accumulatedContent += data.content;
+                                setMessages(prev => {
+                                    const newMsgs = [...prev];
+                                    const last = newMsgs[newMsgs.length - 1];
+                                    const currentParts = [...parts];
+                                    if (accumulatedContent) {
+                                        currentParts.push({ type: 'text', content: accumulatedContent });
+                                    }
+                                    newMsgs[newMsgs.length - 1] = {
+                                        ...last,
+                                        type: 'multi',
+                                        content: currentParts
+                                    };
+                                    return newMsgs;
+                                });
+                            } else if (data.type === 'part') {
+                                parts.push(data.part);
+                                if (data.part.type === 'text' && accumulatedContent) {
+                                    accumulatedContent = '';
                                 }
-                            } catch (e) {
-                                // console.error('Error parsing SSE', e);
+                                setMessages(prev => {
+                                    const newMsgs = [...prev];
+                                    const last = newMsgs[newMsgs.length - 1];
+                                    const currentParts = [...parts];
+                                    if (accumulatedContent) {
+                                        currentParts.push({ type: 'text', content: accumulatedContent });
+                                    }
+                                    newMsgs[newMsgs.length - 1] = {
+                                        ...last,
+                                        type: 'multi',
+                                        content: currentParts
+                                    };
+                                    return newMsgs;
+                                });
+                            } else if (data.type === 'debug' && Array.isArray(data.entries)) {
+                                setDebugLogEntries(data.entries);
+                            } else if (data.type === 'complete') {
+                                finalResponseData = data.response;
+                            } else if (data.type === 'error') {
+                                throw new Error(data.message);
                             }
+                        } catch (e) {
+                            // skip malformed or incomplete JSON (e.g. chunk boundary)
                         }
                     }
                 }
@@ -298,14 +377,16 @@ export default function AIMode() {
                 // Finalize AI message persistence
                 const finalAiMsg = {
                     ...aiMsgPlaceholder,
-                    content: accumulatedContent,
-                    ...(finalResponseData || {}) // Merge any metadata if available
+                    // Use final response content if available, else whatever we built
+                    content: finalResponseData ? finalResponseData.content : (parts.length > 0 ? parts : accumulatedContent),
+                    type: finalResponseData ? finalResponseData.type : (parts.length > 0 ? 'multi' : 'text'),
+                    ...(finalResponseData || {})
                 };
 
                 if (currentConvId) {
                     endpoints.conversations.addMessage(currentConvId, {
                         ...finalAiMsg,
-                        type: 'text',
+                        type: finalAiMsg.type ?? 'text',
                         query_status: 'complete'
                     } as any).then(res => {
                         setMessages(prev => prev.map(m => m === aiMsgPlaceholder ? { ...finalAiMsg, message_id: res.data.message_id } : m));
@@ -329,7 +410,7 @@ export default function AIMode() {
                     type: res.data.type as any,
                     sql_query: res.data.sql_query,
                     explanation: res.data.explanation,
-                    log_id: res.data.log_id,
+                    query_id: res.data.query_id,
                     corrected_prompt: res.data.corrected_prompt,
                     query_status: res.data.query_status,
                     pending_clarification_question: res.data.pending_clarification_question,
@@ -337,6 +418,10 @@ export default function AIMode() {
                 };
 
                 setMessages(prev => [...prev, aiMsg]);
+
+                if (showDebug) {
+                    loadDebugLogs();
+                }
 
                 // Persist AI message
                 if (currentConvId) {
@@ -370,11 +455,11 @@ export default function AIMode() {
 
     const handleFeedback = async (index: number, isPositive: boolean) => {
         const msg = messages[index];
-        if (!msg.log_id || msg.feedback) return;
+        if (!msg.query_id || msg.feedback) return;
 
         try {
             await endpoints.ai.feedback({
-                log_id: msg.log_id,
+                query_id: msg.query_id,
                 is_positive: isPositive
             });
 
@@ -412,6 +497,7 @@ export default function AIMode() {
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     {/* History Toggle */}
                     <button
+                        ref={historyTriggerRef}
                         onClick={() => setShowHistory(!showHistory)}
                         style={{
                             padding: '8px 16px',
@@ -441,7 +527,7 @@ export default function AIMode() {
                         ➕ New Chat
                     </button>
                     {/* Suggestions */}
-                    <div style={{ position: 'relative' }}>
+                    <div ref={suggestionsContainerRef} style={{ position: 'relative' }}>
                         <button
                             onClick={() => {
                                 setShowSuggestions(!showSuggestions);
@@ -526,6 +612,21 @@ export default function AIMode() {
                             ↩️ Undo
                         </button>
                     )}
+                    {/* Debug Button */}
+                    <button
+                        onClick={handleDebug}
+                        style={{
+                            padding: '8px 16px',
+                            background: showDebug ? 'var(--primary-color)' : 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            color: showDebug ? 'white' : 'var(--text-color)',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        🐞 Debug
+                    </button>
                     {/* Retry */}
                     {lastFailedPrompt && (
                         <button
@@ -548,20 +649,22 @@ export default function AIMode() {
 
             {/* History Sidebar */}
             {showHistory && (
-                <div style={{
-                    position: 'fixed',
-                    right: '20px',
-                    top: '80px',
-                    width: '300px',
-                    maxHeight: '400px',
-                    overflowY: 'auto',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '12px',
-                    padding: '16px',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-                    zIndex: 1000
-                }}>
+                <div
+                    ref={historyPanelRef}
+                    style={{
+                        position: 'fixed',
+                        right: '20px',
+                        top: '80px',
+                        width: '300px',
+                        maxHeight: '400px',
+                        overflowY: 'auto',
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '12px',
+                        padding: '16px',
+                        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                        zIndex: 1000
+                    }}>
                     <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>Recent Conversations</h3>
                     {conversations.length === 0 ? (
                         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No conversations yet</p>
@@ -1049,7 +1152,7 @@ export default function AIMode() {
                                         AI Assistant
                                     </div>
 
-                                    {msg.log_id && (
+                                    {msg.query_id && (
                                         <div style={{ display: 'flex', gap: '8px', opacity: msg.feedback ? 0.6 : 1 }}>
                                             <button
                                                 onClick={() => handleFeedback(idx, true)}
@@ -1161,6 +1264,93 @@ export default function AIMode() {
                     </div>
                 </div>
             </div>
+            {/* Debug View Overlay */}
+            {showDebug && (
+                <div style={{
+                    position: 'fixed',
+                    top: '80px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '80%',
+                    maxWidth: '800px',
+                    height: '600px',
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                    zIndex: 2000,
+                    padding: '20px',
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: 'wrap', gap: '8px' }}>
+                        <h2 style={{ margin: 0, fontSize: '1.2rem' }}>🐞 AI Debug Logs</h2>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        await endpoints.ai.clearCache();
+                                        setDebugLogEntries([]);
+                                    } catch (e) {
+                                        console.error('Failed to clear cache:', e);
+                                    }
+                                }}
+                                style={{
+                                    padding: '6px 12px',
+                                    background: 'var(--card-bg)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    color: 'var(--text-color)',
+                                    fontSize: '0.85rem'
+                                }}
+                                title="Clear LLM cache so next requests hit the LLM with updated prompts"
+                            >
+                                🧹 Clear LLM cache
+                            </button>
+                            <button onClick={() => setShowDebug(false)} style={{ background: 'transparent', border: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
+                        </div>
+                    </div>
+                    <div style={{
+                        flex: 1,
+                        background: '#1e1e1e',
+                        color: '#a9b7c6',
+                        fontFamily: 'monospace',
+                        padding: '15px',
+                        borderRadius: '8px',
+                        overflowY: 'auto',
+                        fontSize: '0.85rem'
+                    }}>
+                        {debugLogEntries.length === 0 ? (
+                            <>
+                                <p style={{ color: '#808080' }}>// Debug logs for the last chat request</p>
+                                <p style={{ color: '#6a8759' }}>Send a message to see: user question, cache hit/miss, and LLM or cache response per step.</p>
+                            </>
+                        ) : (
+                            debugLogEntries.map((entry, i) => (
+                                <div key={i} style={{ marginBottom: '12px', borderLeft: '3px solid ' + (entry.source === 'user' ? '#569cd6' : entry.source === 'cache' ? '#4ec9b0' : '#dcdcaa'), paddingLeft: '10px' }}>
+                                    <div style={{ color: '#808080', marginBottom: '4px' }}>
+                                        [{i + 1}] <strong style={{ color: '#9cdcfe' }}>{entry.step}</strong>
+                                        <span style={{ marginLeft: '8px', color: entry.source === 'cache' ? '#4ec9b0' : entry.source === 'llm' ? '#dcdcaa' : '#569cd6' }}>
+                                            ← {entry.source}
+                                        </span>
+                                    </div>
+                                    {entry.input_preview && (
+                                        <div style={{ color: '#ce9178', marginBottom: '4px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                            in: {entry.input_preview}
+                                        </div>
+                                    )}
+                                    {entry.output_preview && (
+                                        <div style={{ color: '#9cdcfe', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                            out: {entry.output_preview}
+                                        </div>
+                                    )}
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

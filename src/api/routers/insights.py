@@ -111,6 +111,10 @@ def get_customer_loyalty(conn=Depends(get_db)):
 def get_top_customers(conn=Depends(get_db)):
     """Get top customers by order count and spending"""
     from src.core.queries.customer_queries import fetch_top_customers
+    df = fetch_top_customers(conn)
+    return df_to_json(df)
+
+
 @router.get("/avg_revenue_by_day")
 def get_avg_revenue_by_day(
     start_date: str = None, 

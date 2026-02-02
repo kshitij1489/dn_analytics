@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS merge_history (
 -- 15. AI LOGS & FEEDBACK
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS ai_logs (
-    log_id TEXT PRIMARY KEY, -- UUID as TEXT
+    query_id TEXT PRIMARY KEY, -- UUID as TEXT (one per user query + AI response)
     user_query TEXT NOT NULL, -- effective query used (corrected/rewritten)
     intent TEXT,
     sql_generated TEXT,
@@ -354,7 +354,7 @@ CREATE TABLE IF NOT EXISTS ai_logs (
 
 CREATE TABLE IF NOT EXISTS ai_feedback (
     feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    log_id TEXT REFERENCES ai_logs(log_id) ON DELETE CASCADE,
+    query_id TEXT REFERENCES ai_logs(query_id) ON DELETE CASCADE,
     is_positive BOOLEAN NOT NULL,
     comment TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     type TEXT, -- 'text', 'table', 'chart', 'multi'
     sql_query TEXT,
     explanation TEXT,
-    log_id TEXT REFERENCES ai_logs(log_id) ON DELETE SET NULL,
+    query_id TEXT REFERENCES ai_logs(query_id) ON DELETE SET NULL,
     query_status TEXT, -- 'complete', 'incomplete', 'ignored'
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );

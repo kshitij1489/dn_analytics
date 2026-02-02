@@ -11,11 +11,12 @@ import pandas as pd
 from src.api.utils import df_to_json
 
 from ai_mode.context import add_part
-from ai_mode.client import get_ai_client, get_ai_model
-from ai_mode.sql_gen import generate_sql
-from ai_mode.explanation import generate_explanation
-from ai_mode.chart import generate_chart_config
-from ai_mode.prompt_ai_mode import (
+from ai_mode.cache import get_or_call, get_or_call_diversity, normalize_prompt
+from ai_mode.llm.chart import generate_chart_config
+from ai_mode.llm.client import get_ai_client, get_ai_model
+from ai_mode.llm.explanation import generate_explanation
+from ai_mode.llm.sql_gen import generate_sql
+from ai_mode.prompts.prompt_ai_mode import (
     SUMMARY_GENERATION_PROMPT,
     REPORT_GENERATION_PROMPT,
     NO_DATA_HINT_PROMPT,
@@ -56,33 +57,32 @@ NO_DATA_NEXT_STEPS = (
 )
 
 
-def _suggest_no_data_hint(conn, user_prompt: str, sql_query: str) -> str:
-    """
-    Use LLM to suggest a short, smart hint. Valid values come from FILTER_HINT_COLUMNS (or NO_DATA_NEXT_STEPS).
-    TODO: Will be replaced with a learned cache (e.g. precomputed or cached hints).
-    """
-    # Build valid values string from FILTER_HINT_COLUMNS; to be replaced with learned cache.
+def _build_valid_values_str(conn) -> str:
+    """Build valid values string from FILTER_HINT_COLUMNS (live DB). Same source for cache key and LLM."""
     if not FILTER_HINT_COLUMNS:
-        valid_values_str = NO_DATA_NEXT_STEPS
-    else:
-        hints: List[str] = []
-        for table, column, label in FILTER_HINT_COLUMNS:
-            try:
-                df = pd.read_sql_query(
-                    f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1",
-                    conn,
-                )
-                if not df.empty:
-                    values = [str(v) for v in df.iloc[:, 0].tolist()]
-                    hints.append(f"{label}: {', '.join(values)}")
-            except Exception:
-                pass
-        valid_values_str = " Valid values: " + "; ".join(hints) + "." if hints else NO_DATA_NEXT_STEPS
+        return NO_DATA_NEXT_STEPS
+    hints: List[str] = []
+    for table, column, label in FILTER_HINT_COLUMNS:
+        try:
+            df = pd.read_sql_query(
+                f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1",
+                conn,
+            )
+            if not df.empty:
+                values = [str(v) for v in df.iloc[:, 0].tolist()]
+                hints.append(f"{label}: {', '.join(values)}")
+        except Exception:
+            pass
+    return " Valid values: " + "; ".join(hints) + "." if hints else NO_DATA_NEXT_STEPS
 
+
+
+def _suggest_no_data_hint_impl(
+    conn, user_prompt: str, sql_query: str, valid_values_str: str
+) -> str:
+    """Call LLM to suggest hint. Uses temperature=0 for determinism. Same valid_values_str used for key and LLM."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    if not client:
-        return valid_values_str
     try:
         user_content = f"""User asked: {user_prompt}
 
@@ -95,7 +95,7 @@ Valid values from our system: {valid_values_str}"""
                 {"role": "system", "content": NO_DATA_HINT_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            temperature=0.3,
+            temperature=0,
             max_tokens=150,
         )
         suggestion = (response.choices[0].message.content or "").strip()
@@ -103,6 +103,25 @@ Valid values from our system: {valid_values_str}"""
     except Exception as e:
         print(f"⚠️ No-data hint suggestion failed, using raw hints: {e}")
         return valid_values_str
+
+
+def _suggest_no_data_hint(conn, user_prompt: str, sql_query: str) -> str:
+    """
+    Use LLM to suggest a short, smart hint. Valid values from FILTER_HINT_COLUMNS (live DB).
+    Cached by (model, user_prompt, sql_query, valid_values_str). Key includes valid_values_str
+    so when data changes we get a fresh hint. Temperature=0 for determinism. See docs/LLM_CACHE_PLAN.md.
+    """
+    valid_values_str = _build_valid_values_str(conn)
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
+    if not client:
+        return valid_values_str
+    normalized_prompt = normalize_prompt(user_prompt)
+    return get_or_call(
+        "suggest_no_data_hint",
+        (model, normalized_prompt, sql_query, valid_values_str),
+        lambda: _suggest_no_data_hint_impl(conn, user_prompt, sql_query, valid_values_str),
+    )
 
 
 def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -115,6 +134,20 @@ def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, A
     try:
         df = pd.read_sql_query(sql_query, conn)
     except Exception as e:
+        try:
+            from src.core.error_log import log_error
+            log_error(
+                f"RUN_SQL execution failed: {e}",
+                exception=e,
+                context={
+                    "action": "RUN_SQL",
+                    "user_query": prompt,
+                    "generated_sql": sql_query,
+                },
+                error_kind="sql_execution_failure",
+            )
+        except Exception:
+            pass
         part = _clarification_part(
             f"I couldn't run that query: {str(e)}. Please rephrase or check what you're asking.",
             sql_query=sql_query,
@@ -145,6 +178,19 @@ def run_generate_chart(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict
     """Execute GENERATE_CHART: generate chart config and data. Returns (part, updated_context). May return clarification part on error or empty data."""
     chart_config = generate_chart_config(conn, prompt)
     if "error" in chart_config:
+        try:
+            from src.core.error_log import log_error
+            log_error(
+                f"GENERATE_CHART failed: {chart_config['error']}",
+                context={
+                    "action": "GENERATE_CHART",
+                    "user_query": prompt,
+                    "generated_sql": chart_config.get("sql_query"),
+                },
+                error_kind="chart_generation_failure",
+            )
+        except Exception:
+            pass
         part = _clarification_part(f"I couldn't generate the chart: {chart_config['error']}. Please rephrase or check filters.")
         new_ctx = add_part(context, "text", part["content"])
         return part, new_ctx
@@ -185,19 +231,38 @@ def run_out_of_scope(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[s
     return part, new_ctx
 
 
-def run_general_chat(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Execute GENERAL_CHAT: free-form LLM response. Returns (part, updated_context)."""
-    from ai_mode.client import get_ai_client, get_ai_model
+
+def _run_general_chat_impl(conn, prompt: str) -> str:
+    """Call LLM for general chat. Returns response content string."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    if client:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        content = response.choices[0].message.content
-    else:
+    if not client:
+        return "AI not configured. Please add an API Key in Configuration."
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content or ""
+
+
+def run_general_chat(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+
+    """
+    Execute GENERAL_CHAT: free-form LLM response. Returns (part, updated_context).
+    Uses diversity cache: up to 5 distinct responses per prompt; when full, randomly pick one.
+    Scope: chitchat only (greetings, "What can you do?"). See docs/LLM_CACHE_PLAN.md §2.5.
+    """
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
+    if not client:
         content = "AI not configured. Please add an API Key in Configuration."
+    else:
+        normalized = normalize_prompt(prompt)
+        content = get_or_call_diversity(
+            "run_general_chat",
+            (model, normalized),
+            lambda: _run_general_chat_impl(conn, prompt),
+        )
     part = {"type": "text", "content": content}
     new_ctx = add_part(context, "text", content)
     return part, new_ctx
@@ -219,13 +284,13 @@ def _get_data_for_summary(prompt: str, context: Dict[str, Any], conn) -> Tuple[L
         return [], sql_query
 
 
+
 def run_generate_summary(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Execute GENERATE_SUMMARY: produce short text summary of data.
     Uses context.last_table_data if from a prior RUN_SQL; else runs SQL, then summarizes.
     Returns (part, updated_context). Part type is "text" (Phase 4.2).
     """
-    from ai_mode.client import get_ai_client, get_ai_model
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
@@ -284,13 +349,13 @@ def _describe_parts_for_report(context: Dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "(No prior data.)"
 
 
+
 def run_generate_report(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Execute GENERATE_REPORT: produce narrative report using context (tables, charts, prior text).
     If context has no parts, fetches data via SQL first, then generates report (Phase 4.3).
     Returns (part, updated_context). Part type is "text".
     """
-    from ai_mode.client import get_ai_client, get_ai_model
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
@@ -336,12 +401,13 @@ Context / data already available:
 
 # --- Streaming versions for SSE ---
 
-async def run_generate_summary_streaming(prompt: str, conn):
+
+async def run_generate_summary_streaming(prompt: str, context: Dict[str, Any], conn):
     """
     Streaming version of summary generation.
     Yields text chunks as they are generated by the LLM.
+    Use context if available.
     """
-    from ai_mode.client import get_ai_client, get_ai_model
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
@@ -349,11 +415,9 @@ async def run_generate_summary_streaming(prompt: str, conn):
         return
 
     try:
-        sql_query = generate_sql(conn, prompt)
-        df = pd.read_sql_query(sql_query, conn)
-        rows = df_to_json(df)
-    except Exception as e:
-        yield f"Error getting data: {str(e)}"
+        rows, sql_used = _get_data_for_summary(prompt, context, conn)
+    except ValueError as e:
+        yield str(e)
         return
 
     if not rows:
@@ -372,46 +436,50 @@ Data (JSON rows):
 {SUMMARY_GENERATION_PROMPT}"""
 
     # Stream the response
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=0.4,
-        stream=True
-    )
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.4,
+            stream=True
+        )
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        yield f"Error generating summary: {e}"
 
 
-async def run_generate_report_streaming(prompt: str, conn):
+
+async def run_generate_report_streaming(prompt: str, context: Dict[str, Any], conn):
     """
     Streaming version of report generation.
     Yields text chunks as they are generated by the LLM.
+    Uses context to build parts description.
     """
-    from ai_mode.client import get_ai_client, get_ai_model
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
         yield "AI not configured. Please add an API Key in Configuration."
         return
 
-    # Get data for the report
-    try:
-        sql_query = generate_sql(conn, prompt)
-        df = pd.read_sql_query(sql_query, conn)
-        rows = df_to_json(df)
-    except Exception as e:
-        yield f"Error getting data: {str(e)}"
-        return
+    parts_desc = _describe_parts_for_report(context)
+    # If no prior data, get some via SQL
+    if not context.get("parts"):
+        try:
+            rows, sql_used = _get_data_for_summary(prompt, context, conn)
+        except ValueError as e:
+            yield str(e)
+            return
 
-    if not rows:
-        parts_desc = "No data could be retrieved for the given question."
-    else:
-        data_preview = json.dumps(rows[:30], default=str)
-        if len(rows) > 30:
-            data_preview += f"\n... ({len(rows) - 30} more rows)"
-        parts_desc = f"Data from query:\n{data_preview}"
-
+        if rows:
+            data_preview = json.dumps(rows[:30], default=str)
+            if len(rows) > 30:
+                data_preview += f"\n... ({len(rows) - 30} more rows)"
+            parts_desc = f"Data from query:\n{data_preview}"
+        else:
+            parts_desc = "No data could be retrieved for the given question."
+    
     user_prompt = f"""User request: {prompt}
 
 Context / data available:
@@ -420,12 +488,16 @@ Context / data available:
 {REPORT_GENERATION_PROMPT}"""
 
     # Stream the response
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=0.5,
-        stream=True
-    )
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.5,
+            stream=True
+        )
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        yield f"Error generating report: {e}"
+

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any, List
-import sqlite3
+from typing import Dict
+
 import os
 
 router = APIRouter()
@@ -118,5 +118,112 @@ def update_config(data: ConfigUpdate):
         print(f"Error updating config: {e}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@router.post("/reset-db")
+def reset_db_section(data: Dict[str, str]):
+    """Placeholder for resetting a specific database section"""
+    section = data.get("section", "")
+    if not section:
+        raise HTTPException(status_code=400, detail="Missing section parameter")
+
+    conn, _ = get_db_connection()
+    try:
+        if section == "orders":
+            # 1. Reset Orders Section
+            # Tables: restaurants, customers, orders, order_taxes, order_discounts, order_items, order_item_addons
+            
+            # Use PRAGMA foreign_keys = OFF to allow truncation in any order, 
+            # or delete in dependency order (leafs first).
+            # Dependency order: add-ons -> items -> taxes/discounts -> orders -> customers/restaurants
+            
+            tables_to_clear = [
+                # Orders Tables
+                "order_item_addons",
+                "order_items",
+                "order_taxes",
+                "order_discounts",
+                "orders",
+                "customers",
+                "restaurants",
+                # Menu Tables
+                "menu_item_variants",
+                "menu_items",
+                "variants",
+                # Menu Staging & History (item_mappings references menu_items_new/variants_new — clear first)
+                "item_mappings",
+                "menu_items_new",
+                "variants_new",
+                "merge_history"
+            ]
+            
+            for table in tables_to_clear:
+                conn.execute(f"DELETE FROM {table}")
+                # Optional: Reset sequence
+                conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                
+            conn.commit()
+            
+            # Re-seed menu from backups if available
+            from scripts.seed_from_backups import perform_seeding
+            seed_status = "Data cleared."
+            try:
+                if perform_seeding(conn):
+                    seed_status += " Menu re-seeded from backups."
+                else:
+                    seed_status += " Menu seeding skipped (no backups)."
+            except Exception as e:
+                seed_status += f" Seeding failed: {str(e)}"
+                
+            return {"status": "success", "message": f"Successfully reset 'Orders' and 'Menu' database. {seed_status}"}
+
+
+        elif section == "integrations":
+            # 3. Reset Integrations Section
+            # Clears all keys starting with 'integration_' from system_config
+            
+            conn.execute("DELETE FROM system_config WHERE key LIKE 'integration_%'")
+            conn.commit()
+            return {"status": "success", "message": "Successfully reset all integration settings."}
+
+        elif section == "ai_models":
+            # 4. Reset AI Models Section
+            # Clears keys for OpenAI, Anthropic, Gemini
+            # Keys: openai_api_key, openai_model, anthropic_api_key, anthropic_model, gemini_api_key, gemini_model
+            # Pattern: openai_%, anthropic_%, gemini_%
+            
+            conn.execute("DELETE FROM system_config WHERE key LIKE 'openai_%' OR key LIKE 'anthropic_%' OR key LIKE 'gemini_%'")
+            conn.commit()
+            return {"status": "success", "message": "Successfully reset all AI Model settings."}
+
+        elif section == "ai mode":
+            # 5. Reset AI Mode Section (Database)
+            # Tables: ai_logs, ai_feedback, ai_conversations, ai_messages
+            # Dependency: ai_feedback -> ai_logs; ai_messages -> ai_conversations + ai_logs
+            
+            tables_to_clear = [
+                "ai_feedback",
+                "ai_messages",
+                "ai_conversations",
+                "ai_logs"
+            ]
+            
+            for table in tables_to_clear:
+                conn.execute(f"DELETE FROM {table}")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                
+            conn.commit()
+            return {"status": "success", "message": "Successfully reset 'AI Mode' database (Logs & Conversations)."}
+
+        else:
+            # Placeholder for other sections
+            print(f"DEBUG: Placeholder reset triggered for section: {section}")
+            return {"status": "success", "message": f"Database section '{section}' reset successfully (Placeholder)"}
+
+    except Exception as e:
+        print(f"Error resetting DB section {section}: {e}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to reset {section}: {str(e)}")
     finally:
         conn.close()

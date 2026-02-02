@@ -1,29 +1,35 @@
 """
 Business Date Utilities
 
-The cafe operates until 5:00 AM, so a "business day" runs from
-05:00:00 on Day 1 to 04:59:59 on Day 2.
+The cafe operates until 5:00 AM IST, so a "business day" runs from
+05:00:00 on Day 1 to 04:59:59 on Day 2 (IST).
 
 All analytics should use these utilities for consistent date handling.
 """
 from datetime import datetime, date, timedelta
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+IST = ZoneInfo("Asia/Kolkata")
 BUSINESS_DAY_START_HOUR = 5  # 5:00 AM IST
 
 # SQL fragment for SQLite to calculate business date
-# Subtracts 5 hours from UTC/Local timestamp to align with business day
+# Subtracts 5 hours from IST timestamp to align with business day
 # e.g., '2023-01-01 02:00:00' -> '2022-12-31 21:00:00' -> DATE(...) -> '2022-12-31'
 BUSINESS_DATE_SQL = "DATE(created_on, '-5 hours')"
 
 
 def get_current_business_date() -> str:
     """
-    Get the current business date in YYYY-MM-DD format.
+    Get the current business date in YYYY-MM-DD format (IST).
     
-    If current time is before 5 AM, returns yesterday's date.
+    If current time in IST is before 5 AM, returns yesterday's date.
     Else returns today's date.
     """
-    now = datetime.now()
+    now = datetime.now(IST)
     if now.hour < BUSINESS_DAY_START_HOUR:
         return (now.date() - timedelta(days=1)).isoformat()
     return now.date().isoformat()

@@ -1,5 +1,7 @@
 # User Preferences & Rules
 
+- **Coding standards (AI agents):** Read `.agent/workflows/coding-standards.md` first; then `react-standards.md` and `python-standards.md` as needed.
+
 - **No Unauthorized Code Changes**: Always ask for explicit approval before making any code changes or file modifications. Providing explanations or answering questions does not count as approval for implementation.
 - **Plan First**: Present an implementation plan and wait for the user to say "Approve" or "Proceed" before executing any edits.
 

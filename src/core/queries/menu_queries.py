@@ -1,6 +1,26 @@
 import pandas as pd
 from datetime import datetime, timedelta
 
+# SQLite strftime('%w') = 0 Sunday, 1 Monday, ..., 6 Saturday
+DAY_NAME_TO_SQLITE_DOW = {
+    "Sunday": 0, "Monday": 1, "Tuesday": 2, "Wednesday": 3,
+    "Thursday": 4, "Friday": 5, "Saturday": 6,
+}
+
+
+def _weekdays_to_sqlite_dow(selected_weekdays):
+    """Convert day names (e.g. from frontend) to SQLite %w values (0-6). Pass-through if already ints."""
+    if not selected_weekdays:
+        return None
+    result = []
+    for d in selected_weekdays:
+        if isinstance(d, int) and 0 <= d <= 6:
+            result.append(d)
+        elif isinstance(d, str) and d in DAY_NAME_TO_SQLITE_DOW:
+            result.append(DAY_NAME_TO_SQLITE_DOW[d])
+    return result if result else None
+
+
 def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None, end_date=None, selected_weekdays=None):
     """Fetch Menu Analytics (Reorder stats, revenue, etc) with filtering"""
     
@@ -18,11 +38,13 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
         end_str = end_dt.strftime("%Y-%m-%d")
         order_filter_sql += " AND o.created_on <= ?"
         order_params.append(f"{end_str} 04:59:59")
-    if selected_weekdays and len(selected_weekdays) < 7:
-        placeholders = ",".join("?" for _ in selected_weekdays)
-        # Shift -5 hours so late night "Sunday" orders count as Sunday
-        order_filter_sql += f" AND TRIM(strftime('%w', o.created_on, '-5 hours')) IN ({placeholders})"
-        order_params.extend(selected_weekdays)
+    # Days filter: include only orders whose business-day weekday is in selected days (exclude unselected)
+    dow_list = _weekdays_to_sqlite_dow(selected_weekdays) if selected_weekdays else None
+    if dow_list is not None and len(dow_list) < 7:
+        placeholders = ",".join("?" for _ in dow_list)
+        # strftime('%w', ..., '-5 hours') = weekday in business-day terms (0=Sun .. 6=Sat)
+        order_filter_sql += f" AND CAST(strftime('%w', o.created_on, '-5 hours') AS INTEGER) IN ({placeholders})"
+        order_params.extend(dow_list)
 
     # 2. Build item-level filters
     item_filter_sql = ""

@@ -55,13 +55,17 @@ make logs
 - **`scripts/`**: Utilities for fetching and validating data.
 
 ## 📚 Documentation
-- **System Context**: [SYSTEM_CONTEXT.md](SYSTEM_CONTEXT.md)
+- **System Context**: [docs/SYSTEM_CONTEXT.md](docs/SYSTEM_CONTEXT.md)
 - **Database Schema**: Full schema in `database/schema.sql`
+- **Build & Share**: [docs/BUILD_INSTRUCTIONS.md](docs/BUILD_INSTRUCTIONS.md)
+- **Forecasting**: [docs/forecast.md](docs/forecast.md)
+- **Troubleshooting (macOS app)**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## 🔧 Troubleshooting
 - **App Not Loading**: Ensure you use `http://localhost:8501`.
 - **Database Reset**: Run `make clean && make up` to wipe and re-seed the DB.
 - **New Orders**: Run `make sync` to fetch incremental orders.
+- **macOS "Damaged" or "Unidentified Developer"**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## ✨ Functionalities
 
@@ -83,7 +87,7 @@ make logs
 - **Pareto Analysis (80/20 Rule)**: Identifies the 20% of items contributing to 80% of revenue.
 - **Item Performance**: Detailed breakdown of "Sold Count", "Revenue Share", and "Repeat Rate" for each dish.
 - **Variant Tracking**: Analyzes performance of different item sizes/flavors (e.g., Small vs. Large).
-- **[Item Clustering Logic](item_clustering.md)**: Intelligent system to normalize messy order names into clean menu items.
+- **[Item Clustering Logic](docs/item_clustering.md)**: Intelligent system to normalize messy order names into clean menu items.
 
 ### 📝 5. Order Management
 - **Centralized Order History**: Searchable database of all past orders from all sources (Swiggy, Zomato, POS).

@@ -84,7 +84,7 @@ class AIResponse(BaseModel):
     content: Any
     explanation: Optional[str] = None
     sql_query: Optional[str] = None
-    log_id: Optional[str] = None
+    query_id: Optional[str] = None
     confidence: float = 1.0
     corrected_prompt: Optional[str] = None  # Phase 5.1: spelling-corrected question (when shown in UI)
     query_status: Optional[str] = None  # Phase 8: "complete" | "incomplete" | "ignored"
@@ -93,7 +93,7 @@ class AIResponse(BaseModel):
 
 
 class AIFeedbackRequest(BaseModel):
-    """Request query for user feedback"""
-    log_id: str
+    """Request body for user feedback (thumbs up/down)."""
+    query_id: str
     is_positive: bool
     comment: Optional[str] = None

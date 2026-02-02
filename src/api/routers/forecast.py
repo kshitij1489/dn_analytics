@@ -90,9 +90,8 @@ def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
     df['y'] = pd.to_numeric(df['y'], errors='coerce').fillna(0)
     df['orders'] = pd.to_numeric(df['orders'], errors='coerce').fillna(0)
     
-    # Fill missing weather with 0 or mean (for propnet regressors we need non-null)
-    # Using specific fill values
-    df['temp_max'] = pd.to_numeric(df['temp_max'], errors='coerce').fillna(method='ffill').fillna(25.0) 
+    # Fill missing weather with 0 or mean (for prophet regressors we need non-null)
+    df['temp_max'] = pd.to_numeric(df['temp_max'], errors='coerce').ffill().fillna(25.0) 
     df['rain_sum'] = pd.to_numeric(df['rain_sum'], errors='coerce').fillna(0)
     
     return df
@@ -290,7 +289,7 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
                 print(f"Error parsing forecast parsing: {e}")
                 
         # Fill any remaining NaNs (fallback)
-        future['temp_max'] = future['temp_max'].fillna(method='ffill').fillna(25.0)
+        future['temp_max'] = future['temp_max'].ffill().fillna(25.0)
         future['rain_sum'] = future['rain_sum'].fillna(0)
         
         forecast = model.predict(future)

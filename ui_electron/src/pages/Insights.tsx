@@ -420,7 +420,7 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
                 setLoyaltyData(loyaltyRes.data);
             } else {
                 const topRes = await endpoints.insights.topCustomers({ _t: lastDbSync });
-                setTopCustomers(topRes.data);
+                setTopCustomers(Array.isArray(topRes?.data) ? topRes.data : []);
             }
         } catch (e) {
             console.error(e);

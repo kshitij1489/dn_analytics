@@ -23,6 +23,14 @@ const api = axios.create({
     },
 });
 
+/** One entry in the AI debug log (user question, cache hit/miss, LLM/cache response). */
+export interface DebugLogEntry {
+    step: string;
+    source: 'user' | 'cache' | 'llm';
+    input_preview?: string;
+    output_preview?: string;
+}
+
 export interface JobResponse {
     job_id: string;
     status: string;
@@ -97,6 +105,8 @@ export const endpoints = {
         reset: () => api.post('/system/reset'),
     },
 
+    resetAll: () => api.post('/system/reset'),
+
     ai: {
         chat: (data: { prompt: string, history?: any[]; last_ai_was_clarification?: boolean }) => api.post('/ai/chat', data),
         chatStream: (data: { prompt: string, history?: any[]; last_ai_was_clarification?: boolean }) =>
@@ -106,7 +116,10 @@ export const endpoints = {
                 body: JSON.stringify(data)
             }),
         suggestions: (limit?: number) => api.get('/ai/suggestions', { params: { limit } }),
-        feedback: (data: { log_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
+        feedback: (data: { query_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
+        initDebug: () => api.post('/ai/debug/init'),
+        getDebugLogs: () => api.get<{ entries: DebugLogEntry[] }>('/ai/debug/logs'),
+        clearCache: () => api.post<{ status: string; message: string }>('/ai/debug/clear-cache'),
     },
 
     conversations: {
@@ -119,7 +132,7 @@ export const endpoints = {
             type?: string;
             sql_query?: string;
             explanation?: string;
-            log_id?: string;
+            query_id?: string;
             query_status?: string;
         }) => api.post(`/conversations/${conversationId}/messages`, data),
         delete: (conversationId: string) => api.delete(`/conversations/${conversationId}`),
@@ -130,7 +143,8 @@ export const endpoints = {
     config: {
         getAll: () => api.get('/config'),
         update: (settings: Record<string, string>) => api.post('/config', { settings }),
-        verify: (type: string, settings: Record<string, string>) => api.post('/config/verify', { type, settings }),
+        verify: (type: string, settings: any) => api.post('/config/verify', { type, settings }),
+        resetDb: (section: string) => api.post('/config/reset-db', { section }),
     },
 
     today: {

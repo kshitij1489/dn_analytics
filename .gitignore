@@ -40,6 +40,7 @@ ui_electron/dist/
 
 # Logs
 *.log
+logs/
 
 # Docker
 .docker/

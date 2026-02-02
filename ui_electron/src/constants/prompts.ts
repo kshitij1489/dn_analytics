@@ -240,21 +240,23 @@ FROM menu_items m;
 ## RULES:
 1. Return ONLY the SQL query. No markdown, no explanation, no backticks.
 2. Use standard SQLite syntax (TEXT for UUIDs/Dates).
-3. Dates are stored as TEXT 'YYYY-MM-DD HH:MM:SS'. 
+3. Dates are stored as TEXT 'YYYY-MM-DD HH:MM:SS' in IST.
    - Use \`date(orders.created_on)\` to extract date.
    - Use \`strftime('%H', orders.created_on)\` for hour.
-4. Relative Date Logic:
-   - 'today': \`date(orders.created_on) = date('now', 'localtime')\`
-   - 'yesterday': \`date(orders.created_on) = date('now', '-1 day', 'localtime')\`
-   - 'last X days': \`orders.created_on >= date('now', '-X days', 'localtime')\`
-5. \`order_items\` and \`order_item_addons\` link to \`menu_items\` via \`menu_item_id\`.
-6. Limit results to 100 rows unless specified otherwise.
-7. NEVER use \`occurred_at\` - it contains invalid data.
-8. NEVER use \`created_at\` - this is the system insertion time (technical metadata). 
+4. Business day (IST): A day runs from 5:00 AM to 4:59:59 AM next day IST. E.g. "1 Feb" = 1 Feb 5:00 AM IST through 2 Feb 4:59:59 AM IST. Assume \`datetime('now', 'localtime')\` is IST.
+5. Relative Date Logic (use business day; B = current business date in IST):
+   - Let \`B = CASE WHEN strftime('%H', 'now', 'localtime') < '05' THEN date('now', 'localtime', '-1 day') ELSE date('now', 'localtime') END\`
+   - 'today': \`orders.created_on >= (B || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')\`
+   - 'yesterday': same with \`B_yesterday = date(B, '-1 day')\`: \`orders.created_on >= (B_yesterday || ' 05:00:00') AND orders.created_on < (B || ' 05:00:00')\`
+   - 'last X days': \`orders.created_on >= (date(B, '-X days') || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')\` — for X days including today use start \`date(B, '-(X-1) days')\` (e.g. last 7 days → \`date(B, '-6 days')\`).
+6. \`order_items\` and \`order_item_addons\` link to \`menu_items\` via \`menu_item_id\`.
+7. Limit results to 100 rows unless specified otherwise.
+8. NEVER use \`occurred_at\` - it contains invalid data.
+9. NEVER use \`created_at\` - this is the system insertion time (technical metadata). 
    - ALWAYS use \`created_on\` - this is the actual Timestamp of Order Placement (Business Date).
-9. ALWAYS filter by \`orders.order_status = 'Success'\` unless specified otherwise.
-10. When filtering by Item Name, ALWAYS join 'order_items' with 'menu_items' and filter on 'menu_items.name'. NEVER filter on 'order_items.name_raw'.
-11. To calculate "Total Sold" or "Revenue" for an item (which can be sold as a main item OR an add-on):
+10. ALWAYS filter by \`orders.order_status = 'Success'\` unless specified otherwise.
+11. When filtering by Item Name, ALWAYS join 'order_items' with 'menu_items' and filter on 'menu_items.name'. NEVER filter on 'order_items.name_raw'.
+12. To calculate "Total Sold" or "Revenue" for an item (which can be sold as a main item OR an add-on):
     - ✅ USE \`UNION ALL\` to combine results from \`order_items\` and \`order_item_addons\`.
     - ❌ DO NOT JOIN \`order_items\` directly to \`order_item_addons\`. This causes row explosion.
     - ⚠️ EACH subquery in the UNION must JOIN to \`orders\` independently if you need to filter by order date/status.

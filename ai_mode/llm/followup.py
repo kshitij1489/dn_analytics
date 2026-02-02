@@ -3,13 +3,15 @@ AI Mode: follow-up detection and context rewriting (Phase 7).
 
 Detects when the current message is a follow-up to a previous query (e.g. "and yesterday?")
 and rewrites it into a standalone query using conversation history.
+LLM responses are cached by (model, messages). See docs/LLM_CACHE_PLAN.md.
 """
 
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
-from ai_mode.client import get_ai_client, get_ai_model
-from ai_mode.prompt_ai_mode import (
+from ai_mode.cache import get_or_call, normalize_prompt
+from ai_mode.llm.client import get_ai_client, get_ai_model
+from ai_mode.prompts.prompt_ai_mode import (
     FOLLOW_UP_DETECTION_PROMPT,
     CONTEXT_REWRITE_PROMPT,
     REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT,
@@ -57,17 +59,12 @@ def get_previous_user_question(history: Optional[List[Dict[str, Any]]]) -> Optio
     return None
 
 
-def is_follow_up(conn, current_message: str, previous_user_question: str) -> bool:
-    """
-    Determine if current_message is a follow-up that continues previous_user_question.
-    Uses LLM with FOLLOW_UP_DETECTION_PROMPT. Returns False on error or no API.
-    """
-    if not current_message or not previous_user_question:
-        return False
+def _is_follow_up_impl(
+    conn, current_message: str, previous_user_question: str
+) -> bool:
+    """Call LLM to detect if current_message is a follow-up. Returns False on error."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    if not client:
-        return False
     try:
         user_content = f"""Previous user question: {previous_user_question}
 Current user message: {current_message}"""
@@ -88,19 +85,33 @@ Current user message: {current_message}"""
         return False
 
 
-def rewrite_with_context(
-    conn, current_message: str, previous_user_question: str
-) -> str:
+def is_follow_up(conn, current_message: str, previous_user_question: str) -> bool:
     """
-    Rewrite the follow-up message into a standalone question using the previous user question.
-    Returns the rewritten string, or current_message on error.
+    Determine if current_message is a follow-up that continues previous_user_question.
+    Uses LLM with FOLLOW_UP_DETECTION_PROMPT. Returns False on error or no API.
+    Cached by (model, current_message, previous_user_question).
     """
     if not current_message or not previous_user_question:
-        return current_message
+        return False
     client = get_ai_client(conn)
     model = get_ai_model(conn)
     if not client:
-        return current_message
+        return False
+    key_current = normalize_prompt(current_message)
+    key_previous = normalize_prompt(previous_user_question)
+    return get_or_call(
+        "is_follow_up",
+        (model, key_current, key_previous),
+        lambda: _is_follow_up_impl(conn, current_message, previous_user_question),
+    )
+
+
+def _rewrite_with_context_impl(
+    conn, current_message: str, previous_user_question: str
+) -> str:
+    """Call LLM to rewrite follow-up into standalone question. Returns current_message on error."""
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
     try:
         prompt = CONTEXT_REWRITE_PROMPT.format(
             previous_question=previous_user_question,
@@ -117,6 +128,31 @@ def rewrite_with_context(
     except Exception as e:
         print(f"⚠️ Context rewrite failed, using original: {e}")
         return current_message
+
+
+def rewrite_with_context(
+    conn, current_message: str, previous_user_question: str
+) -> str:
+    """
+    Rewrite the follow-up message into a standalone question using the previous user question.
+    Returns the rewritten string, or current_message on error.
+    Cached by (model, current_message, previous_user_question).
+    """
+    if not current_message or not previous_user_question:
+        return current_message
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
+    if not client:
+        return current_message
+    key_current = normalize_prompt(current_message)
+    key_previous = normalize_prompt(previous_user_question)
+    return get_or_call(
+        "rewrite_with_context",
+        (model, key_current, key_previous),
+        lambda: _rewrite_with_context_impl(
+            conn, current_message, previous_user_question
+        ),
+    )
 
 
 def resolve_follow_up(
@@ -140,23 +176,15 @@ def resolve_follow_up(
     return rewritten if rewritten else prompt
 
 
-def resolve_reply_to_clarification(
+def _resolve_reply_to_clarification_impl(
     conn,
     clarification_text: str,
     previous_user_question: str,
     current_message: str,
-) -> tuple[bool, str]:
-    """
-    Single LLM call: decide if current_message is a reply to the clarification,
-    and if so rewrite previous_user_question + answer into one standalone query.
-    Returns (is_reply_to_clarification, effective_query). On error returns (False, current_message).
-    """
-    if not current_message or not clarification_text or not previous_user_question:
-        return (False, current_message or "")
+) -> List[Any]:
+    """Call LLM; return [is_reply, effective_query] for JSON cache storage."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    if not client:
-        return (False, current_message)
     try:
         user_content = f"""Assistant asked: {clarification_text}
 Previous user question: {previous_user_question}
@@ -175,7 +203,41 @@ User now said: {current_message}"""
         is_reply = out.get("is_reply_to_clarification", False)
         rewritten = (out.get("rewritten_query") or "").strip()
         effective = rewritten if (is_reply and rewritten) else current_message
-        return (is_reply, effective)
+        return [is_reply, effective]
     except Exception as e:
         print(f"⚠️ Reply-to-clarification failed, treating as new query: {e}")
+        return [False, current_message]
+
+
+def resolve_reply_to_clarification(
+    conn,
+    clarification_text: str,
+    previous_user_question: str,
+    current_message: str,
+) -> Tuple[bool, str]:
+    """
+    Single LLM call: decide if current_message is a reply to the clarification,
+    and if so rewrite previous_user_question + answer into one standalone query.
+    Returns (is_reply_to_clarification, effective_query). On error returns (False, current_message).
+    Cached by (model, clarification_text, previous_user_question, current_message).
+    """
+    if not current_message or not clarification_text or not previous_user_question:
+        return (False, current_message or "")
+    client = get_ai_client(conn)
+    model = get_ai_model(conn)
+    if not client:
         return (False, current_message)
+    key_clar = normalize_prompt(clarification_text)
+    key_previous = normalize_prompt(previous_user_question)
+    key_current = normalize_prompt(current_message)
+    result = get_or_call(
+        "resolve_reply_to_clarification",
+        (model, key_clar, key_previous, key_current),
+        lambda: _resolve_reply_to_clarification_impl(
+            conn,
+            clarification_text,
+            previous_user_question,
+            current_message,
+        ),
+    )
+    return (result[0], result[1])

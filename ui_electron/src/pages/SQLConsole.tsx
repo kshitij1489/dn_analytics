@@ -77,27 +77,6 @@ export default function SQLConsole() {
         });
     };
 
-    const handleReset = async () => {
-        if (!window.confirm("WARNING: This will completely wipe the database and recreate it from schema.sql. \n\nAre you sure you want to proceed?")) {
-            return;
-        }
-
-        try {
-            setLoading(true); // Reuse loading state to disable UI
-            const res = await endpoints.system.reset();
-            if (res.data.status === 'success') {
-                alert("Database reset successfully!");
-                // Re-check connection after reset as the connection might need re-establishing or just to be safe
-                checkConnection();
-            } else {
-                alert("Failed to reset database: " + res.data.message);
-            }
-        } catch (err: any) {
-            alert("Error resetting database: " + (err.response?.data?.detail || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
 
     return (
         <div style={{ padding: '20px', fontFamily: 'Inter, sans-serif' }}>
@@ -140,24 +119,6 @@ export default function SQLConsole() {
                     </button>
                 </div>
 
-                <button
-                    onClick={handleReset}
-                    disabled={loading}
-                    style={{
-                        padding: '12px 24px',
-                        background: '#fee2e2',
-                        color: '#dc2626',
-                        border: 'none',
-                        borderRadius: '25px',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                        fontWeight: 600,
-                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                        boxShadow: '0 2px 5px rgba(220, 38, 38, 0.2)',
-                        opacity: loading ? 0.7 : 1
-                    }}
-                >
-                    {loading ? 'Resetting...' : '⚠️ Reset DB'}
-                </button>
             </div>
 
             {/* Content Area */}

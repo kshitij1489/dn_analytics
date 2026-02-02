@@ -4,7 +4,7 @@ AI Mode: natural language explanation of query results.
 
 import pandas as pd
 
-from ai_mode.client import get_ai_client, get_ai_model
+from ai_mode.llm.client import get_ai_client, get_ai_model
 
 
 def generate_explanation(conn, prompt: str, sql: str, df: pd.DataFrame) -> str:

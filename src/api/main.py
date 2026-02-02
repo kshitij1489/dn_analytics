@@ -6,6 +6,9 @@ app = FastAPI(title="Analytics Backend")
 
 @app.on_event("startup")
 def startup_db_check():
+    # Ensure error log file handler is attached (logs/errors.jsonl)
+    from src.core.error_log import get_error_logger
+    get_error_logger()
     try:
         from src.core.db.connection import get_db_connection
         conn, _ = get_db_connection()
@@ -56,7 +59,7 @@ def startup_db_check():
                 type TEXT,
                 sql_query TEXT,
                 explanation TEXT,
-                log_id TEXT,
+                query_id TEXT,
                 query_status TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -67,6 +70,26 @@ def startup_db_check():
             print("Startup: Verified weather_daily and ai_conversations schema.")
     except Exception as e:
         print(f"Startup DB Check Failed: {e}")
+        try:
+            get_error_logger().exception("Startup DB check failed")
+        except Exception:
+            pass
+
+@app.exception_handler(Exception)
+def global_exception_handler(request, exc):
+    """Log uncaught exceptions to the error log file, then return 500."""
+    try:
+        from src.core.error_log import get_error_logger
+        path = getattr(getattr(request, "url", None), "path", None)
+        get_error_logger().exception(
+            f"Uncaught exception: {exc}",
+            extra={"context": {"path": path}},
+        )
+    except Exception:
+        pass
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
 
 app.add_middleware(
     CORSMiddleware,

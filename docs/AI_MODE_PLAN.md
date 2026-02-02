@@ -2,6 +2,8 @@
 
 **Status: All phases complete.**
 
+This document is the single plan for AI Mode. It merges the former **Error / Crash Report Logging** and **LLM Response Cache** plans; see sections below and **Future plan of actions** for improvements (e.g. error-log concurrency, summary/report cache deferral).
+
 ## Your Flow (Validated)
 
 Your proposed flow is **correct** and aligns well with a single “brain” on the Python side. Here it is mapped to what you have and what to add:
@@ -11,7 +13,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 | 1 | Incoming query: Electron UI → Python FastAPI | ✅ Done | None |
 | 2 | Python server = AI brain | ✅ Done | None |
 | 3a | User question → API | ✅ Done (`/ai/chat`, `AIMode.tsx`) | None |
-| 3b | Spelling correction (small LLM) | ✅ Done (`ai_mode/spelling.py`) | None |
+| 3b | Spelling correction (small LLM) | ✅ Done (`ai_mode/llm/spelling.py`) | None |
 | 3c | Intent recognition (LLM) | ✅ Done (`classify_intent`) | None |
 | 3d | Decide sequence of actions from intent | ✅ Done (`planner`, `actions`) | None |
 | 3e | Execute sequence (question + context + db) | ✅ Done (handlers + context) | None |
@@ -103,7 +105,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 **Tasks:**
 
 - [x] **6.1** Extend schema for AI pipeline metadata:
-  - Done: Added columns to `ai_logs`: `raw_user_query`, `corrected_query`, `action_sequence` (JSON text), `explanation`. `response_payload` is limited to a small summary when large (e.g. row count, type). New installs get these via `database/schema_sqlite.sql`; **existing DBs** run once: `sqlite3 your.db < database/phase6_ai_logs_migration.sql`.
+  - Done: Added columns to `ai_logs`: `raw_user_query`, `corrected_query`, `action_sequence` (JSON text), `explanation`. `response_payload` is limited to a small summary when large (e.g. row count, type). Schema is in `database/schema_sqlite.sql` (single source; apply for fresh DB).
 - [x] **6.2** In the orchestrator (or logging module), after the pipeline runs, persist: raw prompt, corrected prompt, intent, action_sequence, SQL text from each step that generated SQL, and explanation(s). Do **not** persist full table/chart result payloads.
 - [x] **6.3** Per-step metadata: action_sequence stored as JSON; explanation(s) from parts concatenated. Payload summary (type + row_count / parts count) when content is large.
 
@@ -150,6 +152,76 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 - [x] **8.3** On the **next user message**, first determine if it is a **reply to the pending clarification** (e.g. “last week”, “yesterday”) or a **new query** (e.g. “Show me top items”). Use intent + history + optional Phase 7 rewriter. If it’s a reply → merge with the incomplete query context, run the pipeline, then mark the query **complete**. If it’s a new query → mark the previous (incomplete) query **ignored**, then process the new message as a new query.
 - [x] **8.4** If for a given user query there is **no** follow-up (answer was given immediately): mark that query **complete**.
 - [x] **8.5** UI/API: ensure the client can send conversation history (including the last AI clarification message) so the backend can distinguish “reply to clarification” vs “new question”. Optionally surface **ignored** state in the UI (e.g. “Previous question was left unanswered”) so the user understands why the bot moved on.
+
+---
+
+## Error / Crash Report Logging
+
+**Goal:** Log errors and crash reports to a **local file** (`logs/errors.jsonl`) in JSON Lines format for debugging and future cloud upload. Keep "where we log" and "how we ship" separate so cloud integration is a drop-in later.
+
+**Current codebase:**
+
+- **Orchestrator:** On handler exception, sets `step_error` and passes it to `log_interaction(..., error=step_error)` → `ai_logs.error_message` and debug panel.
+- **Handlers:** `run_run_sql` and `run_generate_chart` **catch** SQL/execution failures and return clarification parts; they do **not** raise. So "wrong SQL" and chart failures are logged **explicitly** to the error file via `log_error(..., context={action, user_query, generated_sql}, error_kind="sql_execution_failure")`.
+- **Sink:** `src/core/error_log.py` — `get_error_logger()`, `log_error()`, `JsonlRotatingFileHandler` (5 MB rotation, 3 backups). All records: `ts`, `level`, `message`, `exception`, `traceback`, `context`.
+- **Shipper:** `src/core/error_shipper.py` — `upload_pending()` is a no-op; implement later to read `logs/errors*.jsonl`, batch, POST to cloud, then truncate/archive.
+
+**Principles:** Single sink locally (one file); stable JSONL format; pluggable shipper (app never talks to cloud; shipper reads file and uploads). Pipeline/LLM errors (e.g. RUN_SQL execution failure) are logged from handlers with rich context (`action`, `user_query`, `generated_sql`, `error_kind`) so they are easy to detect and fix.
+
+---
+
+## LLM Response Cache
+
+**Goal:** Avoid calling the LLM when we have a cached response for the same logical input. Reduces latency, cost, and API dependency.
+
+**Implementation:** Central cache layer in `ai_mode/cache/` — `get_or_call(call_id, key_parts, fn)` and `get_or_call_diversity` for general chat. SQLite-backed; LRU eviction; config in `cache_config.py`.
+
+**Cached calls (implemented):**
+
+| Call | Key | Notes |
+|------|-----|--------|
+| correct_query, classify_intent | model + normalized prompt | High value |
+| generate_sql | model + schema_hash + date + normalized prompt | Schema hash from `get_schema_context()` |
+| generate_chart_config | model + schema_hash + normalized prompt | Config cached; SQL re-run on hit for fresh data |
+| is_follow_up, rewrite_with_context, resolve_reply_to_clarification | model + message(s) | Follow-up/clarification |
+| run_general_chat | model + normalized prompt | **Diversity cache:** up to 5 distinct responses per prompt; when full, randomly pick one |
+| _suggest_no_data_hint | model, prompt, sql_query, valid_values_str | Optional; temperature=0 |
+
+**Deferred / low priority:** Summary and report (and streaming variants) — data-heavy, non-deterministic (temp 0.5), low hit rate; **skip or defer**. generate_explanation — same; low priority.
+
+**Decisions:** Schema version = hash of `get_schema_context()` (same source as generators). Persistence = SQLite. Eviction = LRU, global max entries (config). Diversity cache scope = chitchat only; if factual/system queries are added, route them elsewhere or use single-response cache.
+
+**Regression risks (document in code):** If `classify_intent` or `run_general_chat` later use history/context in the LLM call, cache key must include it. SQL prompt should encourage relative time (`date('now')`, etc.) so cached SQL stays valid. Schema hash must be computed from `get_schema_context()` only, not a separate file read.
+
+---
+
+## TODO
+
+Track tasks and future improvements here. Not required for current functionality.
+
+### ⚠️ Observations / Risks
+
+- **Code duplication:** Maintaining two identical copies of the schema and rules (one in Python, one in TS) is risky. If they drift, the frontend "Debug/Playground" might behave differently than the actual Python backend.  
+  **Suggestion:** In the future, consider having the Python backend serve the prompt text to the frontend via an API endpoint (e.g. `/api/ai/prompts`), or just treat the Python version as the single source of truth.
+- **LLM complexity:** The date logic (business day 5:00 AM–4:59:59 IST) is quite verbose in the prompts. If the LLM consistently struggles with syntax errors on the `CASE WHEN` block, consider adding a computed column `business_date` to the `orders` table (or a view) to simplify SQL generation.
+
+### Error logging
+
+- [ ] **Concurrency / multi-process:** If multiple workers or processes write to the same `logs/errors.jsonl`, use one log file per process (or a single dedicated logger process others send to via queue/socket) to avoid interleaved lines and fragile read-and-truncate semantics.
+- [ ] **Delivery guarantees:** When implementing the shipper, use idempotency keys per record (e.g. `record_id` in JSON) so the cloud can dedupe if the same batch is sent twice. Decide at-least-once vs exactly-once and document.
+- [ ] **Retention and disk:** Enforce rotation (already in place) and add retention (e.g. delete or archive local files after successful upload) so disk does not grow unbounded.
+- [ ] **Security and PII:** Treat the error file as sensitive (permissions, encryption at rest if required). Consider redacting or hashing `user_query` / `generated_sql` before upload; document consent/compliance if needed.
+- [ ] **Observability of the shipper:** Add metrics (e.g. last successful upload, pending line count) and alerts if upload fails or lags.
+
+### LLM cache
+
+- [ ] **Summary/report:** Skip or defer; low hit rate and non-deterministic. Revisit only if summary/report usage grows and caching becomes worthwhile.
+- [ ] **Optional:** LRU expression index `(COALESCE(last_used_at, created_at))` if eviction becomes slow at very large sizes; TTL for date-keyed entries; DEBUG-level hit/miss counters; more stable default cache path (e.g. app data dir).
+
+### General
+
+- [ ] **Context sensitivity:** If `classify_intent` or `run_general_chat` ever send history/context to the LLM, update cache keys to include it and document in code.
+- [ ] **Diversity cache scope:** Keep run_general_chat for chitchat; if factual/system queries are added, exclude them from the diversity cache or use a separate path.
 
 ---
 
@@ -207,9 +279,9 @@ Use this to trace code paths when reviewing the implementation.
 │  Orchestrator — ai_mode/orchestrator.py  process_chat()                           │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  1. raw_prompt = prompt                                                           │
-│  2. prompt = correct_query(conn, prompt)           ← ai_mode/spelling.py          │
+│  2. prompt = correct_query(conn, prompt)           ← ai_mode/llm/spelling.py       │
 │  3. [Reply-to-clarification] If last_ai_was_clarification && history:             │
-│       clarification_text = get_last_ai_message(history)     ← followup.py         │
+│       clarification_text = get_last_ai_message(history)     ← ai_mode/llm/followup.py │
 │       previous_user_question = get_previous_user_question(history)                │
 │       is_reply, prompt = resolve_reply_to_clarification(...)  ← one LLM            │
 │       handled_reply_to_clarification = True; if not is_reply: previous_query_ignored │
@@ -217,7 +289,7 @@ Use this to trace code paths when reviewing the implementation.
 │       prompt = resolve_follow_up(conn, prompt, history)                           │
 │       (if current message is follow-up e.g. "and yesterday?" → rewrite to         │
 │        standalone using previous user question)                                   │
-│  5. classification = classify_intent(conn, prompt, history)  ← intent.py          │
+│  5. classification = classify_intent(conn, prompt, history)  ← ai_mode/llm/intent.py   │
 │  6. action_sequence = plan_actions(classification)             ← planner.py     │
 │  7. context = empty_context()                                  ← context.py      │
 │  8. For each action in action_sequence:                                           │
@@ -236,20 +308,21 @@ Use this to trace code paths when reviewing the implementation.
           │
           ├─────────────────────────────┬─────────────────────────────┐
           ▼                             ▼                             ▼
-┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────────────┐
-│ followup.py         │   │ intent.py            │   │ handlers.py                  │
-├─────────────────────┤   ├─────────────────────┤   ├─────────────────────────────┤
-│ get_last_ai_message │   │ classify_intent()    │   │ run_run_sql → sql_gen, DB    │
-│ get_previous_user_  │   │   INTENT_            │   │ run_generate_chart → chart    │
-│   question          │   │   CLASSIFICATION_   │   │ run_generate_summary         │
-│ is_follow_up        │   │   PROMPT → intent,   │   │ run_generate_report          │
-│ rewrite_with_context│   │   reason             │   │ run_ask_clarification         │
-│ resolve_follow_up   │   │                     │   │ run_general_chat             │
-│ resolve_reply_to_   │   │                     │   │ (each returns part+context)   │
-│   clarification     │   │                     │   │ context: last_table_data,     │
-│ (LLM prompts in     │   │                     │   │ last_sql, last_chart_config   │
-│  prompt_ai_mode.py) │   │                     │   │                              │
-└─────────────────────┘   └─────────────────────┘   └─────────────────────────────┘
+┌──────────────────────┐   ┌─────────────────────┐   ┌─────────────────────────────┐
+│ ai_mode/llm/         │   │ ai_mode/llm/        │   │ handlers.py                  │
+│ followup.py          │   │ intent.py            │   │                              │
+├──────────────────────┤   ├─────────────────────┤   ├─────────────────────────────┤
+│ get_last_ai_message  │   │ classify_intent()    │   │ run_run_sql → sql_gen, DB    │
+│ get_previous_user_   │   │   INTENT_            │   │ run_generate_chart → chart    │
+│   question           │   │   CLASSIFICATION_   │   │ run_generate_summary         │
+│ is_follow_up         │   │   PROMPT → intent,   │   │ run_generate_report          │
+│ rewrite_with_context │   │   reason             │   │ run_ask_clarification         │
+│ resolve_follow_up    │   │                     │   │ run_general_chat             │
+│ resolve_reply_to_    │   │                     │   │ (each returns part+context)   │
+│   clarification      │   │                     │   │ context: last_table_data,     │
+│ (LLM prompts in      │   │                     │   │ last_sql, last_chart_config   │
+│  ai_mode/prompts/)   │   │                     │   │                              │
+└──────────────────────┘   └─────────────────────┘   └─────────────────────────────┘
           │                             │                             │
           └─────────────────────────────┼─────────────────────────────┘
                                         ▼
@@ -266,8 +339,8 @@ Use this to trace code paths when reviewing the implementation.
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  Writes to ai_logs: raw_user_query, corrected_query, intent, action_sequence     │
 │  (JSON), explanation; response_payload trimmed to summary if large (e.g.        │
-│  {type, row_count}). No full table/chart payloads. Returns log_id.               │
-│  Schema: database/schema_sqlite.sql; migration: phase6_ai_logs_migration.sql     │
+│  {type, row_count}). No full table/chart payloads. Returns query_id.             │
+│  Schema: database/schema_sqlite.sql (single source for AI logs/feedback)        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -276,10 +349,10 @@ Use this to trace code paths when reviewing the implementation.
 | Step | What happens | Where |
 |------|----------------|-------|
 | UI → API | User message + history + `last_ai_was_clarification` sent to backend | `AIMode.tsx` → `routers/ai.py` |
-| Spelling | Raw prompt corrected (small LLM) | `orchestrator` → `spelling.correct_query` |
-| Reply vs new query | If last AI was clarification: one LLM call decides + rewrites (clarification + previous question + current msg); else → previous ignored | `orchestrator` + `followup.resolve_reply_to_clarification` |
-| Follow-up rewrite | If message is follow-up (e.g. "and yesterday?"), rewrite to full question using history | `followup.resolve_follow_up` → `is_follow_up`, `rewrite_with_context` |
-| Intent | Classify intent (+ optional actions[]) | `intent.classify_intent` |
+| Spelling | Raw prompt corrected (small LLM) | `orchestrator` → `ai_mode.llm.spelling.correct_query` |
+| Reply vs new query | If last AI was clarification: one LLM call decides + rewrites (clarification + previous question + current msg); else → previous ignored | `orchestrator` + `ai_mode.llm.followup.resolve_reply_to_clarification` |
+| Follow-up rewrite | If message is follow-up (e.g. "and yesterday?"), rewrite to full question using history | `ai_mode.llm.followup.resolve_follow_up` → `is_follow_up`, `rewrite_with_context` |
+| Intent | Classify intent (+ optional actions[]) | `ai_mode.llm.intent.classify_intent` |
 | Plan | Resolve action sequence from classification | `planner.plan_actions` |
 | Execute | Run each action handler with shared context; ASK_CLARIFICATION sets incomplete | `orchestrator` loop → `handlers.*` |
 | Response | Single or multi-part (text / table / chart); + corrected_prompt, query_status, etc. | `orchestrator` builds `AIResponse` |

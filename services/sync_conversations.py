@@ -46,7 +46,7 @@ async def get_messages_for_conversation(conn, conversation_id: str) -> list:
             type,
             sql_query,
             explanation,
-            log_id,
+            query_id,
             query_status,
             created_at
         FROM ai_messages
