@@ -41,26 +41,44 @@ def get_category_trend(conn=Depends(get_db)):
 
 
 @router.get("/top_items")
-def top_items(conn=Depends(get_db)):
-    """Get top selling items with revenue data"""
-    df, total_revenue = insights_queries.fetch_top_items_data(conn)
+def top_items(
+    start_date: str = None,
+    end_date: str = None,
+    conn=Depends(get_db)
+):
+    """Get top selling items with revenue data. Optional start_date/end_date = business days (5:00 AM–4:59:59 AM IST)."""
+    df, total_revenue = insights_queries.fetch_top_items_data(
+        conn, start_date=start_date, end_date=end_date
+    )
     return {"items": df_to_json(df), "total_system_revenue": float(total_revenue)}
 
 
 @router.get("/revenue_by_category")
-def get_revenue_by_category(conn=Depends(get_db)):
-    """Get revenue breakdown by category"""
-    df, total_revenue = insights_queries.fetch_revenue_by_category_data(conn)
+def get_revenue_by_category(
+    start_date: str = None,
+    end_date: str = None,
+    conn=Depends(get_db)
+):
+    """Get revenue breakdown by category. Optional start_date/end_date = business days (5:00 AM–4:59:59 AM IST)."""
+    df, total_revenue = insights_queries.fetch_revenue_by_category_data(
+        conn, start_date=start_date, end_date=end_date
+    )
     return {"categories": df_to_json(df), "total_system_revenue": float(total_revenue)}
 
 
 @router.get("/hourly_revenue")
-def get_hourly_revenue(days: str = None, conn=Depends(get_db)):
-    """Get hourly revenue distribution
+def get_hourly_revenue(
+    days: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    conn=Depends(get_db)
+):
+    """Get hourly revenue distribution (business day 5am–4:59am IST).
     
     Args:
         days: Optional comma-separated day numbers to include (0=Sun, 1=Mon, ..., 6=Sat)
-              Example: "1,2,3,4,5" for Mon-Fri only
+        start_date: Optional begin date YYYY-MM-DD (inclusive)
+        end_date: Optional end date YYYY-MM-DD (inclusive). Use with start_date.
     """
     days_list = None
     if days:
@@ -68,8 +86,10 @@ def get_hourly_revenue(days: str = None, conn=Depends(get_db)):
             days_list = [int(d.strip()) for d in days.split(',') if d.strip()]
         except ValueError:
             pass  # Invalid format, ignore filter
-    
-    df = insights_queries.fetch_hourly_revenue_data(conn, days_list)
+
+    df = insights_queries.fetch_hourly_revenue_data(
+        conn, days=days_list, start_date=start_date, end_date=end_date
+    )
     return df_to_json(df)
 
 
@@ -85,9 +105,15 @@ def get_hourly_revenue_by_date(date: str, conn=Depends(get_db)):
 
 
 @router.get("/order_source")
-def get_order_source(conn=Depends(get_db)):
-    """Get order distribution by source (POS, Website, Swiggy, Zomato)"""
-    df = insights_queries.fetch_order_source_data(conn)
+def get_order_source(
+    start_date: str = None,
+    end_date: str = None,
+    conn=Depends(get_db)
+):
+    """Get order distribution by source (POS, Website, Swiggy, Zomato). Optional start_date/end_date = business days (5:00 AM–4:59:59 AM IST)."""
+    df = insights_queries.fetch_order_source_data(
+        conn, start_date=start_date, end_date=end_date
+    )
     return df_to_json(df)
 
 

@@ -14,7 +14,7 @@ import { filterByWeekdays, getHolidaysForChart, groupDataByTimeBucket } from '..
 
 export function RevenueVsOrdersChart() {
     const [data, setData] = useState<any[]>([]);
-    const [timeBucket, setTimeBucket] = useState('Day');
+    const [timeBucket, setTimeBucket] = useState('Week');
     const [showHolidays, setShowHolidays] = useState(false);
     const [selectedDays, setSelectedDays] = useState(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']);
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -152,6 +152,10 @@ export function RevenueVsOrdersChart() {
                         </LineChart>
                     </ResponsiveContainer>
                 </ResizableChart>
+
+                <p style={{ marginTop: '10px', fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
+                    * Week = Week ENDING on that date (Sunday). Month = Month STARTING on that date (1st).
+                </p>
             </div>
 
             <FullscreenModal isOpen={isFullscreen} onClose={() => setIsFullscreen(false)}>

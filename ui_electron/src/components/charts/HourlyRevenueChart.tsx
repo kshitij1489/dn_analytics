@@ -39,19 +39,45 @@ export function HourlyRevenueChart() {
     const [selectedDates, setSelectedDates] = useState<string[]>([]);
     const [dailyData, setDailyData] = useState<DailyDataEntry[]>([]);
     const [selectedDays, setSelectedDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]); // All days
+    const [beginDate, setBeginDate] = useState('');
+    const [endDate, setEndDate] = useState('');
     const dateInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        loadData();
-    }, [selectedDays]);
+        if (viewMode === 'cumulative') loadData();
+    }, [selectedDays, beginDate, endDate, viewMode]);
+
+    // Business day hour order for x-axis: 5 AM → 4 AM
+    const CUMULATIVE_HOUR_ORDER = [
+        ...Array.from({ length: 19 }, (_, i) => i + 5),
+        ...Array.from({ length: 5 }, (_, i) => i)
+    ];
 
     const loadData = async () => {
         try {
-            const res = await endpoints.insights.hourlyRevenue(selectedDays);
-            const formatted = res.data.map((d: any) => ({
-                ...d,
-                hour_label: formatHour(d.hour_num)
-            }));
+            const params: { days?: number[]; start_date?: string; end_date?: string } = {};
+            if (selectedDays.length < 7) params.days = selectedDays;
+            if (beginDate && endDate && beginDate <= endDate) {
+                params.start_date = beginDate;
+                params.end_date = endDate;
+            }
+            const res = await endpoints.insights.hourlyRevenue(params);
+            const byHour: Record<number, any> = {};
+            (res.data || []).forEach((d: any) => {
+                byHour[d.hour_num] = {
+                    ...d,
+                    hour_label: formatHour(d.hour_num)
+                };
+            });
+            // Ensure all 24 hours in business order (5 AM → 4 AM), fill 0 for missing
+            const formatted = CUMULATIVE_HOUR_ORDER.map((hour_num) =>
+                byHour[hour_num] ?? {
+                    hour_num,
+                    hour_label: formatHour(hour_num),
+                    revenue: 0,
+                    avg_revenue: 0
+                }
+            );
             setData(formatted);
         } catch (e) {
             console.error(e);
@@ -60,7 +86,7 @@ export function HourlyRevenueChart() {
 
     const formatHour = (h: number) => {
         if (h === 0) return '12 AM';
-        if (h === 12) return '12 PM';
+        if (h === 12) return 'Noon';
         if (h < 12) return `${h} AM`;
         return `${h - 12} PM`;
     };
@@ -111,11 +137,17 @@ export function HourlyRevenueChart() {
         }
     };
 
+    // Business day order: 5 AM → 4:59 AM (5, 6, ..., 23, 0, 1, 2, 3, 4)
+    const BUSINESS_DAY_HOUR_ORDER = [
+        ...Array.from({ length: 19 }, (_, i) => i + 5),
+        ...Array.from({ length: 5 }, (_, i) => i)
+    ];
+
     // Build combined data for line chart (all hours with revenue per date)
     const buildDailyChartData = () => {
-        const hours = Array.from({ length: 24 }, (_, i) => ({
-            hour_num: i,
-            hour_label: formatHour(i)
+        const hours = BUSINESS_DAY_HOUR_ORDER.map((hour_num) => ({
+            hour_num,
+            hour_label: formatHour(hour_num)
         }));
 
         // Track running totals for each date
@@ -255,6 +287,37 @@ export function HourlyRevenueChart() {
         </div>
     );
 
+    const renderDateRangeFilters = () => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                Begin:
+                <input
+                    type="date"
+                    value={beginDate}
+                    onChange={(e) => setBeginDate(e.target.value)}
+                    style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                End:
+                <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                />
+            </label>
+            {(beginDate || endDate) && (
+                <button
+                    style={{ ...clearButtonStyle, padding: '6px 10px' }}
+                    onClick={() => { setBeginDate(''); setEndDate(''); }}
+                >
+                    Clear range
+                </button>
+            )}
+        </div>
+    );
+
     const renderDailyControls = () => (
         <div style={{ display: 'flex', gap: '8px' }}>
             {selectedDates.length > 0 && (
@@ -277,7 +340,7 @@ export function HourlyRevenueChart() {
     const renderCumulativeChart = () => (
         <BarChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#444" />
-            <XAxis dataKey="hour_label" stroke="#aaa" />
+            <XAxis dataKey="hour_label" stroke="#aaa" interval={0} tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={50} />
             <YAxis stroke="#aaa" />
             <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
             <Legend />
@@ -288,7 +351,7 @@ export function HourlyRevenueChart() {
     const renderDailyChart = () => (
         <LineChart data={dailyChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#444" />
-            <XAxis dataKey="hour_label" stroke="#aaa" />
+            <XAxis dataKey="hour_label" stroke="#aaa" interval={0} tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={50} />
             <YAxis stroke="#aaa" />
             <Tooltip content={<CustomTooltip />} />
             <Legend formatter={(value) => formatDateLabel(value)} />
@@ -332,14 +395,27 @@ export function HourlyRevenueChart() {
                             <span style={{ marginLeft: '6px', fontSize: '16px' }}>→</span>
                         </span>
                     )}
-                    {viewMode === 'cumulative' && renderDayFilters()}
+                    {viewMode === 'cumulative' && (
+                        <>
+                            {renderDayFilters()}
+                            {renderDateRangeFilters()}
+                        </>
+                    )}
                     {viewMode === 'daily' && renderDailyControls()}
                 </div>
+                {viewMode === 'cumulative' && (beginDate || endDate) && (
+                    <p style={{ margin: '0 0 12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        Hourly revenue for selected date range (business days 5:00 AM–4:59 AM IST)
+                    </p>
+                )}
                 <ResizableChart onFullscreen={() => setIsFullscreen(true)}>
                     <ResponsiveContainer width="100%" height="100%">
                         {viewMode === 'cumulative' ? renderCumulativeChart() : renderDailyChart()}
                     </ResponsiveContainer>
                 </ResizableChart>
+                <p style={{ marginTop: '15px', fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                    Each bar/hour = revenue in the hour starting at that time (e.g. 11 PM = 11:00 PM–12:00 AM).
+                </p>
             </div>
 
             <FullscreenModal isOpen={isFullscreen} onClose={() => setIsFullscreen(false)}>
@@ -366,14 +442,27 @@ export function HourlyRevenueChart() {
                                 <span style={{ marginLeft: '6px', fontSize: '16px' }}>→</span>
                             </span>
                         )}
-                        {viewMode === 'cumulative' && renderDayFilters()}
+                        {viewMode === 'cumulative' && (
+                            <>
+                                {renderDayFilters()}
+                                {renderDateRangeFilters()}
+                            </>
+                        )}
                         {viewMode === 'daily' && renderDailyControls()}
                     </div>
+                    {viewMode === 'cumulative' && (beginDate || endDate) && (
+                        <p style={{ margin: '0 0 12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            Hourly revenue for selected date range (business days 5:00 AM–4:59 AM IST)
+                        </p>
+                    )}
                     <div style={{ flex: 1 }}>
                         <ResponsiveContainer width="100%" height="100%">
                             {viewMode === 'cumulative' ? renderCumulativeChart() : renderDailyChart()}
                         </ResponsiveContainer>
                     </div>
+                    <p style={{ marginTop: '15px', fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                        Each bar/hour = revenue in the hour starting at that time (e.g. 11 PM = 11:00 PM–12:00 AM).
+                    </p>
                 </div>
             </FullscreenModal>
         </>

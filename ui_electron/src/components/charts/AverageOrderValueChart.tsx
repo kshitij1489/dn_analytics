@@ -134,8 +134,8 @@ export function AverageOrderValueChart() {
                                     const payload = props.payload;
                                     return [
                                         `AOV: ₹${Math.round(value).toLocaleString()}`,
-                                        `Total Revenue: ₹${Math.round(payload.total_revenue || 0).toLocaleString()}`,
-                                        `Total Orders: ${Math.round(payload.total_orders || 0)}`
+                                        `Total Revenue: ₹${Math.round(payload.revenue ?? payload.total_revenue ?? 0).toLocaleString()}`,
+                                        `Total Orders: ${Math.round(payload.num_orders ?? payload.total_orders ?? 0)}`
                                     ];
                                 }}
                                 labelFormatter={(label) => `Period: ${label}`}
@@ -170,6 +170,10 @@ export function AverageOrderValueChart() {
                 <p style={{ marginTop: '10px', fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
                     * Average Order Value = Total Revenue / Total Orders for each period
                 </p>
+
+                <p style={{ marginTop: '10px', fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
+                    * Week = Week ENDING on that date (Sunday). Month = Month STARTING on that date (1st).
+                </p>
             </div>
 
             <FullscreenModal isOpen={isFullscreen} onClose={() => setIsFullscreen(false)}>
@@ -187,8 +191,8 @@ export function AverageOrderValueChart() {
                                         const payload = props.payload;
                                         return [
                                             `AOV: ₹${Math.round(value).toLocaleString()}`,
-                                            `Total Revenue: ₹${Math.round(payload.total_revenue || 0).toLocaleString()}`,
-                                            `Total Orders: ${Math.round(payload.total_orders || 0)}`
+                                            `Total Revenue: ₹${Math.round(payload.revenue ?? payload.total_revenue ?? 0).toLocaleString()}`,
+                                            `Total Orders: ${Math.round(payload.num_orders ?? payload.total_orders ?? 0)}`
                                         ];
                                     }}
                                     labelFormatter={(label) => `Period: ${label}`}

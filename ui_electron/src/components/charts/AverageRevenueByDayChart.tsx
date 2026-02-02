@@ -25,7 +25,7 @@ export function AverageRevenueByDayChart() {
 
     useEffect(() => {
         loadData();
-    }, []);
+    }, [startDate, endDate]);
 
     const loadData = async () => {
         setLoading(true);
@@ -40,10 +40,6 @@ export function AverageRevenueByDayChart() {
         } finally {
             setLoading(false);
         }
-    };
-
-    const handleApplyFilter = () => {
-        loadData();
     };
 
     // Reusable chart content
@@ -85,7 +81,7 @@ export function AverageRevenueByDayChart() {
                     {/* Filter Controls */}
                     <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                         <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                            <label style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Start:</label>
+                            <label style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Begin:</label>
                             <input
                                 type="date"
                                 value={startDate}
@@ -104,17 +100,6 @@ export function AverageRevenueByDayChart() {
                                 style={{ minWidth: 'auto' }}
                             />
                         </div>
-                        <button
-                            onClick={handleApplyFilter}
-                            className="action-button action-button-primary"
-                            style={{
-                                padding: '6px 12px',
-                                fontSize: '0.9em',
-                                fontWeight: '600'
-                            }}
-                        >
-                            Apply
-                        </button>
                     </div>
                 </div>
 

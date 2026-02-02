@@ -201,6 +201,10 @@ export function SalesTrendChart() {
                         * Time bucket is disabled for Moving Average (calculates daily)
                     </p>
                 )}
+
+                <p style={{ marginTop: '10px', fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
+                    * Week = Week ENDING on that date (Sunday). Month = Month STARTING on that date (1st).
+                </p>
             </div>
 
             <FullscreenModal isOpen={isFullscreen} onClose={() => setIsFullscreen(false)}>

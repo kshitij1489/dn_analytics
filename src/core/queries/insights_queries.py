@@ -83,32 +83,29 @@ def fetch_category_trend(conn):
     """)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
-def fetch_top_items_data(conn):
-    """Fetch Top 10 Items by Quantity with Revenue Share"""
-    # SQLite: GROUP BY as dedup or ROW_NUMBER
-    # 1. Total Revenue
-    # We can just sum orders for total revenue of successful orders, simper than deduping items unless items have duplicates in table?
-    # The original query was deduping items? "DISTINCT ON (oi.order_id, oi.name_raw...)"
-    # This implies order_items might have duplicates. Assuming standard schema, order_items should be unique per item added.
-    # We'll use GROUP BY to simulate distinct if needed, but usually SUM is fine if data is clean.
-    # Original query used DISTINCT ON, which means it suspected duplicates. We will use GROUP BY ALL COLUMNS to dedup.
-    
-    # Simpler approach:
-    # 1. Total Rev
-    cursor = conn.execute("SELECT SUM(total) FROM orders WHERE order_status = 'Success'")
+def fetch_top_items_data(conn, start_date=None, end_date=None):
+    """Fetch Top 10 Items by Quantity with Revenue Share. Optional date range = business days (5:00 AM–4:59:59 AM IST)."""
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        start_dt, _ = get_business_date_range(start_date)
+        _, end_dt = get_business_date_range(end_date)
+        date_filter = " AND created_on >= ? AND created_on <= ?"
+        params = [start_dt, end_dt]
+
+    # 1. Total Revenue (within date range if set)
+    total_query = "SELECT SUM(total) FROM orders WHERE order_status = 'Success'" + date_filter
+    cursor = conn.execute(total_query, params) if params else conn.execute(total_query)
     row = cursor.fetchone()
     total_revenue = row[0] if row and row[0] else 0.0
 
-    # 2. Top Items
-    # We will aggregate by menu_item_id directly. If duplicates exist in order_items, they are usually counted?
-    # If the original query wanted to remove duplicates, it did DISTINCT ON (order_id, name, qty, price).
-    # We can do: SELECT DISTINCT order_id, name_raw, quantity, total_price...
-    
+    # 2. Top Items (same date filter on orders); quantity and revenue from filtered set only
+    orders_subquery = "SELECT order_id FROM orders WHERE order_status = 'Success'" + date_filter
     query = """
         WITH dedup_items AS (
             SELECT DISTINCT order_id, name_raw, quantity, total_price, menu_item_id, order_item_id
             FROM order_items
-            WHERE order_id IN (SELECT order_id FROM orders WHERE order_status = 'Success')
+            WHERE order_id IN (""" + orders_subquery + """)
         ),
         dedup_addons AS (
              SELECT DISTINCT order_item_id, name_raw, quantity, price, menu_item_id
@@ -124,35 +121,60 @@ def fetch_top_items_data(conn):
             FROM dedup_addons
             GROUP BY menu_item_id
         ),
+        item_qty_combined AS (
+            SELECT menu_item_id, SUM(quantity) as qty
+            FROM dedup_items
+            GROUP BY menu_item_id
+            UNION ALL
+            SELECT menu_item_id, SUM(quantity) as qty
+            FROM dedup_addons
+            GROUP BY menu_item_id
+        ),
         item_totals AS (
             SELECT menu_item_id, SUM(rev) as rev
             FROM item_rev_combined
             GROUP BY menu_item_id
+        ),
+        item_sold AS (
+            SELECT menu_item_id, SUM(qty) as total_sold
+            FROM item_qty_combined
+            GROUP BY menu_item_id
         )
-        SELECT mi.name, mi.total_sold, it.rev as item_revenue
+        SELECT mi.name, COALESCE(isold.total_sold, 0) as total_sold, it.rev as item_revenue
         FROM menu_items mi
         LEFT JOIN item_totals it ON mi.menu_item_id = it.menu_item_id
+        LEFT JOIN item_sold isold ON mi.menu_item_id = isold.menu_item_id
         WHERE mi.is_active = 1
-        ORDER BY mi.total_sold DESC 
+        ORDER BY total_sold DESC
         LIMIT 10
     """
-    cursor = conn.execute(query)
+    cursor = conn.execute(query, params) if params else conn.execute(query)
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     return df, total_revenue
 
-def fetch_revenue_by_category_data(conn):
-    """Fetch Revenue by Category with Share"""
-    # 1. Total Revenue
-    cursor = conn.execute("SELECT SUM(total) FROM orders WHERE order_status = 'Success'")
+def fetch_revenue_by_category_data(conn, start_date=None, end_date=None):
+    """Fetch Revenue by Category with Share. Optional date range = business days (5:00 AM–4:59:59 AM IST)."""
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        start_dt, _ = get_business_date_range(start_date)
+        _, end_dt = get_business_date_range(end_date)
+        date_filter = " AND created_on >= ? AND created_on <= ?"
+        params = [start_dt, end_dt]
+
+    # 1. Total Revenue (within date range if set)
+    total_query = "SELECT SUM(total) FROM orders WHERE order_status = 'Success'" + date_filter
+    cursor = conn.execute(total_query, params) if params else conn.execute(total_query)
     row = cursor.fetchone()
     total_revenue = row[0] if row and row[0] else 0.0
 
-    # 2. Category Revenue
+    # 2. Category Revenue (same date filter on orders)
+    orders_subquery = "SELECT order_id FROM orders WHERE order_status = 'Success'" + date_filter
     query = """
         WITH dedup_items AS (
              SELECT DISTINCT order_id, name_raw, quantity, total_price, menu_item_id, order_item_id
              FROM order_items
-             WHERE order_id IN (SELECT order_id FROM orders WHERE order_status = 'Success')
+             WHERE order_id IN (""" + orders_subquery + """)
         ),
         item_rev_combined AS (
             SELECT menu_item_id, total_price as rev
@@ -161,7 +183,6 @@ def fetch_revenue_by_category_data(conn):
             SELECT menu_item_id, (price * quantity) as rev
             FROM order_item_addons
             WHERE order_item_id IN (SELECT order_item_id FROM dedup_items)
-            -- Note: addon dedup skipped for brevity, assumed clean or handled by standard distinct if needed
         ),
         cat_rev AS (
             SELECT mi.type as category, SUM(irc.rev) as revenue
@@ -174,27 +195,34 @@ def fetch_revenue_by_category_data(conn):
         FROM cat_rev
         ORDER BY revenue DESC
     """
-    cursor = conn.execute(query)
+    cursor = conn.execute(query, params) if params else conn.execute(query)
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     return df, total_revenue
 
-def fetch_hourly_revenue_data(conn, days=None):
-    """Fetch Hourly Revenue distribution"""
-    # SQLite: strftime('%w', created_on) for DOW (0-6), strftime('%H', created_on) for Hour
-    
+def fetch_hourly_revenue_data(conn, days=None, start_date=None, end_date=None):
+    """Fetch Hourly Revenue distribution, optionally for a date range (business days 5am–4:59am)."""
+    # Use weekday of BUSINESS date (DATE(created_on, '-5 hours')) so 5am–4:59am day is consistent
+    # SQLite strftime('%w', date) = 0 Sun, 1 Mon, ..., 6 Sat
     day_filter = ""
     if days and len(days) < 7:
         day_str = ",".join([str(d) for d in days])
-        # SQLite %w is 0=Sunday, 6=Saturday.
-        # Postgres DOW is 0=Sunday.
-        day_filter = f"AND CAST(strftime('%w', created_on) AS INTEGER) IN ({day_str})"
-    
+        day_filter = f"AND CAST(strftime('%w', DATE(created_on, '-5 hours')) AS INTEGER) IN ({day_str})"
+
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        start_dt, _ = get_business_date_range(start_date)
+        _, end_dt = get_business_date_range(end_date)
+        date_filter = " AND created_on >= ? AND created_on <= ?"
+        params = [start_dt, end_dt, start_dt, end_dt]  # once per CTE
+
     query = f"""
         WITH total_days AS (
             SELECT COUNT(DISTINCT {BUSINESS_DATE_SQL}) as day_count
             FROM orders
             WHERE order_status = 'Success'
             {day_filter}
+            {date_filter}
         ),
         hourly_stats AS (
             SELECT 
@@ -203,6 +231,7 @@ def fetch_hourly_revenue_data(conn, days=None):
             FROM orders
             WHERE order_status = 'Success'
             {day_filter}
+            {date_filter}
             GROUP BY hour_num
         )
         SELECT 
@@ -210,20 +239,30 @@ def fetch_hourly_revenue_data(conn, days=None):
             h.revenue,
             h.revenue / NULLIF(d.day_count, 0) as avg_revenue
         FROM hourly_stats h, total_days d
-        ORDER BY CASE WHEN h.hour_num = 0 THEN 24 ELSE h.hour_num END
+        ORDER BY CASE WHEN h.hour_num >= 5 THEN h.hour_num ELSE h.hour_num + 24 END
     """
-    cursor = conn.execute(query)
+    cursor = conn.execute(query, params) if params else conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
-def fetch_order_source_data(conn):
-    """Fetch Order Source metrics"""
-    cursor = conn.execute("""
+def fetch_order_source_data(conn, start_date=None, end_date=None):
+    """Fetch Order Source metrics. Optional date range = business days (5:00 AM–4:59:59 AM IST)."""
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        start_dt, _ = get_business_date_range(start_date)
+        _, end_dt = get_business_date_range(end_date)
+        date_filter = " AND created_on >= ? AND created_on <= ?"
+        params = [start_dt, end_dt]
+
+    query = """
         SELECT order_from, COUNT(*) as count, SUM(total) as revenue
         FROM orders
         WHERE order_status = 'Success'
+        """ + date_filter + """
         GROUP BY order_from
         ORDER BY count DESC
-    """)
+    """
+    cursor = conn.execute(query, params) if params else conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
 
@@ -239,8 +278,7 @@ def fetch_hourly_revenue_by_date(conn, date_str: str):
         WHERE order_status = 'Success'
           AND created_on >= ? AND created_on <= ?
         GROUP BY 1
-        ORDER BY CASE WHEN CAST(strftime('%H', created_on) AS INTEGER) = 0 THEN 24 
-                      ELSE CAST(strftime('%H', created_on) AS INTEGER) END
+        ORDER BY CASE WHEN hour_num >= 5 THEN hour_num ELSE hour_num + 24 END
     """, (start_dt, end_dt))
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 

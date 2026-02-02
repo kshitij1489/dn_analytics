@@ -49,9 +49,13 @@ export const endpoints = {
         categoryTrend: (params?: any) => api.get('/insights/category_trend', { params }),
         topItems: (params?: any) => api.get('/insights/top_items', { params }),
         revenueByCategory: (params?: any) => api.get('/insights/revenue_by_category', { params }),
-        hourlyRevenue: (days?: number[]) => api.get('/insights/hourly_revenue', {
-            params: days && days.length < 7 ? { days: days.join(',') } : undefined
-        }),
+        hourlyRevenue: (params?: { days?: number[]; start_date?: string; end_date?: string }) => {
+            const q: Record<string, string> = {};
+            if (params?.days && params.days.length < 7) q.days = params.days.join(',');
+            if (params?.start_date) q.start_date = params.start_date;
+            if (params?.end_date) q.end_date = params.end_date;
+            return api.get('/insights/hourly_revenue', { params: Object.keys(q).length ? q : undefined });
+        },
         hourlyRevenueByDate: (date: string) => api.get('/insights/hourly_revenue_by_date', { params: { date } }),
         orderSource: (params?: any) => api.get('/insights/order_source', { params }),
         customerReorderRate: (params?: any) => api.get('/insights/customer/reorder_rate', { params }),
