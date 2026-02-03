@@ -8,6 +8,7 @@ from src.api.dependencies import get_db
 from src.core.queries import insights_queries # For future use if needed
 from ai_mode.orchestrator import process_chat, process_chat_stream
 from ai_mode.cache import clear_cache as llm_clear_cache
+from ai_mode import debug_log as ai_debug_log
 
 router = APIRouter()
 
@@ -24,7 +25,8 @@ async def chat(request: AIQueryRequest, conn=Depends(get_db)):
     local_debug_log: List[dict] = []
     global _last_debug_entries
     _last_debug_entries = local_debug_log
-    
+    ai_debug_log.set_current_request_log(local_debug_log)
+
     try:
         response = await process_chat(
             request.prompt,
@@ -41,6 +43,8 @@ async def chat(request: AIQueryRequest, conn=Depends(get_db)):
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        ai_debug_log.set_current_request_log(None)
 
 
 @router.post("/chat/stream")
@@ -53,9 +57,9 @@ async def chat_stream(request: AIQueryRequest, conn=Depends(get_db)):
     async def generate() -> AsyncGenerator[str, None]:
         local_debug_log: List[dict] = []
         global _last_debug_entries
-        # For streaming, we can point global to local immediately so live debug works roughly.
         _last_debug_entries = local_debug_log
-        
+        ai_debug_log.set_current_request_log(local_debug_log)
+
         try:
             async for event_str in process_chat_stream(
                 request.prompt,
@@ -74,6 +78,8 @@ async def chat_stream(request: AIQueryRequest, conn=Depends(get_db)):
             except Exception:
                 pass
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            ai_debug_log.set_current_request_log(None)
 
     return StreamingResponse(
         generate(),

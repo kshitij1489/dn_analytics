@@ -181,17 +181,8 @@ function App() {
           <button className={activeTab === 'sql' ? 'active' : ''} onClick={() => setActiveTab('sql')}>SQL Console</button>
 
           <button
-            className={activeTab === 'ai_mode' ? 'active' : ''}
+            className={`ai-button-base ${activeTab === 'ai_mode' ? 'ai-button-active' : 'ai-button-unselected-wavy'}`}
             onClick={() => setActiveTab('ai_mode')}
-            style={{
-              background: activeTab === 'ai_mode'
-                ? 'linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%)'
-                : 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 50%, rgba(236, 72, 153, 0.1) 100%)',
-              color: activeTab === 'ai_mode' ? 'white' : '#a855f7',
-              border: activeTab === 'ai_mode' ? 'none' : '1px solid rgba(168, 85, 247, 0.3)',
-              fontWeight: 'bold',
-              transition: 'all 0.3s ease'
-            }}
           >
             AI Mode
           </button>

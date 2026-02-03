@@ -13,6 +13,7 @@ from src.api.utils import df_to_json
 from ai_mode.cache import get, normalize_prompt, cache_set
 from ai_mode.llm.client import get_ai_client, get_ai_model
 from ai_mode.llm.schema import get_schema_context, get_schema_hash
+from ai_mode.llm.sql_gen import _business_date_context
 from ai_mode.prompts.prompt_ai_mode import CHART_GENERATION_PROMPT
 
 _CONFIG_KEYS = ("chart_type", "x_key", "y_key", "title", "sql_query")
@@ -26,11 +27,12 @@ def _generate_chart_config_impl(conn, prompt: str) -> Dict[str, Any]:
         return {"error": "API Key Missing"}
 
     schema = get_schema_context()
+    date_ctx = _business_date_context()
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": CHART_GENERATION_PROMPT.format(schema=schema)},
+                {"role": "system", "content": CHART_GENERATION_PROMPT.format(schema=schema, **date_ctx)},
                 {"role": "user", "content": prompt},
             ],
             temperature=0,

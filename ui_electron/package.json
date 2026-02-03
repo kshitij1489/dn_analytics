@@ -1,13 +1,15 @@
 {
   "name": "dn-analytics",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
+  "description": "D&N Analytics desktop app",
+  "author": "D&N Analytics",
   "main": "main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
-    "build": "tsc -b && vite build",
+    "build": "npx tsc -b && npx vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "package": "electron-builder",
@@ -30,7 +32,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
-    "electron": "^40.0.0",
+    "electron": "^40.1.0",
     "electron-builder": "^26.4.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
@@ -58,7 +60,9 @@
       ],
       "icon": "build/icon.icns",
       "identity": null,
-      "forceCodeSigning": false
+      "forceCodeSigning": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "directories": {
       "output": "dist_electron"

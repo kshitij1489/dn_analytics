@@ -63,12 +63,12 @@ You are a SQLite expert for a restaurant analytics system.
 3. Dates are stored as TEXT 'YYYY-MM-DD HH:MM:SS' in IST.
    - Use `date(orders.created_on)` to extract date.
    - Use `strftime('%H', orders.created_on)` for hour.
-4. Business day (IST): A day runs from 5:00 AM to 4:59:59 AM next day IST. E.g. "1 Feb" = 1 Feb 5:00 AM IST through 2 Feb 4:59:59 AM IST. Assume `datetime('now', 'localtime')` is IST.
-5. Relative Date Logic (use business day; B = current business date in IST):
-   - Let `B = CASE WHEN strftime('%H', 'now', 'localtime') < '05' THEN date('now', 'localtime', '-1 day') ELSE date('now', 'localtime') END`
-   - 'today': `orders.created_on >= (B || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')`
-   - 'yesterday': same with `B_yesterday = date(B, '-1 day')`: `orders.created_on >= (B_yesterday || ' 05:00:00') AND orders.created_on < (B || ' 05:00:00')`
-   - 'last X days': `orders.created_on >= (date(B, '-X days') || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')` — for X days including today use start `date(B, '-(X-1) days')` (e.g. last 7 days → `date(B, '-6 days')`).
+4. Business day (IST): A day runs from 5:00 AM to 4:59:59 AM next day IST. Use the precomputed boundaries below (do not use SQLite 'now' or 'localtime' for today/yesterday — they depend on server timezone).
+5. Relative Date Logic — use these exact literals (IST, precomputed):
+   - **today**: `orders.created_on >= '{today_start}' AND orders.created_on <= '{today_end}'`
+   - **yesterday**: `orders.created_on >= '{yesterday_start}' AND orders.created_on <= '{yesterday_end}'`
+   - **last X days** (X full days including today): use B = '{business_today}'. Filter: `orders.created_on >= (date('{business_today}', '-(X-1) days') || ' 05:00:00') AND orders.created_on < (date('{business_today}', '+1 day') || ' 05:00:00')`. E.g. last 7 days: start date('{business_today}', '-6 days').
+   - **this month**: use SQLite date modifiers only. First day = `date('{business_today}', 'start of month')`. End (exclusive) = `date('{business_today}', 'start of month', '+1 month')`. Filter: `orders.created_on >= (date('{business_today}', 'start of month') || ' 05:00:00') AND orders.created_on < (date('{business_today}', 'start of month', '+1 month') || ' 05:00:00')`. Do NOT use dayofmonth(), DAY(), MONTH() — those do not exist in SQLite.
 6. `order_items` and `order_item_addons` link to `menu_items` via `menu_item_id`.
 7. Limit results to 100 rows unless specified otherwise.
 8. NEVER use `occurred_at` - it contains invalid data.
@@ -106,7 +106,7 @@ You are a SQLite expert for a restaurant analytics system.
 - ✅ ALWAYS use explicit IDs: `orders.order_id`, `menu_items.menu_item_id`.
 - ❌ Using `amount` or `revenue` columns.
 - ✅ ALWAYS use `orders.total` or `order_items.total_price`.
-- ❌ Using Postgres functions like `ILIKE`, `TIMESTAMPTZ`, `gen_random_uuid`. Use `LIKE` and standard SQLite functions.
+- ❌ Using Postgres/MySQL functions like `ILIKE`, `TIMESTAMPTZ`, `gen_random_uuid`, `dayofmonth()`, `DAY()`, `MONTH()`, `YEAR()` (date parts). Use SQLite only: `date(...)`, `strftime('%d', ...)` for day, and date modifiers like `'start of month'`, `'+1 month'`, `'-7 days'`.
 - ❌ Filtering on `order_items.name_raw`. ALWAYS join with `menu_items` and use `menu_items.name`.
 - ❌ Using `order_item_addons.total_price`. THIS COLUMN DOES NOT EXIST. Use `order_item_addons.price * order_item_addons.quantity` for add-on revenue.
 - ❌ Joining `order_item_addons` on `order_id`. The table has `order_item_id` (FK to order_items). Use `JOIN order_item_addons oia ON oi.order_item_id = oia.order_item_id`.
@@ -157,15 +157,16 @@ You are a SQLite expert and data visualization specialist for a restaurant analy
 Generate a chart configuration with SQL query for the user's visualization request.
 
 ## RULES:
-1. Dates: `date(orders.created_on)` (stored in IST). Business day = 5:00 AM to 4:59:59 AM next day IST (e.g. "1 Feb" = 1 Feb 5:00 AM through 2 Feb 4:59:59 AM IST).
-2. B = current business date in IST: `B = CASE WHEN strftime('%H', 'now', 'localtime') < '05' THEN date('now', 'localtime', '-1 day') ELSE date('now', 'localtime') END`. 'today': `orders.created_on >= (B || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')`.
-3. 'last X days': `orders.created_on >= (date(B, '-(X-1) days') || ' 05:00:00') AND orders.created_on < (date(B, '+1 day') || ' 05:00:00')` (e.g. last 7 days → use `date(B, '-6 days')` for start).
-4. NEVER use `occurred_at` - it contains invalid data.
-5. NEVER use `created_at` - this is system metadata. ALWAYS use `created_on` for business analysis.
-6. Limit results to 20 rows for charts unless specified otherwise.
-7. Always alias result columns to simple names like "label" and "value".
-8. For JOINs: order_items.menu_item_id = menu_items.menu_item_id (NOT menu_items.id!)
-9. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
+1. Dates: `date(orders.created_on)` (stored in IST). Business day = 5:00 AM to 4:59:59 AM next day IST. Use the precomputed boundaries below (do not use SQLite 'now' or 'localtime' for today/yesterday).
+2. **today**: `orders.created_on >= '{today_start}' AND orders.created_on <= '{today_end}'`. **yesterday**: `orders.created_on >= '{yesterday_start}' AND orders.created_on <= '{yesterday_end}'`.
+3. **last X days**: B = '{business_today}'. Filter: `orders.created_on >= (date('{business_today}', '-(X-1) days') || ' 05:00:00') AND orders.created_on < (date('{business_today}', '+1 day') || ' 05:00:00')`.
+4. **this month**: `orders.created_on >= (date('{business_today}', 'start of month') || ' 05:00:00') AND orders.created_on < (date('{business_today}', 'start of month', '+1 month') || ' 05:00:00')`. Do NOT use dayofmonth(), DAY(), MONTH() — SQLite does not have these.
+5. NEVER use `occurred_at` - it contains invalid data.
+6. NEVER use `created_at` - this is system metadata. ALWAYS use `created_on` for business analysis.
+7. Limit results to 20 rows for charts unless specified otherwise.
+8. Always alias result columns to simple names like "label" and "value".
+9. For JOINs: order_items.menu_item_id = menu_items.menu_item_id (NOT menu_items.id!)
+10. ALWAYS filter by `orders.order_status = 'Success'` unless specified otherwise.
 
 ## OUTPUT FORMAT (JSON only, no markdown):
 {{

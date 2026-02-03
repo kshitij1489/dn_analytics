@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { autoUpdater } = require('electron-updater');
@@ -7,6 +8,40 @@ const { autoUpdater } = require('electron-updater');
 let mainWindow;
 let apiProcess;
 const API_PORT = 8000;
+
+// Backend log stream
+let backendLogStream = null;
+
+function getBackendLogPath() {
+    return path.join(app.getPath('userData'), 'backend.log');
+}
+
+function getBackendLogStream() {
+    if (!backendLogStream) {
+        const logPath = getBackendLogPath();
+        // Create write stream in append mode
+        backendLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+        backendLogStream.on('error', (e) => {
+            console.error('Backend log stream error:', e);
+        });
+    }
+    return backendLogStream;
+}
+
+function appendBackendLog(line, stream = '') {
+    const prefix = stream ? `[${stream}] ` : '';
+    const msg = `${new Date().toISOString()} ${prefix}${line}\n`;
+
+    // Write to backend log stream (non-blocking). Stream is only created in prod.
+    try {
+        const s = getBackendLogStream();
+        if (s && s.writable) {
+            s.write(msg);
+        }
+    } catch (e) {
+        console.error('Failed to write to backend log stream:', e);
+    }
+}
 
 // =========== Auto Updater Setup ===========
 function setupAutoUpdater() {
@@ -86,6 +121,11 @@ function startPythonParams(dbPath) {
     const isDev = process.env.NODE_ENV === 'development';
 
     const env = { ...process.env, DB_URL: dbPath };
+    // Prod cwd is read-only; use userData for error logs.
+    if (!isDev) {
+        const userDataPath = path.dirname(dbPath);
+        env.ERROR_LOG_DIR = path.join(userDataPath, 'logs');
+    }
 
     if (isDev) {
         console.log('Starting Python in DEV mode...');
@@ -98,26 +138,20 @@ function startPythonParams(dbPath) {
         });
     } else {
         console.log('Starting Python in PROD mode...');
-        // PROD: use bundled executable from resources path
-        // In the .dmg, the executable is in Contents/Resources/analytics-backend/analytics-backend
-        // or just Contents/Resources/analytics-backend depending on how we copy it.
-        // electron-builder "extraResources" usually puts files directly in Resources if "destionation" is root of extraResources.
-        // We configured "to": "analytics-backend", so it should be a folder.
-
-        // Let's assume the binary is inside 'analytics-backend' folder (dist directory content)
-        // OR if we copy the file itself. The 'dist-backend/analytics-backend' is a directory (from PyInstaller usually) unless --onefile.
-        // But the previous plan (Step 12 view) showed extraResources copying from "../dist-backend/analytics-backend".
-        // PyInstaller --onedir (default) creates a directory.
-        // PyInstaller --onefile creates a file.
-        // My spec file has 'exclude_binaries=True' -> COLLECT, so it is ONEDIR (directory).
-
         const executablePath = path.join(process.resourcesPath, 'analytics-backend', 'analytics-backend');
         console.log(`Executable path: ${executablePath}`);
+        appendBackendLog(`Spawning: ${executablePath} --host 127.0.0.1 --port ${API_PORT}`);
 
-        return spawn(executablePath, ['--host', '127.0.0.1', '--port', API_PORT.toString()], {
+        const child = spawn(executablePath, ['--host', '127.0.0.1', '--port', API_PORT.toString()], {
             env: env,
-            // stdio: 'inherit' // can cause issues in detached process, but good for debugging if logging to file
         });
+
+        child.stdout.on('data', (data) => appendBackendLog(data.toString().trim(), 'stdout'));
+        child.stderr.on('data', (data) => appendBackendLog(data.toString().trim(), 'stderr'));
+        child.on('error', (err) => appendBackendLog(`Spawn error: ${err.message}`, 'error'));
+        child.on('exit', (code, signal) => appendBackendLog(`Exit code=${code} signal=${signal}`, 'exit'));
+
+        return child;
     }
 }
 
@@ -148,6 +182,11 @@ app.whenReady().then(() => {
     const dbPath = path.join(userDataPath, 'analytics.db');
     console.log(`Database path set to: ${dbPath}`);
 
+    if (process.env.NODE_ENV !== 'development') {
+        const backendLogPath = getBackendLogPath();
+        appendBackendLog(`Backend log file: ${backendLogPath}`);
+    }
+
     apiProcess = startPythonParams(dbPath);
     console.log(`Python API started with PID: ${apiProcess.pid}`);
 
@@ -173,6 +212,10 @@ app.on('will-quit', () => {
     if (apiProcess) {
         console.log('Killing Python process...');
         apiProcess.kill();
+    }
+    if (backendLogStream) {
+        console.log('Closing backend log stream...');
+        backendLogStream.end();
     }
 });
 

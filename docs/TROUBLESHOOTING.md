@@ -9,34 +9,47 @@ If you receive the error **"D&N Analytics" is damaged and can't be opened** or *
 The recipient needs to remove the "quarantine" attribute from the downloaded app. Ask them to follow these steps:
 
 1.  Move the app to the **Applications** folder (if not already there).
-2.  Open the **Terminal** app.
-3.  Copy and paste the following command and press **Enter**:
+2.  Open **Terminal** and run:
 
     ```bash
-    sudo xattr -r -d com.apple.quarantine /Applications/D\&N\ Analytics.app
+    xattr -cr "/Applications/D&N Analytics.app"
     ```
 
-    *(Note: They may be asked to enter their Mac password. It won't show up while typing, which is normal.)*
+    *(No `sudo` needed; `-cr` clears quarantine.)*
 
-4.  Try opening the app again.
+3.  Try opening the app again.
 
-### Advanced: Re-sign the App (If the above doesn't work)
-On Apple Silicon (M1/M2/M3), if the app still won't open or says "Damaged", the ad-hoc signature might need to be refreshed. Run this command in Terminal **after** running the command above:
+### Re-sign the app (if it still won’t open)
+
+- **If you have the project source** (e.g. you’re the developer): from the project root, run `./scripts/install_to_applications.sh`. It copies the app to Applications, signs the backend and app correctly (without `--deep`), and clears quarantine.
+- **If you only have the .app**: from Terminal, try re-signing the app only:
+  ```bash
+  codesign --force --sign - "/Applications/D&N Analytics.app"
+  ```
+  Avoid using `--deep`; it can break nested executables (like the bundled backend).
+
+### Right-click Open
+Right-click (or Control-click) the app > **Open** can sometimes bypass "Unidentified Developer" once; it may not fix "Damaged" on newer macOS.
+
+---
+
+## App opens but window never appears
+
+The backend may be failing to start (e.g. read-only filesystem in the app bundle). Check the backend log:
 
 ```bash
-codesign --force --deep --sign - /Applications/D\&N\ Analytics.app
+cat ~/Library/Application\ Support/dn-analytics/backend.log
 ```
 
-### Alternative (Right-Click)
-Sometimes, simply **Right-clicking** (or Control-clicking) the app and selecting **Open** initiates a one-time prompt allowing you to open the app. This works for "Unidentified Developer" errors but may not work for "Damaged" errors on newer macOS versions.
+Look for `Spawn error:` or Python tracebacks. Common fix: rebuild and reinstall with `./scripts/install_to_applications.sh` so the backend gets a writable log path.
 
 ---
 
 ## After Installing an Update
 
-If you downloaded and installed an update via the in-app updater, the new version may trigger macOS Gatekeeper again. Run the same commands to clear the quarantine flag:
+If you installed an update via the in-app updater, Gatekeeper may block the new version. Clear quarantine (and re-sign if you have the project):
 
 ```bash
-sudo xattr -r -d com.apple.quarantine /Applications/D\&N\ Analytics.app
-codesign --force --deep --sign - /Applications/D\&N\ Analytics.app
+xattr -cr "/Applications/D&N Analytics.app"
+# If you have the project: ./scripts/install_to_applications.sh
 ```

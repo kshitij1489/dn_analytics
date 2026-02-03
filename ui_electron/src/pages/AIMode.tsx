@@ -62,13 +62,13 @@ export default function AIMode() {
     const [showDebug, setShowDebug] = useState(false);
     const [debugLogEntries, setDebugLogEntries] = useState<DebugLogEntry[]>([]);
 
-    const loadDebugLogs = useCallback(async () => {
+    const loadDebugLogs = useCallback(async (keepOnError = false) => {
         try {
             const res = await endpoints.ai.getDebugLogs();
             setDebugLogEntries(res.data?.entries ?? []);
         } catch (err) {
             console.error('Failed to load debug logs:', err);
-            setDebugLogEntries([]);
+            if (!keepOnError) setDebugLogEntries([]);
         }
     }, []);
 
@@ -78,7 +78,7 @@ export default function AIMode() {
         if (next) {
             try {
                 await endpoints.ai.initDebug();
-                await loadDebugLogs();
+                await loadDebugLogs(true); // keep existing entries on fetch error
             } catch (error) {
                 console.error('Failed to init debug:', error);
             }
@@ -419,9 +419,8 @@ export default function AIMode() {
 
                 setMessages(prev => [...prev, aiMsg]);
 
-                if (showDebug) {
-                    loadDebugLogs();
-                }
+                // Always fetch debug logs after a response so the Debug modal shows them when opened later
+                loadDebugLogs();
 
                 // Persist AI message
                 if (currentConvId) {

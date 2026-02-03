@@ -189,7 +189,13 @@ def get_or_call_diversity(
         return result
     except Exception as e:
         print(f"⚠️ LLM diversity cache error, calling LLM: {e}")
-        return fn()
+        result = fn()
+        try:
+            from ai_mode.debug_log import append_entry, preview_value
+            append_entry(call_id, "llm", preview_value(result))
+        except Exception:
+            pass
+        return result
 
 
 def get_or_call(
@@ -232,7 +238,13 @@ def get_or_call(
         return result
     except Exception as e:
         print(f"⚠️ LLM cache error, calling LLM: {e}")
-        return fn()
+        result = fn()
+        try:
+            from ai_mode.debug_log import append_entry, preview_value
+            append_entry(call_id, "llm", preview_value(result))
+        except Exception:
+            pass
+        return result
 
 
 def clear_cache(call_id: Optional[str] = None) -> None:

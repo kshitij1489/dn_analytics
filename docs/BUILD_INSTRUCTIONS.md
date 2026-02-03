@@ -20,53 +20,69 @@ This script will automatically:
 
 ## 2. Locate the Output
 
-Once the script finishes, your new `.dmg` file will be here:
+Once the script finishes, artifacts are in `ui_electron/dist_electron/`:
 
-```
-ui_electron/dist_electron/D&N Analytics-0.0.0-arm64.dmg
-```
+- **DMG**: `dn-analytics-<version>-arm64-mac.dmg` (e.g. `dn-analytics-1.0.5-arm64-mac.dmg`)
+- **Unpacked app**: `mac-arm64/D&N Analytics.app`
 
-*(The version number `0.0.0` comes from `ui_electron/package.json`)*
-
----
-
-## 3. How to Share & Open (Important!)
-
-Since this app is **ad-hoc signed** (not notarized by Apple), Gatekeeper will likely block it on other Macs, especially newer M1/M2/M3 models.
-
-**Instructions for the recipient:**
-
-1.  Drag the app to the **Applications** folder.
-2.  **Try Right-Clicking**:
-    *   Right-click (Control-click) the app icon > Select **Open** > Click **Open** in the dialog.
-    *   *If this works, you are done.*
-
-3.  **If "Right-Click" fails (or app says "Damaged"):**
-    Run the following commands in **Terminal**:
-
-    ```bash
-    # 1. Remove Quarantine (Fixes "Damaged" or "Unidentified Developer")
-    sudo xattr -r -d com.apple.quarantine /Applications/D\&N\ Analytics.app
-
-    # 2. Re-sign locally (Required if it still fails on M1/M2/M3 Macs)
-    codesign --force --deep --sign - /Applications/D\&N\ Analytics.app
-    ```
-
-    After running these, the app will open normally.
+*(Version comes from `ui_electron/package.json`.)*
 
 ---
 
-## 4. How to Fully Uninstall
+## 3. Install to Applications (developers)
 
-Dragging the app to the Trash removes the application itself, but the data is stored separately to ensure it persists across updates.
+If you are building locally and want to run from **Applications** with correct signing and no Gatekeeper issues, use the install script **after** the build:
+
+```bash
+./scripts/build_release.sh
+./scripts/install_to_applications.sh
+open "/Applications/D&N Analytics.app"
+```
+
+The script copies the app to `/Applications`, signs the backend executable and then the app bundle (without `--deep`), and clears quarantine. See `docs/TROUBLESHOOTING.md` if the app still won’t open.
+
+---
+
+## 4. How to Share & Open (recipients)
+
+Since this app is **ad-hoc signed** (not notarized by Apple), Gatekeeper may block it on other Macs. See **§5** for the full steps when the DMG is used on another machine.
+
+---
+
+## 5. Running on another Mac (from the DMG)
+
+When you copy the `.dmg` to a different Mac and want to run the app there:
+
+1. **Open the DMG** (double-click it), then drag **D&N Analytics** into **Applications**. Replace the existing app if prompted.
+
+2. **Try opening the app** (double-click or right-click → **Open**).  
+   - If it opens, you’re done.
+
+3. **If you see “damaged” or “unidentified developer”**, open **Terminal** and run:
+   ```bash
+   xattr -cr "/Applications/D&N Analytics.app"
+   ```
+   Then try opening the app again.
+
+4. **If it still won’t open** (common on Apple Silicon):
+   - If that Mac has the **project** (full repo): from the project root run `./scripts/install_to_applications.sh` so it signs and clears quarantine.
+   - If you **only have the DMG** (no project): re-sign the app:
+     ```bash
+     codesign --force --sign - "/Applications/D&N Analytics.app"
+     ```
+     Then try opening again.
+
+For more help, see `docs/TROUBLESHOOTING.md`.
+
+---
+
+## 6. How to Fully Uninstall
+
+Dragging the app to the Trash removes the application itself; data is stored separately.
 
 To **completely remove** the app and all its data:
 
-1.  **Delete the App**: Drag `D&N Analytics` from Applications to Bin/Trash.
-2.  **Delete Data**:
-    *   Open Finder.
-    *   Press `Cmd + Shift + G` (Go to Folder).
-    *   Type `~/Library/Application Support/` and press Enter.
-    *   Find and delete the folder named **`D&N Analytics`**.
+1.  **Delete the app**: Drag `D&N Analytics` from Applications to Trash.
+2.  **Delete data**: In Finder, press `Cmd + Shift + G`, go to `~/Library/Application Support/`, and delete the folder **`dn-analytics`**.
 
-This folder contains the `analytics.db` database and application logs.
+That folder contains `analytics.db`, `backend.log`, and `logs/errors.jsonl`.

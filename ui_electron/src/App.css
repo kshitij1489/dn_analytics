@@ -443,3 +443,71 @@ input {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* =================================
+   AI BUTTON ANIMATION
+   ================================= */
+@keyframes ai-vertical-wave {
+  0% {
+    background-position: 0 0, 0 0;
+  }
+
+  100% {
+    background-position: 0 400%, 0 300%;
+  }
+}
+
+.ai-button-unselected-wavy {
+  background-color: transparent;
+
+  /* Two overlapping gradients to create a "mesh" or "wave" interference pattern */
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.1) 0%, transparent 50%),
+    repeating-linear-gradient(45deg,
+      rgba(168, 85, 247, 0) 0%,
+      rgba(168, 85, 247, 0.05) 10%,
+      rgba(168, 85, 247, 0) 20%),
+    repeating-linear-gradient(-45deg,
+      rgba(236, 72, 153, 0) 0%,
+      rgba(236, 72, 153, 0.05) 10%,
+      rgba(236, 72, 153, 0) 20%) !important;
+
+  background-size: 100% 100%, 200% 200%, 200% 200% !important;
+
+  /* Moving them at different vertical speeds creates the uplifting wave effect */
+  animation: ai-vertical-wave 5s linear infinite !important;
+
+  border: 1px solid rgba(168, 85, 247, 0.3) !important;
+  transition: all 0.3s ease !important;
+
+  color: #a855f7 !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-button-unselected-wavy:hover {
+  border-color: rgba(168, 85, 247, 0.8) !important;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.2);
+  cursor: pointer;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.2) 0%, transparent 60%),
+    repeating-linear-gradient(45deg,
+      rgba(168, 85, 247, 0) 0%,
+      rgba(168, 85, 247, 0.1) 10%,
+      rgba(168, 85, 247, 0) 20%),
+    repeating-linear-gradient(-45deg,
+      rgba(236, 72, 153, 0) 0%,
+      rgba(236, 72, 153, 0.1) 10%,
+      rgba(236, 72, 153, 0) 20%) !important;
+}
+
+.ai-button-active {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%) !important;
+  color: white !important;
+  border: none !important;
+}
+
+.ai-button-base {
+  font-weight: bold !important;
+  transition: all 0.3s ease !important;
+}

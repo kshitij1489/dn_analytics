@@ -35,7 +35,9 @@ raw_data/
 # Build artifacts
 dist-backend/
 build-backend/
+.venv_build/
 ui_electron/dist_electron/
+ui_electron/dist_electron.old*/
 ui_electron/dist/
 
 # Logs
