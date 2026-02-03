@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AppUser } from './types/api';
 
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
@@ -149,6 +150,8 @@ export const endpoints = {
         update: (settings: Record<string, string>) => api.post('/config', { settings }),
         verify: (type: string, settings: any) => api.post('/config/verify', { type, settings }),
         resetDb: (section: string) => api.post('/config/reset-db', { section }),
+        getUsers: () => api.get<AppUser[]>('/config/users'),
+        saveUser: (user: AppUser) => api.post('/config/users', user),
     },
 
     today: {

@@ -285,41 +285,6 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
 );
 
 -- ============================================================================
--- 11. MENU ITEMS NEW (Clustering)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS menu_items_new (
-    menu_item_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================================================
--- 12. VARIANTS NEW (Clustering)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS variants_new (
-    variant_id TEXT PRIMARY KEY,
-    variant_name TEXT NOT NULL,
-    description TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================================================
--- 13. ITEM MAPPINGS (Clustering)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS item_mappings (
-    order_item_id TEXT PRIMARY KEY,
-    menu_item_id TEXT NOT NULL REFERENCES menu_items_new(menu_item_id),
-    variant_id TEXT NOT NULL REFERENCES variants_new(variant_id),
-    original_name TEXT, 
-    is_active BOOLEAN DEFAULT 1,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================================================
 -- 14. MERGE HISTORY
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS merge_history (
@@ -349,7 +314,8 @@ CREATE TABLE IF NOT EXISTS ai_logs (
     raw_user_query TEXT, -- original prompt from user (before spelling/follow-up)
     corrected_query TEXT, -- after spelling + optional follow-up rewrite (= user_query)
     action_sequence TEXT, -- JSON array e.g. ["RUN_SQL"]
-    explanation TEXT -- natural-language explanation(s) from pipeline
+    explanation TEXT, -- natural-language explanation(s) from pipeline
+    uploaded_at TEXT -- when sent to client-learning cloud (NULL = not yet)
 );
 
 CREATE TABLE IF NOT EXISTS ai_feedback (
@@ -357,7 +323,8 @@ CREATE TABLE IF NOT EXISTS ai_feedback (
     query_id TEXT REFERENCES ai_logs(query_id) ON DELETE CASCADE,
     is_positive BOOLEAN NOT NULL,
     comment TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    uploaded_at TEXT -- when sent to client-learning cloud (NULL = not yet)
 );
 
 -- ============================================================================
@@ -469,11 +436,6 @@ CREATE INDEX IF NOT EXISTS idx_order_item_addons_order_item_id ON order_item_add
 CREATE INDEX IF NOT EXISTS idx_order_item_addons_menu_item_id ON order_item_addons(menu_item_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_addons_group_name ON order_item_addons(group_name);
 
--- Clustering Tables
-CREATE INDEX IF NOT EXISTS idx_menu_items_new_name_type ON menu_items_new(name, type);
-CREATE INDEX IF NOT EXISTS idx_variants_new_name ON variants_new(variant_name);
-CREATE INDEX IF NOT EXISTS idx_item_mappings_menu_item ON item_mappings(menu_item_id);
-CREATE INDEX IF NOT EXISTS idx_item_mappings_variant ON item_mappings(variant_id);
 
 -- Merge History
 CREATE INDEX IF NOT EXISTS idx_merge_history_target ON merge_history(target_id);
@@ -488,7 +450,18 @@ CREATE TABLE IF NOT EXISTS system_config (
 
 
 -- ============================================================================
--- 19. WEATHER DATA
+-- 18. APP USERS
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS app_users (
+    employee_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- 19. SYSTEM CONFIGURATION
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS weather_daily (
     date TEXT,        -- YYYY-MM-DD

@@ -1,18 +1,22 @@
 """
-Menu Management Utilities
+Menu Management Utilities (SQLite Version)
 """
 
 import csv
 import os
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 import json
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from scripts.seed_from_backups import export_to_backups
 from utils.id_generator import generate_deterministic_id
 
 
+def _build_in_clause(items: List[str]) -> Tuple[str, List[str]]:
+    """Helper to build IN (?, ?, ...) clause for SQLite."""
+    if not items:
+        return "IN ('')", []  # Return something that matches nothing
+    placeholders = ",".join("?" * len(items))
+    return f"IN ({placeholders})", list(items)
 
 
 def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: bool = False) -> Dict[str, Any]:
@@ -32,10 +36,10 @@ def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: 
     cursor = conn.cursor()
     try:
         # 1. Get Details
-        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = %s", (source_id,))
+        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = ?", (source_id,))
         source = cursor.fetchone()
         
-        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = %s", (target_id,))
+        cursor.execute("SELECT name, type, total_sold, total_revenue, sold_as_item, sold_as_addon FROM menu_items WHERE menu_item_id = ?", (target_id,))
         target = cursor.fetchone()
         
         if not source or not target:
@@ -45,50 +49,50 @@ def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: 
         target_name, target_type, target_sold, target_revenue, target_as_item, target_as_addon = target
         
         # 1.5 Record History (Collect affected order_item_ids from mappings)
-        cursor.execute("SELECT order_item_id FROM menu_item_variants WHERE menu_item_id = %s", (source_id,))
+        cursor.execute("SELECT order_item_id FROM menu_item_variants WHERE menu_item_id = ?", (source_id,))
         affected_ids = [row[0] for row in cursor.fetchall()]
         
         cursor.execute("""
             INSERT INTO merge_history (source_id, target_id, source_name, source_type, affected_order_items)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?)
         """, (source_id, target_id, source_name, source_type, json.dumps(affected_ids)))
         
         # 2. Update Target Stats
         cursor.execute("""
             UPDATE menu_items 
-            SET total_sold = COALESCE(total_sold, 0) + %s,
-                sold_as_item = COALESCE(sold_as_item, 0) + %s,
-                sold_as_addon = COALESCE(sold_as_addon, 0) + %s,
-                total_revenue = COALESCE(total_revenue, 0) + %s,
+            SET total_sold = COALESCE(total_sold, 0) + ?,
+                sold_as_item = COALESCE(sold_as_item, 0) + ?,
+                sold_as_addon = COALESCE(sold_as_addon, 0) + ?,
+                total_revenue = COALESCE(total_revenue, 0) + ?,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE menu_item_id = %s
+            WHERE menu_item_id = ?
         """, (source_sold or 0, source_as_item or 0, source_as_addon or 0, source_revenue or 0, target_id))
         
         # 3. Relink Order Items
         cursor.execute("""
             UPDATE order_items 
-            SET menu_item_id = %s 
-            WHERE menu_item_id = %s
+            SET menu_item_id = ? 
+            WHERE menu_item_id = ?
         """, (target_id, source_id))
         relinked_count = cursor.rowcount
         
         # 4. Relink Order Item Addons
         cursor.execute("""
             UPDATE order_item_addons 
-            SET menu_item_id = %s 
-            WHERE menu_item_id = %s
+            SET menu_item_id = ? 
+            WHERE menu_item_id = ?
         """, (target_id, source_id))
         
         # 5. Relink Mappings
         cursor.execute("""
             UPDATE menu_item_variants 
-            SET menu_item_id = %s 
-            WHERE menu_item_id = %s
+            SET menu_item_id = ? 
+            WHERE menu_item_id = ?
         """, (target_id, source_id))
         mappings_updated = cursor.rowcount
 
         # 6. Delete Source Item
-        cursor.execute("DELETE FROM menu_items WHERE menu_item_id = %s", (source_id,))
+        cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
         
         conn.commit()
         
@@ -118,14 +122,14 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
     """
     cursor = conn.cursor()
     try:
-        # 1. Update Mapping
+        # 1. Update Mapping (SQLite UPSERT)
         cursor.execute("""
             INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-            VALUES (%s, %s, %s, TRUE)
+            VALUES (?, ?, ?, 1)
             ON CONFLICT (order_item_id) DO UPDATE SET
-                menu_item_id = EXCLUDED.menu_item_id,
-                variant_id = EXCLUDED.variant_id,
-                is_verified = TRUE
+                menu_item_id = excluded.menu_item_id,
+                variant_id = excluded.variant_id,
+                is_verified = 1
         """, (order_item_id, new_menu_item_id, new_variant_id))
         
         conn.commit()
@@ -154,14 +158,14 @@ def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> D
         target_id = generate_deterministic_id(new_name, new_type)
         
         # Check existence
-        cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = %s", (target_id,))
+        cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = ?", (target_id,))
         exists = cursor.fetchone()
         
         if not exists:
             # Create Target
             cursor.execute("""
                 INSERT INTO menu_items (menu_item_id, name, type, is_verified)
-                VALUES (%s, %s, %s, TRUE)
+                VALUES (?, ?, ?, 1)
             """, (target_id, new_name, new_type))
             conn.commit() # Commit creation effectively
             
@@ -181,56 +185,54 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
     1. Re-insert source menu item
     2. Point affected mappings back to source item
     3. Point affected order_items/addons back to source item
-    4. Deduct stats from target item
+    4. Recalculate stats for both items
     5. Delete history record
     """
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor = conn.cursor()
     try:
         # 1. Get History Entry
-        cursor.execute("SELECT * FROM merge_history WHERE merge_id = %s", (merge_id,))
+        cursor.execute("SELECT * FROM merge_history WHERE merge_id = ?", (merge_id,))
         history = cursor.fetchone()
         if not history:
             return {"status": "error", "message": "Merge history record not found"}
         
-        source_id = history['source_id']
-        target_id = history['target_id']
-        affected_ids = history['affected_order_items'] # List of strings
+        # Convert Row to dict for easier access
+        history_dict = dict(history)
+        source_id = history_dict['source_id']
+        target_id = history_dict['target_id']
+        affected_ids_json = history_dict['affected_order_items']
         
-        # 2. Re-insert Source Item
+        # Parse JSON list
+        affected_ids = json.loads(affected_ids_json) if isinstance(affected_ids_json, str) else affected_ids_json
+        
+        # 2. Re-insert Source Item (SQLite UPSERT with INSERT OR IGNORE)
         cursor.execute("""
-            INSERT INTO menu_items (menu_item_id, name, type, is_verified)
-            VALUES (%s, %s, %s, TRUE)
-            ON CONFLICT (menu_item_id) DO NOTHING
-        """, (source_id, history['source_name'], history['source_type']))
+            INSERT OR IGNORE INTO menu_items (menu_item_id, name, type, is_verified)
+            VALUES (?, ?, ?, 1)
+        """, (source_id, history_dict['source_name'], history_dict['source_type']))
         
         # 3. Relink Mappings (menu_item_variants)
         if affected_ids:
-            cursor.execute("""
+            in_clause, params = _build_in_clause(affected_ids)
+            cursor.execute(f"""
                 UPDATE menu_item_variants 
-                SET menu_item_id = %s 
-                WHERE order_item_id = ANY(%s)
-            """, (source_id, affected_ids))
+                SET menu_item_id = ? 
+                WHERE order_item_id {in_clause}
+            """, [source_id] + params)
             
-            # 4. Relink Order Items
-            cursor.execute("""
+            # 4. Relink Order Items (affected_ids are menu_item_variants.order_item_id; match order_items.order_item_id)
+            cursor.execute(f"""
                 UPDATE order_items 
-                SET menu_item_id = %s 
-                WHERE petpooja_itemid::text = ANY(%s)
-            """, (source_id, affected_ids))
+                SET menu_item_id = ? 
+                WHERE order_item_id {in_clause}
+            """, [source_id] + params)
 
-            # 5. Relink Order Item Addons
-            cursor.execute("""
+            # 5. Relink Order Item Addons (same order_item_id set)
+            cursor.execute(f"""
                 UPDATE order_item_addons 
-                SET menu_item_id = %s 
-                WHERE petpooja_addonid = ANY(%s)
-            """, (source_id, affected_ids))
-        
-        # 6. Recalculate Stats (Deducting from target is tricky, let's just refresh both)
-        # Actually, let's just deduct what we transferred if we knew it, 
-        # but recalculating is safer if we have the orders.
-        # For now, let's just do a simple reverse of the stats transfer.
-        # We didn't store the exact counts transferred at that moment, 
-        # but we can query them now from the re-linked items.
+                SET menu_item_id = ? 
+                WHERE order_item_id {in_clause}
+            """, [source_id] + params)
         
         # 6. Recalculate Stats (Filtered by Success status)
         for mid in [target_id, source_id]:
@@ -240,48 +242,47 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
                         (SELECT COALESCE(SUM(oi.quantity), 0) 
                          FROM order_items oi 
                          JOIN orders o ON oi.order_id = o.order_id 
-                         WHERE oi.menu_item_id = %s AND o.order_status = 'Success') +
+                         WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
                         (SELECT COALESCE(SUM(oia.quantity), 0) 
                          FROM order_item_addons oia 
                          JOIN order_items oi ON oia.order_item_id = oi.order_item_id
                          JOIN orders o ON oi.order_id = o.order_id
-                         WHERE oia.menu_item_id = %s AND o.order_status = 'Success')
+                         WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
                     ),
                     total_revenue = (
                         (SELECT COALESCE(SUM(oi.total_price), 0) 
                          FROM order_items oi 
                          JOIN orders o ON oi.order_id = o.order_id 
-                         WHERE oi.menu_item_id = %s AND o.order_status = 'Success') +
+                         WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
                         (SELECT COALESCE(SUM(oia.price * oia.quantity), 0) 
                          FROM order_item_addons oia 
                          JOIN order_items oi ON oia.order_item_id = oi.order_item_id
                          JOIN orders o ON oi.order_id = o.order_id
-                         WHERE oia.menu_item_id = %s AND o.order_status = 'Success')
+                         WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
                     ),
                     sold_as_item = (SELECT COALESCE(SUM(oi.quantity), 0) 
                                    FROM order_items oi 
                                    JOIN orders o ON oi.order_id = o.order_id 
-                                   WHERE oi.menu_item_id = %s AND o.order_status = 'Success'),
+                                   WHERE oi.menu_item_id = ? AND o.order_status = 'Success'),
                     sold_as_addon = (SELECT COALESCE(SUM(oia.quantity), 0) 
                                     FROM order_item_addons oia 
                                     JOIN order_items oi ON oia.order_item_id = oi.order_item_id
                                     JOIN orders o ON oi.order_id = o.order_id
-                                    WHERE oia.menu_item_id = %s AND o.order_status = 'Success'),
+                                    WHERE oia.menu_item_id = ? AND o.order_status = 'Success'),
                     updated_at = CURRENT_TIMESTAMP
-                WHERE menu_item_id = %s
+                WHERE menu_item_id = ?
             """, (mid, mid, mid, mid, mid, mid, mid))
-
 
         
         # 7. Delete History
-        cursor.execute("DELETE FROM merge_history WHERE merge_id = %s", (merge_id,))
+        cursor.execute("DELETE FROM merge_history WHERE merge_id = ?", (merge_id,))
         
         conn.commit()
         
         # 8. Update Backups
         export_to_backups(conn)
         
-        return {"status": "success", "message": f"Successfully reversed merge of '{history['source_name']}'"}
+        return {"status": "success", "message": f"Successfully reversed merge of '{history_dict['source_name']}'"}
         
     except Exception as e:
         conn.rollback()
@@ -300,7 +301,7 @@ def verify_item(conn, item_id: str, new_name: str = None, new_type: str = None) 
             # If ID changes, we need to handle merge/move logic
             # For simplicity, if ID matches existing, we merge. If not, we rename.
             
-            cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = %s", (new_id,))
+            cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = ?", (new_id,))
             exists = cursor.fetchone()
             
             if exists and exists[0] != item_id:
@@ -310,11 +311,11 @@ def verify_item(conn, item_id: str, new_name: str = None, new_type: str = None) 
                  # Just rename and verify
                 cursor.execute("""
                     UPDATE menu_items 
-                    SET name = %s, type = %s, is_verified = TRUE
-                    WHERE menu_item_id = %s
+                    SET name = ?, type = ?, is_verified = 1
+                    WHERE menu_item_id = ?
                 """, (new_name, new_type, item_id))
         else:
-            cursor.execute("UPDATE menu_items SET is_verified = TRUE WHERE menu_item_id = %s", (item_id,))
+            cursor.execute("UPDATE menu_items SET is_verified = 1 WHERE menu_item_id = ?", (item_id,))
         
         conn.commit()
         export_to_backups(conn)

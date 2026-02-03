@@ -65,9 +65,37 @@ def startup_db_check():
             );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id);")
-            conn.commit()
+            # Migration: client-learning uploaded_at on ai_logs and ai_feedback
+            for table, col in [("ai_logs", "uploaded_at"), ("ai_feedback", "uploaded_at")]:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT;")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    pass  # Column already exists
+            # Migration: app_users — drop old table (user_id schema) if present, create new (employee_id PK), seed if empty
+            try:
+                cur = conn.execute("SELECT user_id FROM app_users LIMIT 1")
+                cur.fetchone()
+                conn.execute("DROP TABLE app_users")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_users (
+                    employee_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur = conn.execute("SELECT COUNT(*) FROM app_users")
+            if cur.fetchone()[0] == 0:
+                conn.execute("INSERT INTO app_users (name, employee_id, is_active) VALUES ('Owner', '0001', 1)")
+                conn.commit()
             conn.close()
-            print("Startup: Verified weather_daily and ai_conversations schema.")
+            print("Startup: Verified weather_daily, ai_conversations, and app_users schema.")
     except Exception as e:
         print(f"Startup DB Check Failed: {e}")
         try:

@@ -162,6 +162,15 @@ export interface CustomerRow {
     last_order_date: string;
 }
 
+// --- Config / User Profile Types ---
+
+export interface AppUser {
+    name: string;
+    employee_id: string;
+    is_active?: boolean;
+    created_at?: string;
+}
+
 // --- API Response Wrappers ---
 
 export interface TopItemsResponse {

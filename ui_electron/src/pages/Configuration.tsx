@@ -15,7 +15,7 @@ declare global {
     }
 }
 
-type Tab = 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
+type Tab = 'users' | 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
 type UpdateStatus = 'checking' | 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error' | null;
 
 export default function Configuration() {
@@ -24,6 +24,11 @@ export default function Configuration() {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [selectedDbSection, setSelectedDbSection] = useState<string | null>(null);
+
+    // Users Tab State
+    const [userForm, setUserForm] = useState({ name: '', employee_id: '' });
+    const [savingUser, setSavingUser] = useState(false);
+    const [userLoadError, setUserLoadError] = useState<string | null>(null);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -48,6 +53,49 @@ export default function Configuration() {
             });
         }
     }, []);
+
+    useEffect(() => {
+        if (activeTab === 'users') loadUsers();
+    }, [activeTab]);
+
+    const loadUsers = async () => {
+        setUserLoadError(null);
+        try {
+            const res = await endpoints.config.getUsers();
+            if (res.data && res.data.length > 0) {
+                const user = res.data[0];
+                setUserForm({
+                    name: user.name,
+                    employee_id: user.employee_id
+                });
+            } else {
+                setUserLoadError("No user profile found. Save to create one.");
+            }
+        } catch (e) {
+            console.error("Failed to load user profile", e);
+            setUserLoadError("Failed to load user profile. Please try again.");
+        }
+    };
+
+    const handleSaveUser = async () => {
+        if (!userForm.name || !userForm.employee_id) {
+            alert("Name and Employee ID are required");
+            return;
+        }
+        setSavingUser(true);
+        try {
+            await endpoints.config.saveUser(userForm);
+            alert("User saved successfully!");
+            setUserLoadError(null);
+            loadUsers();
+        } catch (e: any) {
+            const errorMsg = e.response?.data?.detail || "Failed to save user";
+            alert(`❌ ${errorMsg}`);
+        } finally {
+            setSavingUser(false);
+        }
+    };
+
 
     const loadSettings = async () => {
         setLoading(true);
@@ -219,6 +267,7 @@ export default function Configuration() {
             {/* Segmented Control */}
             <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'var(--card-bg)', padding: '5px', borderRadius: '30px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
                 {[
+                    { id: 'users', label: '👤 User Profile' },
                     { id: 'ai_models', label: '🧠 AI Models' },
                     { id: 'integrations', label: '🔌 Integrations' },
                     { id: 'repository', label: '📦 Repository' },
@@ -284,6 +333,86 @@ export default function Configuration() {
             {/* Content Area */}
             {loading ? <div>Loading settings...</div> : (
                 <div style={{ maxWidth: '1200px', width: '100%' }}>
+                    {activeTab === 'users' && (
+                        <Card title="User Profile">
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                                Configure the current user identity. This information is used for cloud data synchronization.
+                            </p>
+                            {userLoadError && (
+                                <p style={{ color: 'var(--error-color, #c53030)', marginBottom: '12px', fontSize: '0.9em' }}>
+                                    {userLoadError}
+                                </p>
+                            )}
+                            <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
+
+                            {/* Profile Form */}
+                            <div style={{ maxWidth: '600px' }}>
+                                <div style={{ marginBottom: '20px' }}>
+                                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Full Name</label>
+                                    <input
+                                        type="text"
+                                        value={userForm.name}
+                                        onChange={e => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                                        placeholder="e.g. John Doe"
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px',
+                                            borderRadius: '8px',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--input-bg)',
+                                            color: 'var(--text-color)',
+                                            fontSize: '1em'
+                                        }}
+                                    />
+                                </div>
+                                <div style={{ marginBottom: '30px' }}>
+                                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Employee ID</label>
+                                    <input
+                                        type="text"
+                                        value={userForm.employee_id}
+                                        onChange={e => setUserForm(prev => ({ ...prev, employee_id: e.target.value }))}
+                                        placeholder="e.g. EMP-001"
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px',
+                                            borderRadius: '8px',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--input-bg)',
+                                            color: 'var(--text-color)',
+                                            fontSize: '1em',
+                                            fontFamily: 'monospace'
+                                        }}
+                                    />
+                                </div>
+
+                                <button
+                                    onClick={handleSaveUser}
+                                    disabled={savingUser}
+                                    style={{
+                                        padding: '12px 24px',
+                                        background: savingUser ? 'var(--text-secondary)' : 'var(--accent-color)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: savingUser ? 'not-allowed' : 'pointer',
+                                        fontWeight: 600,
+                                        fontSize: '1em',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                                        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                                        <polyline points="7 3 7 8 15 8"></polyline>
+                                    </svg>
+                                    {savingUser ? 'Saving...' : 'Save Profile'}
+                                </button>
+                            </div>
+                        </Card>
+                    )}
+
                     {activeTab === 'ai_models' && (
                         <Card title="AI Model Configuration">
                             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Configure API keys and models for AI services.</p>

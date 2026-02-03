@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict
+from typing import Dict, Optional
 
 import os
 
@@ -151,10 +151,7 @@ def reset_db_section(data: Dict[str, str]):
                 "menu_item_variants",
                 "menu_items",
                 "variants",
-                # Menu Staging & History (item_mappings references menu_items_new/variants_new — clear first)
-                "item_mappings",
-                "menu_items_new",
-                "variants_new",
+                # History
                 "merge_history"
             ]
             
@@ -227,3 +224,48 @@ def reset_db_section(data: Dict[str, str]):
         raise HTTPException(status_code=500, detail=f"Failed to reset {section}: {str(e)}")
     finally:
         conn.close()
+
+# --- User Management ---
+
+class User(BaseModel):
+    name: str
+    employee_id: str
+    is_active: bool = True
+
+@router.get("/users")
+def get_users():
+    """Get list of application users (Singleton). Migration runs at startup in main.py."""
+    conn, _ = get_db_connection()
+    try:
+        cursor = conn.execute("SELECT name, employee_id, is_active, created_at FROM app_users LIMIT 1")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@router.post("/users")
+def save_user(user: User):
+    """Update current user profile (Singleton: Wipes and Replaces)"""
+    conn, _ = get_db_connection()
+    try:
+        # Strict Singleton: Reset table and insert new profile
+        # Transaction ensures we don't end up with 0 rows if insert fails
+        conn.execute("DELETE FROM app_users")
+        
+        conn.execute("""
+            INSERT INTO app_users (name, employee_id, is_active)
+            VALUES (?, ?, ?)
+        """, (user.name, user.employee_id, user.is_active))
+            
+        conn.commit()
+        return {"status": "success", "message": "Profile updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
