@@ -55,6 +55,10 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"CREATE INDEX IF NOT EXISTS idx_{_TABLE}_lru ON {_TABLE} (last_used_at, created_at)"
     )
+    # Index for cloud sync: fetch entries marked incorrect
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{_TABLE}_is_incorrect ON {_TABLE} (is_incorrect) WHERE is_incorrect = 1"
+    )
 
 
 def build_key(call_id: str, key_parts: Tuple[Any, ...]) -> str:
