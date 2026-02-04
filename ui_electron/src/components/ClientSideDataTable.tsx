@@ -6,14 +6,18 @@
  * - Client-side sorting
  * - Resizable container
  * - CSV export
+ * - Optional custom cell renderers per column
  * 
- * Used by SQL Console and other places where all data is loaded at once.
+ * Used by SQL Console, Telemetry, and other places where all data is loaded at once.
  */
 
+import type React from 'react';
 import { useState, useMemo } from 'react';
 import { ResizableTableWrapper } from './ResizableTableWrapper';
 import { exportToCSV } from '../utils/exportToCSV';
 import { formatColumnHeader } from '../utils';
+
+export type ColumnRenderFn = (value: any, row: Record<string, any>) => React.ReactNode;
 
 interface ClientSideDataTableProps {
     data: Record<string, any>[];
@@ -22,6 +26,14 @@ interface ClientSideDataTableProps {
     defaultSortKey?: string;
     defaultSortDirection?: 'asc' | 'desc';
     filenamePrefix?: string;
+    /** Optional per-column custom cell renderer. If provided for a column, it is used instead of default rendering. */
+    columnRender?: Record<string, ColumnRenderFn>;
+    /** Optional display labels for column headers. If provided for a column, used instead of formatColumnHeader(key). */
+    columnLabels?: Record<string, string>;
+    /** When true, the Export CSV button above the table is hidden (e.g. when the parent renders its own toolbar). */
+    hideExportButton?: boolean;
+    /** Override top margin of the table container (default 20px). Use 0 or a small value for tighter layout. */
+    marginTop?: number;
 }
 
 export function ClientSideDataTable({
@@ -30,7 +42,11 @@ export function ClientSideDataTable({
     defaultPageSize = 50,
     defaultSortKey,
     defaultSortDirection = 'desc',
-    filenamePrefix = 'export'
+    filenamePrefix = 'export',
+    columnRender,
+    columnLabels,
+    hideExportButton = false,
+    marginTop = 20
 }: ClientSideDataTableProps) {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(defaultPageSize);
@@ -100,8 +116,8 @@ export function ClientSideDataTable({
     }
 
     return (
-        <div style={{ marginTop: '20px' }}>
-            <ResizableTableWrapper onExportCSV={handleExportCSV}>
+        <div style={{ marginTop: `${marginTop}px` }}>
+            <ResizableTableWrapper onExportCSV={hideExportButton ? undefined : handleExportCSV}>
                 <table className="standard-table">
                     <thead>
                         <tr>
@@ -111,7 +127,7 @@ export function ClientSideDataTable({
                                     onClick={() => handleSort(col)}
                                     style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
                                 >
-                                    {formatColumnHeader(col)}{renderSortIcon(col)}
+                                    {(columnLabels?.[col] ?? formatColumnHeader(col))}{renderSortIcon(col)}
                                 </th>
                             ))}
                         </tr>
@@ -119,18 +135,19 @@ export function ClientSideDataTable({
                     <tbody>
                         {paginatedData.map((row, i) => (
                             <tr key={i}>
-                                {columns.map(col => (
-                                    <td key={col}>
-                                        {typeof row[col] === 'boolean'
+                                {columns.map(col => {
+                                    const custom = columnRender?.[col];
+                                    const cellContent = custom
+                                        ? custom(row[col], row)
+                                        : typeof row[col] === 'boolean'
                                             ? (row[col] ? '✅' : '❌')
                                             : row[col] === null || row[col] === undefined
                                                 ? <span style={{ color: '#aaa', fontStyle: 'italic' }}>NULL</span>
                                                 : String(row[col]).length > 100
                                                     ? String(row[col]).substring(0, 100) + '...'
-                                                    : String(row[col])
-                                        }
-                                    </td>
-                                ))}
+                                                    : String(row[col]);
+                                    return <td key={col}>{cellContent}</td>;
+                                })}
                             </tr>
                         ))}
                     </tbody>

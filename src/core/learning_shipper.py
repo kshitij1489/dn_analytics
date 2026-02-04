@@ -77,6 +77,27 @@ def _get_schema_hash() -> Optional[str]:
         return None
 
 
+def _select_incorrect_cache_entries(limit: int = 100) -> List[Dict[str, Any]]:
+    """Select llm_cache rows where is_incorrect = 1."""
+    try:
+        from ai_mode.cache.cache_config import CACHE_DB_PATH
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            # Check if column exists first (it should now, but for safety)
+            cursor = conn.execute("""
+                SELECT key_hash, call_id, value, created_at, last_used_at, is_incorrect
+                FROM llm_cache
+                WHERE is_incorrect = 1
+                LIMIT ?
+            """, (limit,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
 def _select_unsent_ai_logs(conn, limit: int = BATCH_LIMIT_AI_LOGS) -> List[Dict[str, Any]]:
     """Select ai_logs rows where uploaded_at IS NULL. Prefer columns that exist."""
     conn.row_factory = None
@@ -146,6 +167,7 @@ def upload_pending(
     cache_stats = _get_cache_stats()
     aggregated_counters = _get_aggregated_counters(conn)
     schema_hash = _get_schema_hash()
+    llm_cache_feedback = _select_incorrect_cache_entries()
     # Always POST when URL is set so Tier 3 is sent every run (cache/aggregates/schema)
     headers = {"Content-Type": "application/json"}
     token = auth if auth is not None else CLIENT_LEARNING_API_KEY
@@ -158,6 +180,7 @@ def upload_pending(
         "cache_stats": cache_stats,
         "aggregated_counters": aggregated_counters,
         "schema_hash": schema_hash,
+        "llm_cache_feedback": llm_cache_feedback,
     }
     if uploaded_by:
         payload["uploaded_by"] = uploaded_by

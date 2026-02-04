@@ -32,7 +32,7 @@ def get_uploaded_by(conn) -> Optional[Dict[str, str]]:
         return None
 
 
-def run_all(conn, log_dir: Optional[str] = None) -> Dict[str, Any]:
+def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None, auth: Optional[str] = None) -> Dict[str, Any]:
     """
     Run all client-learning shippers: error logs, ai_logs + ai_feedback, menu bootstrap.
     Appends uploaded_by (from app_users) to every payload so cloud knows which employee the upload is from.
@@ -43,12 +43,31 @@ def run_all(conn, log_dir: Optional[str] = None) -> Dict[str, Any]:
     result: Dict[str, Any] = {"errors": {}, "learning": {}, "menu_bootstrap": {}}
     uploaded_by = get_uploaded_by(conn) if conn else None
 
-    result["errors"] = upload_errors(log_dir=log_dir, uploaded_by=uploaded_by)
+    # Pass configured endpoints/auth to sub-shippers if base_url is provided.
+    # Each sub-shipper (error, learning, menu) accepts (endpoint=..., auth=...).
+    
+    error_kwargs = {"uploaded_by": uploaded_by, "log_dir": log_dir}
+    learning_kwargs = {"uploaded_by": uploaded_by}
+    menu_kwargs = {"uploaded_by": uploaded_by}
+    
+    if base_url:
+         # Construct specific endpoints
+         base = base_url.rstrip("/")
+         error_kwargs["endpoint"] = f"{base}/api/errors/ingest"
+         learning_kwargs["endpoint"] = f"{base}/api/learning/ingest"
+         menu_kwargs["endpoint"] = f"{base}/api/menu-bootstrap/ingest"
+
+    if auth:
+         error_kwargs["auth"] = auth
+         learning_kwargs["auth"] = auth
+         menu_kwargs["auth"] = auth
+
+    result["errors"] = upload_errors(**error_kwargs)
     result["learning"] = (
-        upload_learning(conn, uploaded_by=uploaded_by)
+        upload_learning(conn, **learning_kwargs)
         if conn
         else {"ai_logs_sent": 0, "ai_feedback_sent": 0, "tier3_included": False, "error": "No connection"}
     )
-    result["menu_bootstrap"] = upload_menu_bootstrap(uploaded_by=uploaded_by)
+    result["menu_bootstrap"] = upload_menu_bootstrap(**menu_kwargs)
 
     return result

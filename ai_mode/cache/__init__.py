@@ -11,8 +11,10 @@ from ai_mode.cache.llm_cache import (
     get,
     get_or_call,
     get_or_call_diversity,
+    list_entries,
     normalize_prompt,
     set as cache_set,
+    set_incorrect,
 )
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "get",
     "get_or_call",
     "get_or_call_diversity",
+    "list_entries",
     "normalize_prompt",
     "cache_set",
+    "set_incorrect",
 ]

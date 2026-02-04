@@ -5,6 +5,12 @@ from src.api.routers import insights, menu, operations, resolutions, sql, orders
 app = FastAPI(title="Analytics Backend")
 
 @app.on_event("startup")
+async def start_background_tasks():
+    from src.core.services.cloud_sync_scheduler import background_sync_task
+    import asyncio
+    asyncio.create_task(background_sync_task())
+
+@app.on_event("startup")
 def startup_db_check():
     # Ensure error log file handler is attached (logs/errors.jsonl)
     from src.core.error_log import get_error_logger

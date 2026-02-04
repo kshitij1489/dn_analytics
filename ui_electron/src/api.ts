@@ -32,6 +32,16 @@ export interface DebugLogEntry {
     output_preview?: string;
 }
 
+/** One entry in the LLM cache (for telemetry table). */
+export interface LlmCacheEntry {
+    key_hash: string;
+    call_id: string;
+    value_preview: string;
+    created_at: string;
+    last_used_at: string | null;
+    is_incorrect: boolean;
+}
+
 export interface JobResponse {
     job_id: string;
     status: string;
@@ -124,6 +134,9 @@ export const endpoints = {
         feedback: (data: { query_id: string, is_positive: boolean, comment?: string }) => api.post('/ai/feedback', data),
         initDebug: () => api.post('/ai/debug/init'),
         getDebugLogs: () => api.get<{ entries: DebugLogEntry[] }>('/ai/debug/logs'),
+        getCacheEntries: (limit?: number) => api.get<{ entries: LlmCacheEntry[] }>('/ai/debug/cache-entries', { params: limit != null ? { limit } : undefined }),
+        patchCacheEntry: (keyHash: string, isIncorrect: boolean) =>
+            api.patch<{ status: string; key_hash: string; is_incorrect: boolean }>(`/ai/debug/cache-entries/${encodeURIComponent(keyHash)}`, { is_incorrect: isIncorrect }),
         clearCache: () => api.post<{ status: string; message: string }>('/ai/debug/clear-cache'),
     },
 

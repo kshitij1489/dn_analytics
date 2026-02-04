@@ -480,6 +480,16 @@ export default function Configuration() {
                             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Connect external services for data syncing.</p>
                             <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
 
+                            <h4 style={{ marginBottom: '10px', color: 'var(--accent-color)' }}>Cloud Synchronization</h4>
+                            <p style={{ fontSize: '0.9em', color: 'var(--text-secondary)', marginBottom: '15px' }}>
+                                Automatically sync Errors, Learning Logs, and Conversations to your cloud server every 5 minutes.
+                            </p>
+                            {renderInput("Cloud Server URL", "cloud_sync_url", "url", "https://api.example.com")}
+                            {renderInput("Cloud API Key", "cloud_sync_api_key", "password")}
+                            {renderTestButton('cloud_sync')}
+                            <div style={{ marginBottom: '20px' }}></div>
+                            <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
+
                             <h4 style={{ marginBottom: '10px' }}>Orders Service</h4>
                             {renderInput("Orders URL", "integration_orders_url", "url", "https://api.example.com/orders")}
                             {renderInput("Orders API Key", "integration_orders_key", "password")}

@@ -11,7 +11,8 @@ replace with real URLs via env when deploying.
 import os
 
 # Placeholder base; replace via env for production
-_PLACEHOLDER_BASE = "https://placeholder-client-learning.example.com"
+#_PLACEHOLDER_BASE = "https://placeholder-client-learning.example.com"
+_PLACEHOLDER_BASE = "http://localhost"
 
 # Error log ingest: POST batch of error records
 CLIENT_LEARNING_ERROR_INGEST_URL = os.environ.get(

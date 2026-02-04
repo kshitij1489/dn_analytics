@@ -97,3 +97,8 @@ class AIFeedbackRequest(BaseModel):
     query_id: str
     is_positive: bool
     comment: Optional[str] = None
+
+
+class CacheEntryPatchRequest(BaseModel):
+    """Request body for marking a cache entry as incorrect (human feedback for cloud learning)."""
+    is_incorrect: bool

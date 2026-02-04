@@ -41,10 +41,16 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             call_id TEXT NOT NULL,
             value TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            last_used_at TEXT
+            last_used_at TEXT,
+            is_incorrect INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    # Migration: add is_incorrect if table existed without it
+    try:
+        conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN is_incorrect INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Optimization: Index for LRU eviction query to avoid full table scan
     conn.execute(
         f"CREATE INDEX IF NOT EXISTS idx_{_TABLE}_lru ON {_TABLE} (last_used_at, created_at)"
@@ -107,8 +113,8 @@ def _set(
         )
     conn.execute(
         f"""
-        INSERT INTO {_TABLE} (key_hash, call_id, value, created_at, last_used_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO {_TABLE} (key_hash, call_id, value, created_at, last_used_at, is_incorrect)
+        VALUES (?, ?, ?, ?, ?, 0)
         """,
         (key_hash, call_id, value_str, now, now),
     )
@@ -245,6 +251,64 @@ def get_or_call(
         except Exception:
             pass
         return result
+
+
+def list_entries(limit: int = 500) -> List[dict]:
+    """
+    Return cache entries for telemetry: key_hash, call_id, value_preview, created_at, last_used_at, is_incorrect.
+    value_preview is truncated to 200 chars for display.
+    """
+    try:
+        with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
+            _ensure_table(conn)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"""
+                SELECT key_hash, call_id, value, created_at, last_used_at, is_incorrect
+                FROM {_TABLE}
+                ORDER BY COALESCE(last_used_at, created_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            out: List[dict] = []
+            for row in rows:
+                val = row["value"] or ""
+                preview = val[:200] + ("..." if len(val) > 200 else "")
+                is_incorrect = row["is_incorrect"]
+                if is_incorrect is None:
+                    is_incorrect = 0
+                out.append({
+                    "key_hash": row["key_hash"],
+                    "call_id": row["call_id"],
+                    "value_preview": preview,
+                    "created_at": row["created_at"],
+                    "last_used_at": row["last_used_at"],
+                    "is_incorrect": bool(is_incorrect),
+                })
+            return out
+    except Exception as e:
+        print(f"⚠️ LLM cache list_entries error: {e}")
+        return []
+
+
+def set_incorrect(key_hash: str, is_incorrect: bool) -> bool:
+    """
+    Set the is_incorrect flag for a cache entry (human feedback for cloud learning).
+    Returns True if the entry was found and updated.
+    """
+    try:
+        with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
+            _ensure_table(conn)
+            cur = conn.execute(
+                f"UPDATE {_TABLE} SET is_incorrect = ? WHERE key_hash = ?",
+                (1 if is_incorrect else 0, key_hash),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        print(f"⚠️ LLM cache set_incorrect error: {e}")
+        return False
 
 
 def clear_cache(call_id: Optional[str] = None) -> None:

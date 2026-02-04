@@ -5,6 +5,7 @@
  */
 
 export { ResizableTableWrapper } from './ResizableTableWrapper';
+export { ClientSideDataTable, type ColumnRenderFn } from './ClientSideDataTable';
 export { Card, CollapsibleCard } from './Card';
 export { KPICard } from './KPICard';
 export { TabButton } from './TabButton';

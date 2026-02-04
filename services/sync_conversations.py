@@ -12,11 +12,17 @@ from typing import Optional
 import httpx
 
 
-# Configuration from environment
+# Configuration from environment (fallback for legacy/env-based usage)
 MASTER_SERVER_URL = os.environ.get("MASTER_SERVER_URL", "")
 MASTER_SERVER_API_KEY = os.environ.get("MASTER_SERVER_API_KEY", "")
-SYNC_INTERVAL_SECONDS = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 
+
+def row_to_dict(cursor, row):
+    """Helper to convert a row (tuple or sqlite3.Row) to a dictionary."""
+    if isinstance(row, tuple):
+        columns = [col[0] for col in cursor.description]
+        return dict(zip(columns, row))
+    return dict(row)
 
 async def get_unsynced_conversations(conn) -> list:
     """Get conversations that need syncing (never synced or updated since last sync)."""
@@ -33,7 +39,8 @@ async def get_unsynced_conversations(conn) -> list:
         ORDER BY c.updated_at ASC
         LIMIT 50
     """)
-    return [dict(row) for row in cursor.fetchall()]
+    
+    return [row_to_dict(cursor, row) for row in cursor.fetchall()]
 
 
 async def get_messages_for_conversation(conn, conversation_id: str) -> list:
@@ -55,8 +62,10 @@ async def get_messages_for_conversation(conn, conversation_id: str) -> list:
     """, (conversation_id,))
     
     messages = []
+    
     for row in cursor.fetchall():
-        msg = dict(row)
+        msg = row_to_dict(cursor, row)
+        
         # Parse content if JSON
         try:
             msg["content"] = json.loads(msg["content"])
@@ -66,12 +75,16 @@ async def get_messages_for_conversation(conn, conversation_id: str) -> list:
     return messages
 
 
-async def sync_to_master(conn, conversations: list) -> dict:
+async def sync_to_master(conn, conversations: list, base_url: str = None, auth: str = None) -> dict:
     """
     Sync conversations to master server.
     Returns {"success": bool, "synced_ids": [...], "error": str or None}
     """
-    if not MASTER_SERVER_URL:
+    # Use provided base_url or fallback to env var
+    url = (base_url or MASTER_SERVER_URL).rstrip("/")
+    api_key = auth if auth is not None else MASTER_SERVER_API_KEY
+    
+    if not url:
         return {"success": False, "synced_ids": [], "error": "No master server URL configured"}
     
     # Build payload with full conversation data
@@ -84,13 +97,13 @@ async def sync_to_master(conn, conversations: list) -> dict:
         })
     
     headers = {"Content-Type": "application/json"}
-    if MASTER_SERVER_API_KEY:
-        headers["Authorization"] = f"Bearer {MASTER_SERVER_API_KEY}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{MASTER_SERVER_URL}/api/conversations/sync",
+                f"{url}/api/conversations/sync",
                 json={"conversations": payload},
                 headers=headers
             )
@@ -118,47 +131,25 @@ async def mark_as_synced(conn, conversation_ids: list):
     conn.commit()
 
 
-async def run_sync_cycle(conn):
+async def run_sync_cycle(conn, base_url: str = None, auth: str = None):
     """Run a single sync cycle."""
     try:
         conversations = await get_unsynced_conversations(conn)
         if not conversations:
             return {"synced": 0, "error": None}
         
-        result = await sync_to_master(conn, conversations)
+        result = await sync_to_master(conn, conversations, base_url=base_url, auth=auth)
         if result["success"]:
             await mark_as_synced(conn, result["synced_ids"])
-            print(f"[Sync] Synced {len(result['synced_ids'])} conversations to master")
+            # print(f"[Sync] Synced {len(result['synced_ids'])} conversations to master")
             return {"synced": len(result["synced_ids"]), "error": None}
         else:
-            print(f"[Sync] Failed: {result['error']}")
+            # print(f"[Sync] Failed: {result['error']}")
             return {"synced": 0, "error": result["error"]}
     except Exception as e:
         print(f"[Sync] Exception: {e}")
         return {"synced": 0, "error": str(e)}
 
-
-async def start_sync_loop(get_conn_func):
-    """
-    Start the background sync loop.
-    get_conn_func should be a callable that returns a database connection.
-    """
-    if not MASTER_SERVER_URL:
-        print("[Sync] No MASTER_SERVER_URL configured, sync disabled")
-        return
-    
-    print(f"[Sync] Starting sync loop, interval={SYNC_INTERVAL_SECONDS}s")
-    
-    while True:
-        try:
-            conn = get_conn_func()
-            if conn:
-                await run_sync_cycle(conn)
-                conn.close()
-        except Exception as e:
-            print(f"[Sync] Loop error: {e}")
-        
-        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
 
 
 def trigger_sync_now(conn):

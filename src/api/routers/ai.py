@@ -3,11 +3,11 @@ from fastapi.responses import StreamingResponse
 from typing import List, Dict, AsyncGenerator
 import os
 import json
-from src.api.models import AIQueryRequest, AIResponse, AIFeedbackRequest
+from src.api.models import AIQueryRequest, AIResponse, AIFeedbackRequest, CacheEntryPatchRequest
 from src.api.dependencies import get_db
 from src.core.queries import insights_queries # For future use if needed
 from ai_mode.orchestrator import process_chat, process_chat_stream
-from ai_mode.cache import clear_cache as llm_clear_cache
+from ai_mode.cache import clear_cache as llm_clear_cache, list_entries as llm_list_entries, set_incorrect as llm_set_incorrect
 from ai_mode import debug_log as ai_debug_log
 
 router = APIRouter()
@@ -133,6 +133,43 @@ def submit_feedback(feedback: AIFeedbackRequest, conn=Depends(get_db)):
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to save feedback")
+
+
+@router.get("/debug/cache-entries")
+def get_llm_cache_entries(limit: int = 500):
+    """
+    Return LLM cache entries for telemetry (key_hash, call_id, value_preview, created_at, last_used_at, is_incorrect).
+    """
+    try:
+        return {"entries": llm_list_entries(limit=limit)}
+    except Exception as e:
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().error(f"Error listing LLM cache: {e}", extra={"context": {"endpoint": "/api/ai/debug/cache-entries"}})
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/debug/cache-entries/{key_hash}")
+def patch_llm_cache_entry(key_hash: str, body: CacheEntryPatchRequest):
+    """
+    Update a cache entry (e.g. set is_incorrect for human feedback).
+    """
+    try:
+        updated = llm_set_incorrect(key_hash, body.is_incorrect)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Cache entry not found")
+        return {"status": "ok", "key_hash": key_hash, "is_incorrect": body.is_incorrect}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().error(f"Error updating cache entry: {e}", extra={"context": {"endpoint": "/api/ai/debug/cache-entries"}})
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/debug/logs")
