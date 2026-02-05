@@ -11,11 +11,11 @@
 
 | Endpoint (client → cloud) | Method | Purpose |
 |----------------------------|--------|---------|
-| `/api/errors/ingest` | POST | Batch of error/crash log records |
-| `/api/learning/ingest` | POST | AI pipeline metadata (ai_logs, ai_feedback) + Tier 3 (cache_stats, aggregated_counters, schema_hash) |
-| `/api/menu-bootstrap/ingest` | POST | Menu knowledge: id_maps + cluster_state (for new-user bootstrap) |
-| `/api/conversations/sync` | POST | AI conversations + messages (existing sync) |
-| `/api/menu-bootstrap/latest` | GET | *(Optional)* Return latest merged menu bootstrap for new clients to pull |
+| `/desktop-analytics-sync/errors/ingest` | POST | Batch of error/crash log records |
+| `/desktop-analytics-sync/learning/ingest` | POST | AI pipeline metadata (ai_logs, ai_feedback) + Tier 3 (cache_stats, aggregated_counters, schema_hash) |
+| `/desktop-analytics-sync/menu-bootstrap/ingest` | POST | Menu knowledge: id_maps + cluster_state (for new-user bootstrap) |
+| `/desktop-analytics-sync/conversations/sync` | POST | AI conversations + messages (existing sync) |
+| `/desktop-analytics-sync/menu-bootstrap/latest` | GET | *(Optional)* Return latest merged menu bootstrap for new clients to pull |
 
 Base URL and optional API key are configured on the client via environment variables.
 
@@ -34,7 +34,7 @@ Base URL and optional API key are configured on the client via environment varia
 
 ### 3.1 Errors Ingest
 
-**POST** `/api/errors/ingest`
+**POST** `/desktop-analytics-sync/errors/ingest`
 
 **Request body:**
 
@@ -71,7 +71,7 @@ Base URL and optional API key are configured on the client via environment varia
 
 ### 3.2 Learning Ingest
 
-**POST** `/api/learning/ingest`
+**POST** `/desktop-analytics-sync/learning/ingest`
 
 **Request body:**
 
@@ -149,13 +149,13 @@ The client stores LLM response cache in a separate SQLite DB (`llm_cache.db`; sc
 - Entries with `is_incorrect = 0` are normal cache; only `is_incorrect = 1` carries explicit "this was wrong" signal. You may ignore or store `is_incorrect = 0` for analytics.
 - Idempotency: if the client sends `llm_cache_feedback`, use `key_hash` (and optionally `call_id`) to upsert so repeated or updated feedback does not create duplicates.
 
-**Cloud sync:** The client should sync `llm_cache.db` (or export rows where `is_incorrect = 1`) so the cloud can use this human feedback. You may extend `/api/learning/ingest` to accept an optional payload such as `llm_cache_feedback: [{ "key_hash", "call_id", "is_incorrect", "created_at", "last_used_at" }]` or sync the whole cache DB file according to your pipeline.
+**Cloud sync:** The client should sync `llm_cache.db` (or export rows where `is_incorrect = 1`) so the cloud can use this human feedback. You may extend `/desktop-analytics-sync/learning/ingest` to accept an optional payload such as `llm_cache_feedback: [{ "key_hash", "call_id", "is_incorrect", "created_at", "last_used_at" }]` or sync the whole cache DB file according to your pipeline.
 
 ---
 
 ### 3.3 Menu Bootstrap Ingest
 
-**POST** `/api/menu-bootstrap/ingest`
+**POST** `/desktop-analytics-sync/menu-bootstrap/ingest`
 
 **Request body:**
 
@@ -189,7 +189,7 @@ The client stores LLM response cache in a separate SQLite DB (`llm_cache.db`; sc
 
 ### 3.4 Conversations Sync (existing)
 
-**POST** `/api/conversations/sync`
+**POST** `/desktop-analytics-sync/conversations/sync`
 
 **Request body:**
 
@@ -228,7 +228,7 @@ The client stores LLM response cache in a separate SQLite DB (`llm_cache.db`; sc
 
 ### 3.5 Menu Bootstrap — Get Latest (optional)
 
-**GET** `/api/menu-bootstrap/latest`
+**GET** `/desktop-analytics-sync/menu-bootstrap/latest`
 
 **Purpose:** New clients can call this to download the merged menu bootstrap (id_maps + cluster_state) and run their local `perform_seeding()`.
 
@@ -368,7 +368,7 @@ CREATE TABLE ingest_menu_bootstrap (
     ingested_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Optional: table to hold the single “latest” merged bootstrap for GET /api/menu-bootstrap/latest
+-- Optional: table to hold the single “latest” merged bootstrap for GET /desktop-analytics-sync/menu-bootstrap/latest
 CREATE TABLE menu_bootstrap_latest (
     id SERIAL PRIMARY KEY,
     id_maps JSONB NOT NULL,
@@ -481,7 +481,7 @@ class IngestMenuBootstrap(models.Model):
     ingested_at = models.DateTimeField(auto_now_add=True)
 
 class MenuBootstrapLatest(models.Model):
-    """Single row: current merged bootstrap for GET /api/menu-bootstrap/latest"""
+    """Single row: current merged bootstrap for GET /desktop-analytics-sync/menu-bootstrap/latest"""
     id_maps = models.JSONField()
     cluster_state = models.JSONField()
     updated_at = models.DateTimeField(auto_now=True)
@@ -539,24 +539,24 @@ The analytics client uses these environment variables. You provide the base URL 
 
 | Variable | Purpose |
 |----------|---------|
-| `CLIENT_LEARNING_ERROR_INGEST_URL` | Full URL for POST errors (e.g. `https://your-server.com/api/errors/ingest`) |
+| `CLIENT_LEARNING_ERROR_INGEST_URL` | Full URL for POST errors (e.g. `https://your-server.com/desktop-analytics-sync/errors/ingest`) |
 | `CLIENT_LEARNING_INGEST_URL` | Full URL for POST learning |
 | `CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL` | Full URL for POST menu bootstrap |
 | `CLIENT_LEARNING_API_KEY` | Bearer token for the three above |
 | `MASTER_SERVER_URL` | Base URL for conversation sync (e.g. `https://your-server.com`) |
 | `MASTER_SERVER_API_KEY` | Bearer token for conversation sync |
 
-Conversation sync uses `MASTER_SERVER_URL` + `/api/conversations/sync`. The other three use full URLs. All use JSON and `Content-Type: application/json`.
+Conversation sync uses `MASTER_SERVER_URL` + `/desktop-analytics-sync/conversations/sync`. The other three use full URLs. All use JSON and `Content-Type: application/json`.
 
 ---
 
 ## 9. Summary Checklist
 
-- [ ] Implement POST `/api/errors/ingest` (body: records, optional uploaded_by); store by record_id.
-- [ ] Implement POST `/api/learning/ingest` (body: ai_logs, ai_feedback, cache_stats, aggregated_counters, schema_hash, optional uploaded_by); store with query_id / feedback_id deduplication.
-- [ ] Implement POST `/api/menu-bootstrap/ingest` (body: id_maps, cluster_state, optional uploaded_by); merge into menu_bootstrap_latest if desired.
-- [ ] Implement POST `/api/conversations/sync` (body: conversations with messages); upsert by conversation_id and message_id.
-- [ ] Optional: GET `/api/menu-bootstrap/latest` returning id_maps + cluster_state.
+- [ ] Implement POST `/desktop-analytics-sync/errors/ingest` (body: records, optional uploaded_by); store by record_id.
+- [ ] Implement POST `/desktop-analytics-sync/learning/ingest` (body: ai_logs, ai_feedback, cache_stats, aggregated_counters, schema_hash, optional uploaded_by); store with query_id / feedback_id deduplication.
+- [ ] Implement POST `/desktop-analytics-sync/menu-bootstrap/ingest` (body: id_maps, cluster_state, optional uploaded_by); merge into menu_bootstrap_latest if desired.
+- [ ] Implement POST `/desktop-analytics-sync/conversations/sync` (body: conversations with messages); upsert by conversation_id and message_id.
+- [ ] Optional: GET `/desktop-analytics-sync/menu-bootstrap/latest` returning id_maps + cluster_state.
 - [ ] Auth: validate Bearer token, return 401 if required and missing/invalid.
 - [ ] Postgres: create tables (or Django models) per §4–5; add indexes for query_id, record_id, employee_id, and time ranges.
 - [ ] Idempotency: use client IDs to deduplicate; document retention and PII handling.

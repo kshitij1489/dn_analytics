@@ -53,9 +53,9 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
     if base_url:
          # Construct specific endpoints
          base = base_url.rstrip("/")
-         error_kwargs["endpoint"] = f"{base}/api/errors/ingest"
-         learning_kwargs["endpoint"] = f"{base}/api/learning/ingest"
-         menu_kwargs["endpoint"] = f"{base}/api/menu-bootstrap/ingest"
+         error_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/errors/ingest"
+         learning_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/learning/ingest"
+         menu_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-bootstrap/ingest"
 
     if auth:
          error_kwargs["auth"] = auth

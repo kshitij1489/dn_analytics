@@ -103,7 +103,7 @@ async def sync_to_master(conn, conversations: list, base_url: str = None, auth: 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{url}/api/conversations/sync",
+                f"{url}/desktop-analytics-sync/conversations/sync",
                 json={"conversations": payload},
                 headers=headers
             )

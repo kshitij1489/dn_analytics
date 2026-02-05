@@ -13,7 +13,7 @@ from src.core.client_learning_shipper import run_all as run_client_learning_ship
 from services.sync_conversations import run_sync_cycle as run_conversation_sync
 
 # Default interval: 5 minutes
-SYNC_INTERVAL_SECONDS = 5
+SYNC_INTERVAL_SECONDS = 300
 
 async def background_sync_task():
     """

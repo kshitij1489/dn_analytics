@@ -17,19 +17,19 @@ _PLACEHOLDER_BASE = "http://localhost"
 # Error log ingest: POST batch of error records
 CLIENT_LEARNING_ERROR_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_ERROR_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/api/errors/ingest",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/errors/ingest",
 ).strip()
 
 # AI pipeline metadata + feedback: POST ai_logs + ai_feedback
 CLIENT_LEARNING_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/api/learning/ingest",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/learning/ingest",
 ).strip()
 
 # Menu bootstrap: POST id_maps + cluster_state (from backup JSON files)
 CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/api/menu-bootstrap/ingest",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/ingest",
 ).strip()
 
 # Optional: Bearer token for cloud API auth
