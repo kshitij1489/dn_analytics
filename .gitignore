@@ -48,4 +48,9 @@ logs/
 .docker/
 node_modules
 .vite/
+# Antigravity
 .antigravity/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb

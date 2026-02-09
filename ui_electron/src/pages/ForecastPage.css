@@ -2,17 +2,36 @@
     animation: fadeIn 0.4s ease-out;
 }
 
-.forecast-header {
+.forecast-header-container {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
+    align-items: center;
     margin-bottom: 25px;
 }
 
-.forecast-header h1 {
-    margin: 0;
-    font-size: 1.8em;
-    font-weight: 700;
+.forecast-segmented-control {
+    display: flex;
+    gap: 10px;
+}
+
+.model-toggle-group {
+    display: flex;
+    gap: 8px;
+}
+
+.model-toggle-group button {
+    font-size: 0.85em;
+    padding: 6px 12px;
+}
+
+.forecast-placeholder {
+    text-align: center;
+    padding: 60px;
+    color: var(--text-secondary);
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px dashed var(--border-color);
+    margin-top: 20px;
 }
 
 .forecast-date {
@@ -128,4 +147,58 @@
         opacity: 1;
         transform: translateY(0);
     }
+}
+
+.forecast-chart-container--replay {
+    height: 300px;
+    position: relative;
+}
+
+/* Audit/Replay Mode Styles */
+.audit-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.audit-controls label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.audit-date-input {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-color);
+    font-size: 0.9rem;
+}
+
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(var(--card-bg-rgb), 0.7);
+    z-index: 10;
+}
+
+.empty-state-message {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.replay-error-message {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #ef4444;
+    font-style: italic;
 }

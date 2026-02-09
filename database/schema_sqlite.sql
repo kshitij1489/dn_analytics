@@ -487,3 +487,29 @@ CREATE TABLE IF NOT EXISTS weather_daily (
     
     PRIMARY KEY (date, city)
 );
+
+-- ============================================================================
+-- 20. FORECAST SNAPSHOTS (Audit/Replay)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS forecast_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_run_date DATE NOT NULL,      -- When the forecast was generated (e.g., Today)
+    target_date DATE NOT NULL,            -- The future date being predicted
+    
+    -- Predictions
+    pred_mean FLOAT,
+    pred_std FLOAT,
+    lower_95 FLOAT,
+    upper_95 FLOAT,
+    
+    -- Metadata for Audit
+    model_window_start DATE,
+    model_window_end DATE,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(forecast_run_date, target_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_run_date ON forecast_snapshots(forecast_run_date);
+

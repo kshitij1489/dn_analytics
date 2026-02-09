@@ -174,6 +174,7 @@ export const endpoints = {
     },
     forecast: {
         get: () => api.get('/forecast'),
+        replay: (run_date: string) => api.get('/forecast/replay', { params: { run_date } }),
     }
 };
 

@@ -9,12 +9,13 @@ import { useState } from 'react';
 interface CardProps {
     children: React.ReactNode;
     title: string;
+    headerAction?: React.ReactNode;
 }
 
 /**
  * Basic Card component with title
  */
-export function Card({ children, title }: CardProps) {
+export function Card({ children, title, headerAction }: CardProps) {
     return (
         <div style={{
             background: 'var(--card-bg)',
@@ -24,13 +25,20 @@ export function Card({ children, title }: CardProps) {
             border: '1px solid var(--border-color)',
             boxShadow: 'var(--shadow)'
         }}>
-            <h3 style={{
-                marginTop: 0,
-                marginBottom: '15px',
-                color: 'var(--accent-color)'
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '15px'
             }}>
-                {title}
-            </h3>
+                <h3 style={{
+                    margin: 0,
+                    color: 'var(--accent-color)'
+                }}>
+                    {title}
+                </h3>
+                {headerAction}
+            </div>
             {children}
         </div>
     );

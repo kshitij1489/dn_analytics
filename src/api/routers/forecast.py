@@ -1,20 +1,56 @@
 """
 Sales Forecast API Router
-Supports multiple forecasting algorithms: Weekday Average, Holt-Winters, Prophet.
+Supports multiple forecasting algorithms: Weekday Average, Holt-Winters, Prophet, Gaussian Process.
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from datetime import date, timedelta
-from typing import List, Dict, Any
-import pandas as pd
-import pandas as pd
-from datetime import datetime
-from src.api.routers.config import get_db_connection
-from src.core.services.weather_service import WeatherService
-from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date
-
+import logging
+import threading
 import json
 
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from datetime import timedelta, datetime
+from typing import List, Dict, Optional
+
+import pandas as pd
+
+from src.api.routers.config import get_db_connection
+from src.core.services.weather_service import WeatherService
+from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date, get_last_complete_business_date
+from src.core.utils.weather_helpers import get_rain_cat
+from src.core.learning.revenue_forecasting.gaussianprocess import RollingGPForecaster
+from src.core.learning.revenue_forecasting.weekday import forecast_weekday_avg
+from src.core.learning.revenue_forecasting.holtwinters import forecast_holt_winters
+from src.core.learning.revenue_forecasting.prophet_model import forecast_prophet
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Lock to prevent concurrent training runs.
+# NOTE: Only effective for single-worker deployments. For multi-worker (uvicorn --workers > 1),
+# use a file lock (e.g., filelock) or external coordinator to prevent model file corruption.
+_training_lock = threading.Lock()
+
+
+def _load_and_check_stale(gp: RollingGPForecaster) -> bool:
+    """
+    Load the GP model and check if it needs retraining.
+    
+    Side effect: Loads the model into `gp` if a persisted model exists.
+    
+    Returns True if:
+    - No model file exists
+    - Model's window_end is older than last complete business date
+    """
+    if not gp.load():
+        return True  # No model exists
+    
+    expected_end_str = get_last_complete_business_date()
+    expected_end = pd.Timestamp(expected_end_str)
+    
+    if gp.window_end is None or gp.window_end < expected_end:
+        logger.info(f"Model stale: window_end={gp.window_end}, expected={expected_end}")
+        return True
+    
+    return False
 
 def get_db():
     conn, _ = get_db_connection()
@@ -29,21 +65,21 @@ def sync_weather_task(city: str = "Gurugram"):
         service = WeatherService()
         service.sync_weather_data(city)
     except Exception as e:
-        print(f"Background weather sync failed: {e}")
+        logger.warning(f"Background weather sync failed: {e}")
 
-def get_rain_cat(mm):
-    if mm >= 2.5: return "heavy"
-    if mm >= 0.6: return "drizzle"
-    return "none"
-
-def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
+def get_historical_data(conn, days: int = 90, start_date: str = None, end_date: str = None) -> pd.DataFrame:
     """Fetch historical sales and weather data as a DataFrame."""
     # Use business date
     today_str = get_current_business_date()
     today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
     
-    end_date = today_date + timedelta(days=1)
-    start_date = end_date - timedelta(days=days + 1)
+    if start_date and end_date:
+        # Handle flexible date formats using pandas
+        start_dt = pd.to_datetime(start_date, dayfirst=True).date()
+        end_dt = pd.to_datetime(end_date, dayfirst=True).date()
+    else:
+        end_dt = today_date + timedelta(days=1)
+        start_dt = end_dt - timedelta(days=days + 1)
     
     # Left join orders with weather_daily
     # We aggregate orders first, then join weather
@@ -79,7 +115,7 @@ def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
         LEFT JOIN weather_daily w ON d.day = w.date AND w.city = 'Gurugram'
         ORDER BY d.day ASC
     """
-    cursor = conn.execute(query, (start_date.isoformat(), end_date.isoformat()))
+    cursor = conn.execute(query, (start_dt.isoformat(), end_dt.isoformat()))
     rows = [dict(row) for row in cursor.fetchall()]
     
     if not rows:
@@ -97,242 +133,221 @@ def get_historical_data(conn, days: int = 90) -> pd.DataFrame:
     return df
 
 
-def forecast_weekday_avg(df: pd.DataFrame, periods: int = 7) -> List[Dict]:
-    """
-    Forecast using same-weekday-last-4-weeks average.
-    Returns:
-       - Historical fitted values (rolling forecast) for the input dataframe's date range (last 30 days)
-       - Future forecast for 'periods' days.
-    """
-    results = []
-    
-    # We want to cover:
-    # 1. Historical Data (last 30 days from df)
-    # 2. Future Data (next 'periods' days)
-    
+@router.post("/train-gp")
+def trigger_gp_training(background_tasks: BackgroundTasks, conn=Depends(get_db)):
+    """Manually trigger daily rolling training for GP model."""
+    background_tasks.add_task(train_gp_task)
+    return {"message": "GP training started in background"}
 
-    # Filter df to last 30 days for clarity if passed larger df
-    today_str = get_current_business_date()
-    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+def train_gp_task():
+    """Background task for daily GP training with proper locking and error handling."""
+    # Idempotency: prevent concurrent training runs
+    if not _training_lock.acquire(blocking=False):
+        logger.warning("GP training already in progress, skipping duplicate request.")
+        return
     
-    start_date_hist = today_date - timedelta(days=30)
-    df_hist = df[df['ds'].dt.date >= start_date_hist].copy()
+    conn = None
+    try:
+        from src.api.routers.config import get_db_connection
+        conn, _ = get_db_connection()
+        logger.info("Starting Daily GP Training...")
+        
+        # Fetch enough data for lag features + 90 days window
+        df = get_historical_data(conn, days=120)
+        
+        # CRITICAL: Filter to only include complete business days
+        # Use last complete business date (yesterday relative to 5am cutoff)
+        last_complete_str = get_last_complete_business_date()
+        last_complete_date = pd.Timestamp(last_complete_str)
+        df = df[df['ds'] <= last_complete_date].copy()
+        
+        # NOTE: Do NOT filter y > 0 here! The lag features must be computed on the
+        # full calendar first (inside update_and_fit) to preserve temporal ordering.
+        # Zero-revenue days are handled inside RollingGPForecaster.update_and_fit().
+        
+        logger.info(f"Training data after date filtering: {len(df)} rows, ending at {df['ds'].max()}")
+        
+        # RollingGPForecaster handles the windowing logic (keeping last 90 days)
+        gp = RollingGPForecaster()
+        gp.update_and_fit(df)
+        
+        # ----------------------------------------------------
+        # Generate and Save Forecast Snapshot 
+        # ----------------------------------------------------
+        logger.info("Generating forecast snapshot...")
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+        
+        # Fetch actual forecast weather from weather_daily table
+        future_dates = [today_date + timedelta(days=i) for i in range(7)]
+        future_weather = pd.DataFrame({'ds': pd.to_datetime(future_dates)})
+        
+        # Try to get weather from Today's forecast_snapshot in DB
+        weather_temps = _fetch_forecast_weather(conn, today_str, future_dates)
+        future_weather['temp_max'] = weather_temps
+        
+        forecast_df = gp.predict_next_days(future_weather)
+        gp.save_daily_forecast_snapshot(conn, today_str, forecast_df)
+        
+        logger.info("Daily GP Training & Snapshot Completed.")
+        
+    except Exception as e:
+        logger.error(f"GP Training failed: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+        _training_lock.release()
+
+
+def _fetch_forecast_weather(conn, today_str: str, future_dates: list) -> list:
+    """Fetch forecast temperatures from weather_daily.forecast_snapshot or API fallback."""
+    temps = [25.0] * len(future_dates)  # Default fallback
     
-    all_dates = []
-    
-    # Add historical dates
-    for d in df_hist['ds'].dt.date:
-        all_dates.append(d)
+    try:
+        # Query today's forecast snapshot from weather_daily
+        cursor = conn.execute("""
+            SELECT forecast_snapshot FROM weather_daily 
+            WHERE date = ? AND city = 'Gurugram'
+        """, (today_str,))
+        row = cursor.fetchone()
         
-    # Add future dates
-    end_date = today_date
-    for i in range(periods):
-        all_dates.append(end_date + timedelta(days=i))
-        
-    # Compute rolling avg for each target date
-    for target_date in all_dates:
-        # Looking back 4 weeks from THIS target date
-        past_weekdays = [target_date - timedelta(weeks=w) for w in range(1, 5)]
-        
-        # Filter usage/training data (must be STRICTLY BEFORE target_date)
-        # We can use the full input 'df' (history) to find these past values
-        mask = df['ds'].dt.date.isin(past_weekdays)
-        subset = df[mask]
-        
-        if len(subset) > 0:
-            avg_revenue = subset['y'].mean()
-            avg_orders = subset['orders'].mean()
+        if row and row[0]:
+            snapshot = json.loads(row[0])
+            times = snapshot.get('time', [])
+            snapshot_temps = snapshot.get('temperature_2m_max', [])
+            
+            # Build date->temp lookup
+            temp_lookup = {t: snapshot_temps[i] for i, t in enumerate(times) if i < len(snapshot_temps)}
+            
+            loaded_count = 0
+            for i, dt in enumerate(future_dates):
+                date_key = dt.strftime('%Y-%m-%d')
+                if date_key in temp_lookup:
+                    temps[i] = temp_lookup[date_key]
+                    loaded_count += 1
+                    
+            logger.info(f"Loaded {loaded_count} forecast temps from DB snapshot.")
         else:
-            avg_revenue = 0
-            avg_orders = 0
+            logger.warning(f"No weather snapshot found for {today_str}, using default temps.")
             
-        results.append({
-            "date": target_date.isoformat(),
-            "revenue": float(avg_revenue),
-            "orders": round(float(avg_orders))
-        })
-    
-    # Deduplicate by date (just in case), though specific logic above avoids it if input df is clean.
-    # Actually, simplistic list append is fine.
-    
-    return results
+    except Exception as e:
+        logger.warning(f"Failed to fetch forecast weather: {e}, using defaults.")
+        
+    return temps
 
-
-def forecast_holt_winters(df: pd.DataFrame, periods: int = 7) -> Dict:
+@router.get("/replay")
+def get_forecast_replay(run_date: str, conn=Depends(get_db)):
     """
-    Returns dict with results (Historical Fitted + Future) and error if any.
+    Returns the forecast snapshot generated on 'run_date' 
+    AND the actual revenue that occurred on those target dates.
+    """
+    # Validate run_date format
+    try:
+        datetime.strptime(run_date, '%Y-%m-%d')
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: '{run_date}'. Expected YYYY-MM-DD.")
+    
+    try:
+        # 1. Fetch Forecast Snapshot (include pred_std and model window metadata)
+        cursor = conn.execute("""
+            SELECT target_date, pred_mean, pred_std, lower_95, upper_95, 
+                   model_window_start, model_window_end
+            FROM forecast_snapshots
+            WHERE forecast_run_date = ?
+            ORDER BY target_date ASC
+        """, (run_date,))
+        
+        forecast_rows = []
+        target_dates = []
+        model_window: Optional[Dict] = None
+        
+        for row in cursor.fetchall():
+            target_dates.append(row[0])  # string 'YYYY-MM-DD'
+            forecast_rows.append({
+                "date": row[0],
+                "pred_mean": row[1],
+                "pred_std": row[2],
+                "lower_95": row[3],
+                "upper_95": row[4]
+            })
+            if model_window is None and (row[5] or row[6]):
+                model_window = {"start": row[5], "end": row[6]}
+            
+        # 2. Fetch Actuals for those dates
+        actuals_map = {}
+        if target_dates:
+            placeholders = ','.join(['?'] * len(target_dates))
+            q_actuals = f"""
+                SELECT 
+                    {BUSINESS_DATE_SQL} as sale_date,
+                    SUM(total) as revenue
+                FROM orders
+                WHERE order_status = 'Success'
+                AND {BUSINESS_DATE_SQL} IN ({placeholders})
+                GROUP BY 1
+            """
+            cur_act = conn.execute(q_actuals, target_dates)
+            for row in cur_act.fetchall():
+                actuals_map[row[0]] = float(row[1])
+                
+        # 3. Combine
+        results = []
+        for item in forecast_rows:
+            dt = item['date']
+            results.append({
+                "date": dt,
+                "pred_mean": item['pred_mean'],
+                "pred_std": item['pred_std'],
+                "lower_95": item['lower_95'],
+                "upper_95": item['upper_95'],
+                "actual_revenue": actuals_map.get(dt, None)  # Null if not occurred yet
+            })
+            
+        return {
+            "data": results,
+            "model_window": model_window
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Replay endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+def forecast_gp(future_weather: pd.DataFrame) -> List[Dict]:
+    """
+    Generates GP forecast using the persistent trained model.
+    
+    If model is stale, triggers background training and returns empty result.
+    GP data will be available on next page load/refresh.
     """
     try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        gp = RollingGPForecaster()
         
-        if len(df) < 14:
-            today_str = get_current_business_date()
-            today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-            return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": "Not enough data"}
+        # Check if model is stale or missing
+        if _load_and_check_stale(gp):
+            # Trigger training in background thread (non-blocking)
+            logger.info("GP model is stale or missing, triggering background training...")
+            threading.Thread(target=train_gp_task, daemon=True).start()
+            return []  # GP unavailable this request cycle
         
-        # Prepare time series with proper date range
-        df_copy = df.copy()
-        df_copy = df_copy.set_index('ds')
-        
-        # Create a complete date range and reindex
-        full_range = pd.date_range(start=df_copy.index.min(), end=df_copy.index.max(), freq='D')
-        ts = df_copy['y'].reindex(full_range).fillna(0)
-        
-        # Fit Holt-Winters model with weekly seasonality
-        model = ExponentialSmoothing(
-            ts,
-            seasonal_periods=7,
-            trend='add',
-            seasonal='add',
-            damped_trend=True
-        )
-        fitted = model.fit(optimized=True)
-        
-        # Forecast future
-        forecast = fitted.forecast(periods)
+        # Model is loaded and up-to-date, generate predictions
+        forecast_df = gp.predict_next_days(future_weather)
         
         results = []
-        
-        # 1. Historical Fitted Values (Last 30 days)
-        today_str = get_current_business_date()
-        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        start_date_hist = pd.Timestamp(today_date - timedelta(days=30))
-        # Filter fitted values to >= 30 days ago
-        fitted_hist = fitted.fittedvalues[fitted.fittedvalues.index >= start_date_hist]
-        
-        for idx, val in fitted_hist.items():
+        for _, row in forecast_df.iterrows():
             results.append({
-                "date": idx.strftime('%Y-%m-%d'),
-                "revenue": max(0, float(val)),
-                "orders": 0
+                "date": row['ds'].strftime('%Y-%m-%d'),
+                "revenue": max(0, float(row['pred_mean'])),
+                "orders": 0, # GP doesn't predict orders yet
+                "gp_lower": max(0, float(row['lower'])),
+                "gp_upper": max(0, float(row['upper']))
             })
             
-        # 2. Future Forecast
-        for idx, val in forecast.items():
-            results.append({
-                "date": idx.strftime('%Y-%m-%d'),
-                "revenue": max(0, float(val)), 
-                "orders": 0
-            })
-        
-        return {"data": results, "error": None}
+        return results
     except Exception as e:
-        today_str = get_current_business_date()
-        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0} for i in range(periods)], "error": str(e)}
-
-def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
-    try:
-        from prophet import Prophet
-        import logging
-        logging.getLogger('prophet').setLevel(logging.WARNING)
-        logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
-        
-        if len(df) < 14:
-             today_str = get_current_business_date()
-             today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-             return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": "Not enough data"}
-        
-        # Filter training data to exclude Today (as it's incomplete)
-        # But we keep full 'df' to access Today's forecast snapshot
-        today_str = get_current_business_date()
-        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        
-        train_df = df[df['ds'].dt.date < today_date].copy()
-        prophet_df = train_df[['ds', 'y', 'temp_max', 'rain_sum']]
-        
-        model = Prophet(
-            weekly_seasonality=True,
-            daily_seasonality=False,
-            yearly_seasonality=False,
-            changepoint_prior_scale=0.05
-        )
-        model.add_regressor('temp_max')
-        model.add_regressor('rain_sum')
-        model.fit(prophet_df)
-        
-        # periods + 1 because make_future_dataframe starts from the last date in train_df (Yesterday)
-        # So period=1 is Today. period=7 is Today + 6 days.
-        future = model.make_future_dataframe(periods=periods)
-        
-        # 1. Merge historical regressors
-        future = future.merge(df[['ds', 'temp_max', 'rain_sum']], on='ds', how='left')
-        
-        # 2. Fill future NaNs with Snapshot data from TODAY's row
-        # This is CRITICAL because our DB only has data up to Today. 
-        # Future 7 days depend on the forecast snapshot stored in today's row.
-        # NOTE: df.iloc[-1] might be tomorrow (empty row), so we explicitly look up today.
-        
-        # today_str is already set above
-        today_rows = df[df['ds'].dt.strftime('%Y-%m-%d') == today_str]
-        
-        snapshot_str = None
-        if not today_rows.empty:
-            today_row = today_rows.iloc[0]
-            snapshot_str = today_row['forecast_snapshot'] if 'forecast_snapshot' in today_row.index else None
-        
-        if pd.notna(snapshot_str) and snapshot_str:
-            try:
-                snapshot = json.loads(snapshot_str)
-                times = snapshot.get('time', [])
-                temps = snapshot.get('temperature_2m_max', [])
-                rains = snapshot.get('precipitation_sum', []) # precipitation_sum includes rain+showers
-                
-                for i, t_str in enumerate(times):
-                    # Update rows where ds matches (and is mostly likely NaN if it's future)
-                    # We iterate through snapshot dates and fill 'future' dataframe
-                    mask = (future['ds'].dt.strftime('%Y-%m-%d') == t_str)
-                    if mask.any():
-                        future.loc[mask, 'temp_max'] = future.loc[mask, 'temp_max'].fillna(temps[i])
-                        future.loc[mask, 'rain_sum'] = future.loc[mask, 'rain_sum'].fillna(rains[i])
-            except Exception as e:
-                print(f"Error parsing forecast parsing: {e}")
-                
-        # Fill any remaining NaNs (fallback)
-        future['temp_max'] = future['temp_max'].ffill().fillna(25.0)
-        future['rain_sum'] = future['rain_sum'].fillna(0)
-        
-        forecast = model.predict(future)
-        
-        # We need to return:
-        # 1. Historical Fitted Values (Last 30 days)
-        # 2. Future Forecasts (Today ... +6 days)
-        
-        start_date_hist = pd.Timestamp(today_date - timedelta(days=30))
-        # Filter: ds >= 30 days ago
-        forecast_period = forecast[forecast['ds'] >= start_date_hist]
-        
-        
-        results = []
-        for idx, row in forecast_period.iterrows():
-            # Get the corresponding future inputs to return them
-            date_str = row['ds'].strftime('%Y-%m-%d')
-            
-            # Find input weather for this date from 'future' df (which has merged/snapshot data)
-            # Efficient lookup:
-            mask = (future['ds'] == row['ds'])
-            if mask.any():
-                input_row = future[mask].iloc[0]
-                temp = float(input_row['temp_max'])
-                rain_val = float(input_row['rain_sum'])
-            else:
-                temp = 0.0
-                rain_val = 0.0
-            
-            results.append({
-                "date": date_str,
-                "revenue": max(0, float(row['yhat'])),
-                "orders": 0,
-                "temp_max": temp,
-                "rain_category": get_rain_cat(rain_val)
-            })
-        
-        return {"data": results, "error": None}
-    except Exception as e:
-        today_str = get_current_business_date()
-        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        return {"data": [{"date": (today_date + timedelta(days=i)).isoformat(), "revenue": 0, "orders": 0, "temp_max": 0, "rain_category": "none"} for i in range(periods)], "error": str(e)}
-
+        logger.warning(f"GP Forecast error: {e}")
+        return []
 
 @router.get("/")
 def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
@@ -389,6 +404,15 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         total_projected_revenue = sum(f['revenue'] for f in future_weekday)
         total_projected_orders = sum(f['orders'] for f in future_weekday)
         
+        # Gaussian Process Forecast (Rolling)
+        # Prepare future weather dataframe for GP
+        # We can reuse Prophet's future dataframe logic or built it simply
+        future_weather_gp = pd.DataFrame({
+            'ds': pd.to_datetime([f['date'] for f in forecast_hw[-7:]]), # Last 7 days are future
+            'temp_max': [f.get('temp_max', 25) for f in forecast_proph[-7:]] # Use prophet's filled weather or default
+        })
+        forecast_gp_res = forecast_gp(future_weather_gp)
+
         return {
             "summary": {
                 "generated_at": today_str,
@@ -399,7 +423,8 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
             "forecasts": {
                 "weekday_avg": forecast_weekday,
                 "holt_winters": forecast_hw,
-                "prophet": forecast_proph
+                "prophet": forecast_proph,
+                "gp": forecast_gp_res
             },
             "debug_info": {
                 "holt_winters_error": hw_res.get("error"),
@@ -407,5 +432,5 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
             }
         }
     except Exception as e:
-        print(f"Forecast generation error: {e}")
+        logger.error(f"Forecast generation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

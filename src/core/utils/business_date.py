@@ -35,6 +35,24 @@ def get_current_business_date() -> str:
     return now.date().isoformat()
 
 
+def get_last_complete_business_date() -> str:
+    """
+    Get the last fully completed business date (safe for training).
+    
+    The current business day is still in progress, so we return
+    one day before the current business date.
+    
+    Example:
+        If now is Feb 8, 17:30 (after 5am), current business date is Feb 8.
+        Last complete business date is Feb 7.
+        
+        If now is Feb 9, 03:00 (before 5am), current business date is Feb 8.
+        Last complete business date is Feb 7.
+    """
+    current_bd = datetime.fromisoformat(get_current_business_date())
+    return (current_bd - timedelta(days=1)).date().isoformat()
+
+
 def get_business_date_from_datetime(dt: datetime) -> str:
     """
     Convert any datetime object to its corresponding business date string (YYYY-MM-DD).

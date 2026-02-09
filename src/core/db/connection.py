@@ -1,7 +1,10 @@
 import sqlite3
 import os
 
-DB_PATH = "analytics.db"
+# Resolve absolute path to analytics.db (in project root)
+# src/core/db/connection.py -> src/core/db -> src/core -> src -> project_root
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+DB_PATH = os.path.join(BASE_DIR, "analytics.db")
 
 def get_db_connection(db_url=None):
     """
