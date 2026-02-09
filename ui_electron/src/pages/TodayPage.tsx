@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { endpoints } from '../api';
-import { ResizableTableWrapper, LoadingSpinner, Card } from '../components';
+import { ResizableTableWrapper, LoadingSpinner, Card, DateSelector } from '../components';
 import './TodayPage.css';
 
 interface SourceData {
@@ -29,6 +29,16 @@ interface Customer {
     history_spent: number;
 }
 
+interface Order {
+    order_id: number;
+    petpooja_order_id: number;
+    customer_name: string;
+    order_items: string[];
+    total: number;
+    time: string;
+    source: string;
+}
+
 interface SummaryData {
     date: string;
     total_revenue: number;
@@ -46,25 +56,50 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
     const [summary, setSummary] = useState<SummaryData | null>(null);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [customers, setCustomers] = useState<Customer[]>([]);
+    const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // Date selection: empty string = use backend's current business date (default)
+    // Non-empty = user explicitly selected a date
+    const [selectedDate, setSelectedDate] = useState<string>('');
+
+    // Max date for the picker (today in local timezone)
+    const maxDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD format
+
+    // Ref to skip the redundant refetch when syncing the backend's business date
+    const isInitialSync = useRef(false);
+
     useEffect(() => {
+        if (isInitialSync.current) {
+            isInitialSync.current = false;
+            return;
+        }
         loadData();
-    }, [lastDbSync]);
+    }, [lastDbSync, selectedDate]);
 
     const loadData = async () => {
         setLoading(true);
         setError(null);
         try {
-            const [summaryRes, itemsRes, customersRes] = await Promise.all([
-                endpoints.today.getSummary(),
-                endpoints.today.getMenuItems(),
-                endpoints.today.getCustomers()
+            // Only send date param if user explicitly selected one
+            const params = selectedDate ? { date: selectedDate } : undefined;
+            const [summaryRes, itemsRes, customersRes, ordersRes] = await Promise.all([
+                endpoints.today.getSummary(params),
+                endpoints.today.getMenuItems(params),
+                endpoints.today.getCustomers(params),
+                endpoints.today.getOrders(params)
             ]);
             setSummary(summaryRes.data);
             setMenuItems(itemsRes.data.items || []);
             setCustomers(customersRes.data.customers || []);
+            setOrders(ordersRes.data.orders || []);
+
+            // Sync the date picker with the backend's business date on first load
+            if (!selectedDate && summaryRes.data.date) {
+                isInitialSync.current = true;
+                setSelectedDate(summaryRes.data.date);
+            }
         } catch (e: any) {
             console.error('Failed to load today data:', e);
             setError(e.message || 'Failed to load data');
@@ -89,7 +124,7 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
         return (
             <div className="today-loading">
                 <LoadingSpinner />
-                <p>Loading today's data...</p>
+                <p>Loading business day data...</p>
             </div>
         );
     }
@@ -108,7 +143,12 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
             {/* Header */}
             <div className="today-header">
                 <h1>📅 Business Day Snapshot</h1>
-                <span className="today-date">{summary?.date} <span style={{ fontSize: '0.6em', opacity: 0.8 }}>(5 AM - 5 AM)</span></span>
+                <DateSelector
+                    value={selectedDate}
+                    displayValue={summary?.date || selectedDate}
+                    onChange={setSelectedDate}
+                    maxDate={maxDate}
+                />
             </div>
 
             {/* KPI Cards */}
@@ -151,7 +191,7 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         </div>
                     ))}
                     {(!summary?.sources || summary.sources.length === 0) && (
-                        <p className="today-empty">No orders yet today</p>
+                        <p className="today-empty">No orders for this date</p>
                     )}
                 </div>
             </Card>
@@ -190,12 +230,12 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         </table>
                     </ResizableTableWrapper>
                 ) : (
-                    <p className="today-empty">No items sold yet today</p>
+                    <p className="today-empty">No items sold on this date</p>
                 )}
             </Card>
 
             {/* Customer List */}
-            <Card title="👥 Customers Today">
+            <Card title="👥 Customers">
                 {customers.length > 0 ? (
                     <ResizableTableWrapper>
                         <table className="standard-table">
@@ -246,7 +286,61 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         </table>
                     </ResizableTableWrapper>
                 ) : (
-                    <p className="today-empty">No customers yet today</p>
+                    <p className="today-empty">No customers on this date</p>
+                )}
+            </Card>
+
+            {/* Orders List */}
+            <Card title="🧾 Orders">
+                {orders.length > 0 ? (
+                    <ResizableTableWrapper>
+                        <table className="standard-table">
+                            <thead>
+                                <tr>
+                                    <th>Customer</th>
+                                    <th>Order Items</th>
+                                    <th className="text-right">Total</th>
+                                    <th>Order ID</th>
+                                    <th>Time</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {orders.map((order) => (
+                                    <tr key={order.order_id}>
+                                        <td>{order.customer_name}</td>
+                                        <td>
+                                            <div className="items-list">
+                                                {order.order_items.slice(0, 5).map((item, i) => (
+                                                    <span
+                                                        key={i}
+                                                        className={`item-chip ${item.endsWith('-Repeat') ? 'repeat-item' : ''}`}
+                                                    >
+                                                        {item}
+                                                    </span>
+                                                ))}
+                                                {order.order_items.length > 5 && (
+                                                    <span className="item-more">+{order.order_items.length - 5} more</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="text-right">{formatCurrency(order.total)}</td>
+                                        <td>{order.petpooja_order_id}</td>
+                                        <td>{order.time}</td>
+                                        <td>
+                                            <span
+                                                className="source-dot"
+                                                style={{ backgroundColor: getSourceColor(order.source) }}
+                                            />
+                                            {order.source}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </ResizableTableWrapper>
+                ) : (
+                    <p className="today-empty">No orders on this date</p>
                 )}
             </Card>
         </div>

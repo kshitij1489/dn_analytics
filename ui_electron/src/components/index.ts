@@ -13,4 +13,5 @@ export { Pagination } from './Pagination';
 export { LoadingSpinner, LoadingText } from './LoadingSpinner';
 export { ActionButton } from './ActionButton';
 export { Select, createOptions } from './Select';
+export { DateSelector } from './DateSelector';
 

@@ -4,6 +4,8 @@ import { endpoints } from '../api';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
+import { CustomerProfile } from '../components/CustomerProfile';
+
 
 // --- Shared Components (Duplicated from Menu for now to keep independent) ---
 
@@ -43,10 +45,12 @@ function exportToCSV(data: any[], filename: string, headers?: string[]) {
 function ResizableTableWrapper({
     children,
     onExportCSV,
+    leftContent,
     defaultHeight = 600
 }: {
     children: React.ReactNode;
     onExportCSV?: () => void;
+    leftContent?: React.ReactNode;
     defaultHeight?: number;
 }) {
     const [width, setWidth] = useState(1000);
@@ -68,9 +72,11 @@ function ResizableTableWrapper({
         <div ref={containerRef} style={{ width: '100%', marginBottom: '20px' }}>
             <div style={{
                 display: 'flex',
-                justifyContent: 'flex-end',
+                justifyContent: 'space-between',
+                alignItems: 'center',
                 marginBottom: '10px',
             }}>
+                <div>{leftContent}</div>
                 {onExportCSV && (
                     <button
                         onClick={onExportCSV}
@@ -145,7 +151,7 @@ function ResizableTableWrapper({
 }
 
 // --- Generic Table Component ---
-function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string, lastDbSync?: number }) {
+function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, leftContent }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string, lastDbSync?: number, leftContent?: React.ReactNode }) {
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -232,10 +238,13 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }
     const finalColumns = displayColumns.filter(col => data.length === 0 || data[0].hasOwnProperty(col));
 
     return (
-        <div style={{ marginTop: '20px' }}>
+        <div style={{ marginTop: '0' }}>
 
             {loading ? <div>Loading...</div> : (
-                <ResizableTableWrapper onExportCSV={() => exportToCSV(data, title.toLowerCase().replace(' ', '_'), finalColumns)}>
+                <ResizableTableWrapper
+                    onExportCSV={() => exportToCSV(data, title.toLowerCase().replace(' ', '_'), finalColumns)}
+                    leftContent={leftContent}
+                >
                     <table className="standard-table">
                         <thead>
                             <tr>
@@ -291,6 +300,8 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync }
 
 export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'customers' | 'restaurants' | 'taxes' | 'discounts'>('orders');
+    const [customerViewMode, setCustomerViewMode] = useState<'overview' | 'profile'>('overview');
+
 
     const tabs = [
         { id: 'orders', label: '🛒 Orders' },
@@ -332,7 +343,55 @@ export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
 
             {activeTab === 'orders' && <GenericTable title="Orders" apiCall={endpoints.orders.orders} defaultSort="created_on" lastDbSync={lastDbSync} />}
             {activeTab === 'items' && <GenericTable title="Order Items" apiCall={endpoints.orders.items} defaultSort="created_at" lastDbSync={lastDbSync} />}
-            {activeTab === 'customers' && <GenericTable title="Customers" apiCall={endpoints.orders.customers} defaultSort="last_order_date" lastDbSync={lastDbSync} />}
+            {activeTab === 'customers' && (
+                <div>
+                    {customerViewMode === 'overview' ? (
+                        <GenericTable
+                            title="Customers"
+                            apiCall={endpoints.orders.customers}
+                            defaultSort="last_order_date"
+                            lastDbSync={lastDbSync}
+                            leftContent={
+                                <div className="segmented-control">
+                                    <button
+                                        onClick={() => setCustomerViewMode('overview')}
+                                        className="segmented-btn-active"
+                                    >
+                                        Overview
+                                    </button>
+                                    <button
+                                        onClick={() => setCustomerViewMode('profile')}
+                                        className="segmented-btn-inactive"
+                                    >
+                                        Profile Search
+                                    </button>
+                                </div>
+                            }
+                        />
+                    ) : (
+                        <CustomerProfile
+                            headerActions={
+                                <div className="segmented-control">
+                                    <button
+                                        onClick={() => setCustomerViewMode('overview')}
+                                        className="segmented-btn-inactive"
+                                    >
+                                        Overview
+                                    </button>
+                                    <button
+                                        onClick={() => setCustomerViewMode('profile')}
+                                        className="segmented-btn-active"
+                                    >
+                                        Profile Search
+                                    </button>
+                                </div>
+                            }
+                        />
+                    )}
+                </div>
+            )}
+
+
             {activeTab === 'restaurants' && <GenericTable title="Restaurants" apiCall={endpoints.orders.restaurants} defaultSort="restaurant_id" lastDbSync={lastDbSync} />}
             {activeTab === 'taxes' && <GenericTable title="Taxes" apiCall={endpoints.orders.taxes} defaultSort="created_at" lastDbSync={lastDbSync} />}
             {activeTab === 'discounts' && <GenericTable title="Discounts" apiCall={endpoints.orders.discounts} defaultSort="created_at" lastDbSync={lastDbSync} />}

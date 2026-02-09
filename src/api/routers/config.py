@@ -167,6 +167,31 @@ def update_config(data: ConfigUpdate):
     finally:
         conn.close()
 
+class PetpoojaSyncRequest(BaseModel):
+    api_key: str
+
+@router.post("/petpooja-sync")
+def petpooja_sync(data: PetpoojaSyncRequest):
+    """Proxy request to Petpooja to bypass CORS"""
+    import requests
+    
+    url = "https://webhooks.db1-prod-dachnona.store/webhooks/petpooja/sync_petpooja_for_today/"
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": data.api_key
+    }
+    
+    try:
+        resp = requests.post(url, json={}, headers=headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response else 500
+        detail = e.response.json() if e.response else str(e)
+        raise HTTPException(status_code=status_code, detail=detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/reset-db")
 def reset_db_section(data: Dict[str, str]):
     """Placeholder for resetting a specific database section"""

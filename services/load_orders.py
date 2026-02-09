@@ -564,10 +564,10 @@ def main():
     elif args.incremental:
         last_id = get_last_stream_id(conn)
         print(f"  Fetching orders after stream_id {last_id}")
-        orders = fetch_stream_raw(endpoint="orders", start_cursor=last_id)
+        orders, _ = fetch_stream_raw(conn, endpoint="orders", start_cursor=last_id)
     else:
         print("  Fetching all orders...")
-        orders, _ = fetch_stream_raw(endpoint="orders", max_records=args.limit)
+        orders, _ = fetch_stream_raw(conn, endpoint="orders", max_records=args.limit)
     
     if not orders:
         print("No orders to load.")

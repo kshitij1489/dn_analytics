@@ -175,3 +175,101 @@ def fetch_brand_awareness(conn, granularity: str = 'day'):
     rows = [dict(row) for row in cursor.fetchall()]
     return rows
 
+
+def search_customers(conn, query_str: str, limit: int = 20):
+    """
+    Search customers by name or phone.
+    Returns list of dicts.
+    """
+    # SQLite LIKE is case-insensitive for ASCII by default, but good to be explicit with UPPER if needed
+    # CAST(phone AS TEXT) handles numeric phone storage if any
+    sql = """
+        SELECT 
+            customer_id,
+            name,
+            phone,
+            total_spent,
+            last_order_date
+        FROM customers
+        WHERE 
+            name LIKE ? 
+            OR CAST(phone AS TEXT) LIKE ?
+            OR CAST(customer_id AS TEXT) LIKE ?
+        ORDER BY last_order_date DESC
+        LIMIT ?
+    """
+    search_term = f"%{query_str}%"
+    cursor = conn.execute(sql, (search_term, search_term, search_term, limit))
+    results = [dict(row) for row in cursor.fetchall()]
+    # Fix: Ensure customer_id is a string for Pydantic validation
+    for r in results:
+        r['customer_id'] = str(r['customer_id'])
+    return results
+
+
+def fetch_customer_profile_data(conn, customer_id: str):
+    """
+    Fetch customer details and their order history with item summaries.
+    """
+    # 1. Get Customer Details
+    cust_sql = """
+        SELECT 
+            customer_id,
+            name,
+            phone,
+            total_spent,
+            last_order_date,
+            is_verified
+        FROM customers
+        WHERE customer_id = ?
+    """
+    cursor = conn.execute(cust_sql, (customer_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None, None
+        
+    customer = dict(row)
+    customer['customer_id'] = str(customer['customer_id'])
+    customer['is_verified'] = bool(customer['is_verified'])
+
+    # 2. Get Orders with Item Summary
+    # We need to aggregate items per order. 
+    # SQLite group_concat is useful here.
+    orders_sql = """
+        WITH order_items_summary AS (
+            SELECT 
+                oi.order_id,
+                GROUP_CONCAT(mi.name || ' (' || oi.quantity || ')', ', ') as items_summary
+            FROM order_items oi
+            JOIN menu_items mi ON oi.menu_item_id = mi.menu_item_id
+            WHERE oi.order_id IN (
+                SELECT order_id FROM orders WHERE customer_id = ?
+            )
+            GROUP BY oi.order_id
+        )
+        SELECT 
+            o.order_id,
+            COALESCE(o.petpooja_order_id, o.order_id) as order_number,
+            o.created_on,
+            o.total as total_amount,
+            COALESCE(o.order_from, 'Unknown') as order_source,
+            o.order_status as status,
+            c.is_verified,
+            COALESCE(ois.items_summary, 'No Items') as items_summary
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+        LEFT JOIN order_items_summary ois ON o.order_id = ois.order_id
+        WHERE o.customer_id = ?
+        ORDER BY o.created_on DESC
+    """
+    
+    cursor = conn.execute(orders_sql, (customer_id, customer_id))
+    orders = [dict(row) for row in cursor.fetchall()]
+    
+    # SQLite booleans are 0/1, and IDs might be ints
+    for o in orders:
+        o['order_id'] = str(o['order_id'])
+        o['order_number'] = str(o['order_number'])
+        o['is_verified'] = bool(o['is_verified'])
+
+    return customer, orders

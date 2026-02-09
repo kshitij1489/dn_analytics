@@ -5,11 +5,13 @@ Provides paginated views for orders, order items, customers, restaurants, etc.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional
+from typing import Optional, List
 import json
-from src.core.queries import table_queries
+from src.core.queries import table_queries, customer_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
+from src.api.models import CustomerSearchResponse, CustomerProfileResponse, CustomerProfileOrder
+
 
 router = APIRouter()
 
@@ -51,3 +53,24 @@ create_table_endpoint(router, "/customers-view", "customers", "last_order_date")
 create_table_endpoint(router, "/restaurants-view", "restaurants", "restaurant_id")
 create_table_endpoint(router, "/taxes-view", "order_taxes", "created_at")
 create_table_endpoint(router, "/discounts-view", "order_discounts", "created_at")
+
+
+@router.get("/customers/search", response_model=List[CustomerSearchResponse])
+def search_customers(q: str, conn=Depends(get_db)):
+    """Search for customers by name or phone"""
+    results = customer_queries.search_customers(conn, q)
+    return results
+
+
+@router.get("/customers/{customer_id}/profile", response_model=CustomerProfileResponse)
+def get_customer_profile(customer_id: str, conn=Depends(get_db)):
+    """Get complete customer profile and order history"""
+    customer, orders = customer_queries.fetch_customer_profile_data(conn, customer_id)
+    
+    if not customer:
+        raise HTTPException(404, "Customer not found")
+        
+    return {
+        "customer": customer,
+        "orders": orders
+    }

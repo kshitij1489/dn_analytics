@@ -11,18 +11,28 @@
 
 .forecast-segmented-control {
     display: flex;
-    gap: 10px;
+    background: #E5E7EB;
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    gap: 2px;
 }
 
 .model-toggle-group {
     display: flex;
-    gap: 8px;
+    background: #E5E7EB;
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    gap: 2px;
 }
 
+/* Larger buttons for this page - keep as is */
 .model-toggle-group button {
     font-size: 0.85em;
     padding: 6px 12px;
 }
+
 
 .forecast-placeholder {
     text-align: center;

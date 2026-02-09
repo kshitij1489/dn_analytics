@@ -185,12 +185,14 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                     <TabButton
                         active={activeTab === 'forecast'}
                         onClick={() => setActiveTab('forecast')}
+                        variant="segmented"
                     >
                         📈 Sales Forecast
                     </TabButton>
                     <TabButton
                         active={activeTab === 'menu'}
                         onClick={() => setActiveTab('menu')}
+                        variant="segmented"
                     >
                         Menu Items
                     </TabButton>
@@ -226,24 +228,28 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                                 <TabButton
                                     active={activeModels.includes('weekday_avg')}
                                     onClick={() => toggleModel('weekday_avg')}
+                                    variant="segmented"
                                 >
                                     Weekday Avg
                                 </TabButton>
                                 <TabButton
                                     active={activeModels.includes('holt_winters')}
                                     onClick={() => toggleModel('holt_winters')}
+                                    variant="segmented"
                                 >
                                     Holt-Winters
                                 </TabButton>
                                 <TabButton
                                     active={activeModels.includes('prophet')}
                                     onClick={() => toggleModel('prophet')}
+                                    variant="segmented"
                                 >
                                     Prophet
                                 </TabButton>
                                 <TabButton
                                     active={activeModels.includes('gp')}
                                     onClick={() => toggleModel('gp')}
+                                    variant="segmented"
                                 >
                                     GP
                                 </TabButton>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
-import { ResizableTableWrapper } from '../components/ResizableTableWrapper';
+import { ResizableTableWrapper, TabButton, KPICard } from '../components';
 import { exportToCSV } from '../utils/csv';
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState('dailySales');
@@ -35,13 +35,34 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
                 <KPICard title="Customers" value={kpis?.total_customers?.toLocaleString() || 0} />
             </div>
 
-            <hr style={{ margin: '30px 0', border: 'none', borderTop: '1px solid #333' }} />
+            <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
 
             {/* Tabs */}
-            <div style={{ marginBottom: '20px' }}>
-                <TabButton active={activeTab === 'dailySales'} onClick={() => setActiveTab('dailySales')}>📅 Daily Sales</TabButton>
-                <TabButton active={activeTab === 'menu'} onClick={() => setActiveTab('menu')}>🗓️ Menu Items</TabButton>
-                <TabButton active={activeTab === 'customer'} onClick={() => setActiveTab('customer')}>👥 Customer</TabButton>
+            <div className="segmented-control" style={{ marginBottom: '8px', width: 'fit-content' }}>
+                <TabButton
+                    active={activeTab === 'dailySales'}
+                    onClick={() => setActiveTab('dailySales')}
+                    variant="segmented"
+                    size="large"
+                >
+                    Daily Sales
+                </TabButton>
+                <TabButton
+                    active={activeTab === 'menu'}
+                    onClick={() => setActiveTab('menu')}
+                    variant="segmented"
+                    size="large"
+                >
+                    Menu Items
+                </TabButton>
+                <TabButton
+                    active={activeTab === 'customer'}
+                    onClick={() => setActiveTab('customer')}
+                    variant="segmented"
+                    size="large"
+                >
+                    Customer
+                </TabButton>
             </div>
 
             {/* Tab Content */}
@@ -53,34 +74,6 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
 }
 
 
-function KPICard({ title, value }: { title: string, value: string | number }) {
-    return (
-        <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
-            <h3 style={{ margin: '0 0 10px 0', color: 'var(--text-secondary)', fontSize: '0.9em' }}>{title}</h3>
-            <div style={{ fontSize: '1.8em', fontWeight: 'bold', color: 'var(--accent-color)' }}>{value}</div>
-        </div>
-    );
-}
-
-function TabButton({ children, active, onClick }: { children: React.ReactNode, active: boolean, onClick: () => void }) {
-    return (
-        <button
-            onClick={onClick}
-            style={{
-                marginRight: '10px',
-                background: active ? 'var(--accent-color)' : 'var(--button-bg)',
-                color: active ? 'white' : 'var(--button-text)',
-                border: active ? 'none' : '1px solid var(--border-color)',
-                padding: '8px 16px',
-                borderRadius: '8px', /* Rounded iOS buttons */
-                cursor: 'pointer',
-                fontWeight: '500'
-            }}
-        >
-            {children}
-        </button>
-    );
-}
 
 function DailySalesTab({ lastDbSync }: { lastDbSync?: number }) {
     const [data, setData] = useState<any[]>([]);
@@ -296,7 +289,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 
     return (
         <div>
-            <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', gap: '15px', marginBottom: '8px' }}>
                 <input
                     type="text"
                     placeholder="Search Item..."
@@ -313,7 +306,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                 </select>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '20px', marginBottom: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <label>Start:</label>
                     <input
@@ -493,50 +486,31 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             {/* KPIs */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '20px' }}>
                 <KPICard title="Total Customers" value={reorderRate?.total_customers?.toLocaleString() || 0} />
                 <KPICard title="Returning Customers" value={reorderRate?.returning_customers?.toLocaleString() || 0} />
                 <KPICard title="Return Rate" value={`${reorderRate?.reorder_rate?.toFixed(1) || 0}%`} />
             </div>
 
-            <hr style={{ margin: '30px 0', border: 'none', borderTop: '1px solid #333' }} />
+            <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
 
             {/* View Toggle */}
-            <div style={{ marginBottom: '20px' }}>
-                <button
+            <div className="segmented-control" style={{ marginBottom: '8px', width: 'fit-content' }}>
+                <TabButton
+                    active={customerView === 'loyalty'}
                     onClick={() => setCustomerView('loyalty')}
-                    style={{
-                        padding: '10px 20px',
-                        marginRight: '10px',
-                        background: customerView === 'loyalty' ? '#EF4444' : 'var(--card-bg)',
-                        color: customerView === 'loyalty' ? 'white' : 'var(--text-color)',
-                        border: customerView === 'loyalty' ? 'none' : '1px solid var(--border-color)',
-                        borderRadius: '12px',
-                        cursor: 'pointer',
-                        fontWeight: '500',
-                        transition: 'all 0.2s'
-                    }}
+                    variant="segmented"
                 >
                     🔄 Customer Retention
-                </button>
-                <button
+                </TabButton>
+                <TabButton
+                    active={customerView === 'top'}
                     onClick={() => setCustomerView('top')}
-                    style={{
-                        padding: '10px 20px',
-                        background: customerView === 'top' ? '#EF4444' : 'var(--card-bg)',
-                        color: customerView === 'top' ? 'white' : 'var(--text-color)',
-                        border: customerView === 'top' ? 'none' : '1px solid var(--border-color)',
-                        borderRadius: '12px',
-                        cursor: 'pointer',
-                        fontWeight: '500',
-                        transition: 'all 0.2s'
-                    }}
+                    variant="segmented"
                 >
                     💎 Top Verified Customers
-                </button>
+                </TabButton>
             </div>
-
-            <hr style={{ margin: '30px 0', border: 'none', borderTop: '1px solid #333' }} />
 
             {/* Data Display */}
             {loading ? <div>Loading...</div> : (

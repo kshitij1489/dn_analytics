@@ -169,6 +169,24 @@ export default function Configuration() {
     };
 
 
+    const handlePetpoojaBackfill = async () => {
+        const apiKey = settings['integration_orders_key'];
+        if (!apiKey) {
+            alert("❌ Orders API Key is missing in Integrations settings.");
+            return;
+        }
+
+        if (!window.confirm("Are you sure you want to trigger Petpooja Sync?")) return;
+
+        try {
+            await endpoints.petpooja.backfill(apiKey);
+            alert(`✅ Sync triggered successfully`);
+        } catch (e: any) {
+            alert(`❌ Sync Failed`);
+        }
+    };
+
+
     const handleResetIntegrations = async () => {
         if (!window.confirm("Are you sure you want to reset all integration settings?")) return;
         if (!window.confirm("This will clear all configured URLs and API keys for external services.")) return;
@@ -695,6 +713,22 @@ export default function Configuration() {
                                 </p>
 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {selectedDbSection === 'Orders' && (
+                                        <button
+                                            onClick={handlePetpoojaBackfill}
+                                            style={{
+                                                padding: '12px',
+                                                background: 'rgba(128, 128, 128, 0.08)',
+                                                color: 'var(--text-color)',
+                                                border: '1px solid var(--text-color)',
+                                                borderRadius: '8px',
+                                                cursor: 'pointer',
+                                                fontWeight: 600
+                                            }}
+                                        >
+                                            Petpooja Sync
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => handleResetSection(selectedDbSection)}
                                         style={{

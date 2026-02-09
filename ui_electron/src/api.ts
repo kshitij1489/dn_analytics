@@ -107,6 +107,12 @@ export const endpoints = {
         discounts: (params?: any) => api.get('/orders/discounts-view', { params }),
     },
 
+    customers: {
+        search: (q: string) => api.get('/orders/customers/search', { params: { q } }),
+        profile: (customerId: string) => api.get(`/orders/customers/${customerId}/profile`),
+    },
+
+
     sync: {
         run: () => api.post('/sync/run'),
         status: (jobId: string) => api.get(`/sync/status/${jobId}`),
@@ -168,13 +174,18 @@ export const endpoints = {
     },
 
     today: {
-        getSummary: () => api.get('/today/summary'),
-        getMenuItems: () => api.get('/today/menu-items'),
-        getCustomers: () => api.get('/today/customers'),
+        getSummary: (params?: { date?: string }) => api.get('/today/summary', { params }),
+        getMenuItems: (params?: { date?: string }) => api.get('/today/menu-items', { params }),
+        getCustomers: (params?: { date?: string }) => api.get('/today/customers', { params }),
+        getOrders: (params?: { date?: string }) => api.get('/today/orders', { params }),
     },
     forecast: {
         get: () => api.get('/forecast'),
         replay: (run_date: string) => api.get('/forecast/replay', { params: { run_date } }),
+    },
+
+    petpooja: {
+        backfill: (apiKey: string) => api.post('/config/petpooja-sync', { api_key: apiKey })
     }
 };
 

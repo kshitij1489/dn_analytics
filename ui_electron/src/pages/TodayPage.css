@@ -204,8 +204,56 @@
     white-space: nowrap;
 }
 
+.item-chip.repeat-item {
+    background: #10b981;
+    color: white;
+}
+
 .item-more {
     color: var(--text-secondary);
     font-size: 0.8em;
     font-style: italic;
+}
+
+/* =================================
+   DATE SELECTOR LABEL
+   ================================= */
+.date-selector-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--card-bg);
+    padding: 8px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.date-selector-label:hover {
+    border-color: var(--accent-color);
+    background: var(--hover-bg);
+}
+
+.date-selector-icon {
+    font-size: 1em;
+}
+
+.date-selector-text {
+    font-weight: 500;
+}
+
+.date-selector-suffix {
+    font-size: 0.6em;
+    opacity: 0.8;
+}
+
+.date-selector-hidden-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
 }

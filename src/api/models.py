@@ -102,3 +102,34 @@ class AIFeedbackRequest(BaseModel):
 class CacheEntryPatchRequest(BaseModel):
     """Request body for marking a cache entry as incorrect (human feedback for cloud learning)."""
     is_incorrect: bool
+
+
+# --- Customer Profile Models ---
+
+class CustomerSearchResponse(BaseModel):
+    """Response model for customer search results"""
+    customer_id: str
+    name: str
+    phone: Optional[str] = None
+    total_spent: Optional[float] = 0.0
+    last_order_date: Optional[str] = None
+    is_verified: bool = False
+
+
+class CustomerProfileOrder(BaseModel):
+    """Order summary for customer profile view"""
+    order_id: str
+    order_number: str  # e.g. petpooja_order_id or internal ID
+    created_on: str
+    items_summary: str  # "Burger (2), Fries (1)"
+    total_amount: float
+    order_source: str  # e.g. Zomato, Swiggy
+    status: str
+    is_verified: bool
+
+
+class CustomerProfileResponse(BaseModel):
+    """Complete customer profile with order history"""
+    customer: CustomerSearchResponse
+    orders: list[CustomerProfileOrder]
+

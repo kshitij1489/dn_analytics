@@ -511,3 +511,61 @@ input {
   font-weight: bold !important;
   transition: all 0.3s ease !important;
 }
+
+/* =================================
+   SEGMENTED CONTROL COMPONENT
+   ================================= */
+
+/* Container for segmented buttons */
+.segmented-control {
+  display: flex;
+  background: #E5E7EB;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  gap: 2px;
+}
+
+/* Active button in segmented control */
+.segmented-btn-active {
+  padding: 6px 16px;
+  background: #FFFFFF;
+  color: black;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+/* Inactive button in segmented control */
+.segmented-btn-inactive {
+  padding: 6px 16px;
+  background: transparent;
+  color: #6B7280;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.segmented-btn-inactive:hover {
+  color: #374151;
+}
+
+/* Size Modifiers */
+.segmented-btn-large {
+  padding: 8px 20px;
+  font-size: 14px;
+}
+
+.segmented-btn-small {
+  padding: 4px 12px;
+  font-size: 12px;
+}
