@@ -27,7 +27,7 @@ interface CustomerProfileData {
     orders: CustomerProfileOrder[];
 }
 
-export function CustomerProfile({ headerActions }: { headerActions?: React.ReactNode }) {
+export function CustomerProfile({ headerActions, initialCustomerId }: { headerActions?: React.ReactNode, initialCustomerId?: string | number }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<CustomerSearchResponse[]>([]);
     const [selectedCustomer, setSelectedCustomer] = useState<CustomerProfileData | null>(null);
@@ -59,6 +59,26 @@ export function CustomerProfile({ headerActions }: { headerActions?: React.React
         return () => debouncedSearch.cancel(); // Cleanup on unmount
     }, [searchQuery, debouncedSearch]);
 
+    const loadProfileById = useCallback(async (id: string | number) => {
+        setLoadingProfile(true);
+        try {
+            const res = await endpoints.customers.profile(String(id));
+            setSelectedCustomer(res.data);
+            setSearchQuery(String(id)); // Pre-fill search with customer ID
+        } catch (err) {
+            console.error("Profile fetch failed", err);
+        } finally {
+            setLoadingProfile(false);
+        }
+    }, []);
+
+    // Initial Load by ID (from navigation)
+    useEffect(() => {
+        if (initialCustomerId) {
+            loadProfileById(initialCustomerId);
+        }
+    }, [initialCustomerId, loadProfileById]);
+
     const handleSelectCustomer = async (customer: CustomerSearchResponse) => {
         setLoadingProfile(true);
         setSearchResults([]); // Clear results to hide dropdown
@@ -68,7 +88,6 @@ export function CustomerProfile({ headerActions }: { headerActions?: React.React
             setSelectedCustomer(res.data);
         } catch (err) {
             console.error("Profile fetch failed", err);
-            alert("Failed to load profile");
         } finally {
             setLoadingProfile(false);
         }

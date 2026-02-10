@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import './App.css';
 import { endpoints } from './api';
 import type { JobResponse } from './api';
+import { NavigationProvider, useNavigation } from './contexts/NavigationContext'; // Import Context
 
 // Components
 import Insights from './pages/Insights';
@@ -17,8 +18,8 @@ import ForecastPage from './pages/ForecastPage';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
-function App() {
-  const [activeTab, setActiveTab] = useState('insights');
+function AppContent() {
+  const { activeTab, setActiveTab } = useNavigation();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
@@ -175,7 +176,6 @@ function App() {
           <button className={activeTab === 'forecast' ? 'active' : ''} onClick={() => setActiveTab('forecast')}>Forecast</button>
           <button className={activeTab === 'chart' ? 'active' : ''} onClick={() => setActiveTab('chart')}>Chart</button>
           <button className={activeTab === 'menu' ? 'active' : ''} onClick={() => setActiveTab('menu')}>Menu</button>
-
           <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>Orders</button>
           <button className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setActiveTab('inventory')}>Inventory & COGS</button>
           <button className={activeTab === 'sql' ? 'active' : ''} onClick={() => setActiveTab('sql')}>SQL Console</button>
@@ -369,6 +369,16 @@ function App() {
         {activeTab === 'configuration' && <Configuration />}
       </main>
     </div >
+  );
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState('insights');
+
+  return (
+    <NavigationProvider activeTab={activeTab} setActiveTab={setActiveTab}>
+      <AppContent />
+    </NavigationProvider>
   );
 }
 

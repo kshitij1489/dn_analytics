@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { endpoints } from '../api';
 import { ResizableTableWrapper, LoadingSpinner, Card, DateSelector } from '../components';
+import { CustomerLink } from '../components/CustomerLink';
 import './TodayPage.css';
 
 interface SourceData {
@@ -32,6 +33,7 @@ interface Customer {
 interface Order {
     order_id: number;
     petpooja_order_id: number;
+    customer_id: number;
     customer_name: string;
     order_items: string[];
     total: number;
@@ -254,7 +256,7 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                                     <tr key={idx}>
                                         <td>
                                             <span className="customer-name">
-                                                {cust.name}
+                                                <CustomerLink customerId={cust.customer_id} name={cust.name} />
                                                 {cust.is_verified && (
                                                     <span className="verified-badge" title="Verified">✓</span>
                                                 )}
@@ -297,18 +299,24 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         <table className="standard-table">
                             <thead>
                                 <tr>
+                                    <th>Time</th>
                                     <th>Customer</th>
                                     <th>Order Items</th>
                                     <th className="text-right">Total</th>
                                     <th>Order ID</th>
-                                    <th>Time</th>
                                     <th>Source</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {orders.map((order) => (
                                     <tr key={order.order_id}>
-                                        <td>{order.customer_name}</td>
+                                        <td>{order.time}</td>
+                                        <td>
+                                            <CustomerLink
+                                                customerId={order.customer_id}
+                                                name={order.customer_name}
+                                            />
+                                        </td>
                                         <td>
                                             <div className="items-list">
                                                 {order.order_items.slice(0, 5).map((item, i) => (
@@ -326,7 +334,6 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                                         </td>
                                         <td className="text-right">{formatCurrency(order.total)}</td>
                                         <td>{order.petpooja_order_id}</td>
-                                        <td>{order.time}</td>
                                         <td>
                                             <span
                                                 className="source-dot"

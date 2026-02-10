@@ -16,10 +16,20 @@ from src.api.routers.config import get_db_connection
 from src.core.services.weather_service import WeatherService
 from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date, get_last_complete_business_date
 from src.core.utils.weather_helpers import get_rain_cat
-from src.core.learning.revenue_forecasting.gaussianprocess import RollingGPForecaster
 from src.core.learning.revenue_forecasting.weekday import forecast_weekday_avg
 from src.core.learning.revenue_forecasting.holtwinters import forecast_holt_winters
 from src.core.learning.revenue_forecasting.prophet_model import forecast_prophet
+
+# Safe Import for Gaussian Process
+try:
+    from src.core.learning.revenue_forecasting.gaussianprocess import RollingGPForecaster
+    GP_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"Failed to import Gaussian Process module: {e}")
+    GP_AVAILABLE = False
+except Exception as e:
+    logger.error(f"Unexpected error importing Gaussian Process module: {e}")
+    GP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -168,6 +178,10 @@ def train_gp_task():
         logger.info(f"Training data after date filtering: {len(df)} rows, ending at {df['ds'].max()}")
         
         # RollingGPForecaster handles the windowing logic (keeping last 90 days)
+        if not GP_AVAILABLE:
+            logger.error("Gaussian Process module not available. Cannot train.")
+            return
+
         gp = RollingGPForecaster()
         gp.update_and_fit(df)
         
@@ -322,6 +336,10 @@ def forecast_gp(future_weather: pd.DataFrame) -> List[Dict]:
     GP data will be available on next page load/refresh.
     """
     try:
+        if not GP_AVAILABLE:
+            logger.warning("Gaussian Process module not available. Skipping forecast.")
+            return []
+
         gp = RollingGPForecaster()
         
         # Check if model is stale or missing

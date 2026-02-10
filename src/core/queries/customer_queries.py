@@ -130,6 +130,7 @@ def fetch_top_customers(conn):
             FROM final_counts
         )
         SELECT 
+            c.customer_id,
             c.name,
             c.total_orders,
             c.total_spent,

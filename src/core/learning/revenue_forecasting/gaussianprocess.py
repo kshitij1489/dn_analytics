@@ -22,6 +22,11 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.exceptions import ConvergenceWarning
 
 logger = logging.getLogger(__name__)
+try:
+    import sklearn
+    logger.info(f"Gaussian Process Module Loaded. Scikit-learn version: {sklearn.__version__} Path: {sklearn.__path__}")
+except Exception as e:
+    logger.error(f"Failed to inspect scikit-learn: {e}")
 
 # ------------------------------------------------------------
 # Feature Engineering
@@ -301,8 +306,22 @@ class RollingGPForecaster:
         are always representative of the recent data distribution. This is the correct
         online learning approach, though it means feature statistics may shift over time.
     """
-    def __init__(self, storage_path: str = 'data/gp_model_v1.pkl'):
-        self.storage_path = storage_path
+    def __init__(self, storage_path: str = None):
+        if storage_path is None:
+            # Determine writable path dynamically
+            # 1. Try to use the directory where the DB resides (passed by Electron)
+            db_url = os.environ.get('DB_URL')
+            if db_url:
+                base_dir = os.path.dirname(db_url)
+                self.storage_path = os.path.join(base_dir, 'gp_model_v1.pkl')
+            else:
+                # 2. Fallback to local data/ directory (dev mode)
+                self.storage_path = 'data/gp_model_v1.pkl'
+        else:
+            self.storage_path = storage_path
+            
+        logger.info(f"GaussianProcessForecaster initialized with storage_path: {self.storage_path}")
+
         self.model = GaussianProcessForecaster()
         self.window_start: Optional[pd.Timestamp] = None
         self.window_end: Optional[pd.Timestamp] = None

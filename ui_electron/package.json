@@ -1,7 +1,7 @@
 {
   "name": "dn-analytics",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "D&N Analytics desktop app",
   "author": "D&N Analytics",
   "main": "main.js",

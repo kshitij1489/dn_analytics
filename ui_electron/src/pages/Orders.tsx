@@ -5,6 +5,7 @@ import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
 import { CustomerProfile } from '../components/CustomerProfile';
+import { useNavigation } from '../contexts/NavigationContext';
 
 
 // --- Shared Components (Duplicated from Menu for now to keep independent) ---
@@ -301,6 +302,18 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
 export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'customers' | 'restaurants' | 'taxes' | 'discounts'>('orders');
     const [customerViewMode, setCustomerViewMode] = useState<'overview' | 'profile'>('overview');
+    const [linkedCustomerId, setLinkedCustomerId] = useState<string | number | undefined>(undefined);
+    const { pageParams, clearParams } = useNavigation();
+
+    // Deep-link into customer profile when navigated from another page
+    useEffect(() => {
+        if (pageParams?.view === 'customers' && pageParams?.mode === 'profile') {
+            setActiveTab('customers');
+            setCustomerViewMode('profile');
+            setLinkedCustomerId(pageParams.customerId); // Capture before clearing
+            clearParams(); // Consume params so they don't re-trigger on tab revisit
+        }
+    }, [pageParams, clearParams]);
 
 
     const tabs = [
@@ -370,6 +383,7 @@ export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
                         />
                     ) : (
                         <CustomerProfile
+                            initialCustomerId={linkedCustomerId}
                             headerActions={
                                 <div className="segmented-control">
                                     <button

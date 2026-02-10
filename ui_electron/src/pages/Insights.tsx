@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
 import { ResizableTableWrapper, TabButton, KPICard } from '../components';
+import { CustomerLink } from '../components/CustomerLink';
 import { exportToCSV } from '../utils/csv';
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState('dailySales');
@@ -566,7 +567,9 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
                             <tbody>
                                 {sortedTopCustomers.map((row, idx) => (
                                     <tr key={idx}>
-                                        <td>{row.name}</td>
+                                        <td>
+                                            <CustomerLink customerId={row.customer_id} name={row.name} />
+                                        </td>
                                         <td className="text-right">{row.total_orders}</td>
                                         <td className="text-right">₹{Math.round(row.total_spent || 0).toLocaleString()}</td>
                                         <td>{row.last_order_date}</td>

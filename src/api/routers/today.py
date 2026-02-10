@@ -317,6 +317,7 @@ def get_today_orders(
         orders.append({
             "order_id": order_id,
             "petpooja_order_id": row[1],
+            "customer_id": customer_id,
             "customer_name": row[3],
             "order_items": formatted_items,
             "total": float(row[4]) if row[4] else 0,

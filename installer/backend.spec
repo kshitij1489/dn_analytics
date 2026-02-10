@@ -11,7 +11,7 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ['prophet', 'cmdstanpy', 'statsmodels']:
+for pkg in ['prophet', 'cmdstanpy', 'statsmodels', 'sklearn', 'joblib']:
     tmp_ret = collect_all(pkg)
     datas += tmp_ret[0]
     binaries += tmp_ret[1]
