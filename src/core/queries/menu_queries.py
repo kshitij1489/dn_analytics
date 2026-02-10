@@ -66,7 +66,7 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
         WITH dedup_items AS (
             -- 1. Deduplicate Items GLOBALLY using MAX/GROUP BY trick or ROW_NUMBER
             SELECT 
-                order_item_id, menu_item_id, total_price, quantity, order_id
+                order_item_id, menu_item_id, total_price, quantity, order_id, variant_id
             FROM (
                 SELECT 
                     oi.*, 
@@ -79,17 +79,17 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
         dedup_addons AS (
              -- 1b. Deduplicate Addons
              SELECT 
-                menu_item_id, total_price, quantity, order_id, order_item_id
+                menu_item_id, total_price, quantity, order_id, order_item_id, variant_id
              FROM (
                 SELECT 
-                    oia.menu_item_id, (oia.price * oia.quantity) as total_price, oia.quantity, oi.order_id, oi.order_item_id,
+                    oia.menu_item_id, (oia.price * oia.quantity) as total_price, oia.quantity, oi.order_id, oi.order_item_id, oia.variant_id,
                     ROW_NUMBER() OVER(PARTITION BY oia.order_item_id, oia.name_raw, oia.quantity, oia.price ORDER BY oia.order_item_addon_id) as rn
                 FROM order_item_addons oia
                 JOIN dedup_items oi ON oia.order_item_id = oi.order_item_id
              ) WHERE rn = 1
         ),
         global_item_history AS (
-            -- 2. Combine & Rank Globally
+            -- 2. Combine & Rank Globally (with variant unit/value for aggregation)
             SELECT 
                 mi.menu_item_id,
                 mi.name AS item_name,
@@ -99,11 +99,14 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
                 di.total_price AS item_revenue,
                 di.quantity as sold_as_item_qty,
                 0 as sold_as_addon_qty,
+                COALESCE(UPPER(v.unit), '') as variant_unit,
+                COALESCE(v.value, 0) * di.quantity as unit_amount,
                 ROW_NUMBER() OVER (PARTITION BY o.customer_id, mi.menu_item_id ORDER BY o.created_on) as customer_item_rank
             FROM dedup_items di
             JOIN orders o ON di.order_id = o.order_id
             JOIN menu_items mi ON di.menu_item_id = mi.menu_item_id
             JOIN customers c ON o.customer_id = c.customer_id
+            LEFT JOIN variants v ON di.variant_id = v.variant_id
             
             UNION ALL
             
@@ -116,12 +119,15 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
                 da.total_price AS item_revenue,
                 0 as sold_as_item_qty,
                 da.quantity as sold_as_addon_qty,
+                COALESCE(UPPER(v.unit), '') as variant_unit,
+                COALESCE(v.value, 0) * da.quantity as unit_amount,
                 ROW_NUMBER() OVER (PARTITION BY o.customer_id, mi.menu_item_id ORDER BY o.created_on) as customer_item_rank
             FROM dedup_addons da
             JOIN dedup_items di ON da.order_item_id = di.order_item_id
             JOIN orders o ON di.order_id = o.order_id
             JOIN menu_items mi ON da.menu_item_id = mi.menu_item_id
             JOIN customers c ON o.customer_id = c.customer_id
+            LEFT JOIN variants v ON da.variant_id = v.variant_id
         ),
         filtered_items AS (
             -- 3. Apply User Filters
@@ -144,7 +150,12 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
                 (SUM(sold_as_item_qty) + SUM(sold_as_addon_qty)) AS total_qty_sold,
                 COUNT(*) AS total_transactions,
                 SUM(item_revenue) AS total_revenue,
-                SUM(CASE WHEN customer_item_rank > 1 THEN item_revenue ELSE 0 END) AS repeat_customer_revenue
+                SUM(CASE WHEN customer_item_rank > 1 THEN item_revenue ELSE 0 END) AS repeat_customer_revenue,
+                
+                -- Unit-based aggregations: only sum value*qty where unit matches
+                SUM(CASE WHEN variant_unit = 'GMS' THEN unit_amount ELSE 0 END) AS total_gms,
+                SUM(CASE WHEN variant_unit = 'ML' THEN unit_amount ELSE 0 END) AS total_ml,
+                SUM(CASE WHEN variant_unit = 'COUNT' THEN unit_amount ELSE 0 END) AS total_count
             FROM filtered_items
             GROUP BY menu_item_id, item_name, item_type
         )
@@ -155,6 +166,9 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
             sold_as_item as "As Item (Qty)",
             total_qty_sold as "Total Sold (Qty)",
             total_revenue as "Total Revenue",
+            total_gms as "Total GMS",
+            total_ml as "Total ML",
+            total_count as "Total COUNT",
             qty_reordered AS "Reorder Count", 
             customers_who_reordered AS "Repeat Customer (Lifetime)",
             total_unique_customers AS "Unique Customers",

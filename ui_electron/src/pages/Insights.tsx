@@ -364,6 +364,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 <th className="text-right" onClick={() => handleSort('Unique Customers')}>Unique Customers{renderSortIcon('Unique Customers')}</th>
                                 <th className="text-right" onClick={() => handleSort('Reorder Rate %')}>Reorder Rate %{renderSortIcon('Reorder Rate %')}</th>
                                 <th className="text-right" onClick={() => handleSort('Repeat Revenue %')}>Repeat Revenue %{renderSortIcon('Repeat Revenue %')}</th>
+                                <th className="text-right" onClick={() => handleSort('Total GMS')}>GMS{renderSortIcon('Total GMS')}</th>
+                                <th className="text-right" onClick={() => handleSort('Total ML')}>ML{renderSortIcon('Total ML')}</th>
+                                <th className="text-right" onClick={() => handleSort('Total COUNT')}>COUNT{renderSortIcon('Total COUNT')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -380,6 +383,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                                     <td className="text-right">{row["Unique Customers"]}</td>
                                     <td className="text-right">{row["Reorder Rate %"]}%</td>
                                     <td className="text-right">{row["Repeat Revenue %"]}%</td>
+                                    <td className="text-right">{row["Total GMS"] ? Math.round(row["Total GMS"]).toLocaleString() : '-'}</td>
+                                    <td className="text-right">{row["Total ML"] ? Math.round(row["Total ML"]).toLocaleString() : '-'}</td>
+                                    <td className="text-right">{row["Total COUNT"] ? Math.round(row["Total COUNT"]).toLocaleString() : '-'}</td>
                                 </tr>
                             ))}
                         </tbody>

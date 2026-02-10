@@ -182,6 +182,7 @@ export const endpoints = {
     forecast: {
         get: () => api.get('/forecast'),
         replay: (run_date: string) => api.get('/forecast/replay', { params: { run_date } }),
+        items: (params?: { item_id?: string; days?: number }) => api.get('/forecast/items', { params }),
     },
 
     petpooja: {

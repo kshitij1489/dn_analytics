@@ -1,4 +1,5 @@
 import os
+import glob
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
@@ -11,11 +12,34 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ['prophet', 'cmdstanpy', 'statsmodels', 'sklearn', 'joblib']:
-    tmp_ret = collect_all(pkg)
-    datas += tmp_ret[0]
-    binaries += tmp_ret[1]
-    hiddenimports += tmp_ret[2]
+for pkg in ['prophet', 'cmdstanpy', 'statsmodels', 'sklearn', 'joblib', 'lightgbm', 'xgboost']:
+    try:
+        tmp_ret = collect_all(pkg)
+        datas += tmp_ret[0]
+        binaries += tmp_ret[1]
+        hiddenimports += tmp_ret[2]
+    except Exception:
+        print(f"Warning: could not collect '{pkg}' — skipping (may not be installed)")
+
+# Bundle libomp (OpenMP runtime) — required by LightGBM and XGBoost.
+# It's a system-level C library, so collect_all() won't find it.
+# Check .venv/lib first (dev setup), then Homebrew default location.
+_libomp_candidates = [
+    os.path.join(project_root, '.venv', 'lib', 'libomp.dylib'),
+    '/opt/homebrew/opt/libomp/lib/libomp.dylib',
+    '/opt/local/lib/libomp/libomp.dylib',
+]
+_libomp_found = False
+for _libomp_path in _libomp_candidates:
+    if os.path.isfile(_libomp_path):
+        # Bundle into top-level dir — PyInstaller puts all binaries there,
+        # and both LightGBM/XGBoost dylibs will find it via loader search paths.
+        binaries.append((_libomp_path, '.'))
+        print(f"Bundling libomp from: {_libomp_path}")
+        _libomp_found = True
+        break
+if not _libomp_found:
+    print("Warning: libomp.dylib not found — LightGBM/XGBoost may fail at runtime in .dmg")
 
 a = Analysis(
     ['backend_entry.py'],
@@ -50,6 +74,13 @@ a = Analysis(
         'utils.id_generator',
         'utils.clean_order_item',
         'utils.menu_utils',
+        # Item demand ML modules (imported behind try/except — PyInstaller can't trace)
+        'src.core.learning.revenue_forecasting.item_demand_ml',
+        'src.core.learning.revenue_forecasting.item_demand_ml.dataset',
+        'src.core.learning.revenue_forecasting.item_demand_ml.features',
+        'src.core.learning.revenue_forecasting.item_demand_ml.model_io',
+        'src.core.learning.revenue_forecasting.item_demand_ml.predict',
+        'src.core.learning.revenue_forecasting.item_demand_ml.train',
     ],
     hookspath=[],
     hooksconfig={},

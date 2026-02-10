@@ -20,6 +20,8 @@ from src.core.learning.revenue_forecasting.weekday import forecast_weekday_avg
 from src.core.learning.revenue_forecasting.holtwinters import forecast_holt_winters
 from src.core.learning.revenue_forecasting.prophet_model import forecast_prophet
 
+logger = logging.getLogger(__name__)
+
 # Safe Import for Gaussian Process
 try:
     from src.core.learning.revenue_forecasting.gaussianprocess import RollingGPForecaster
@@ -31,7 +33,6 @@ except Exception as e:
     logger.error(f"Unexpected error importing Gaussian Process module: {e}")
     GP_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Lock to prevent concurrent training runs.

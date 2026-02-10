@@ -1,0 +1,21 @@
+[
+  "day_of_week",
+  "is_weekend",
+  "month",
+  "days_since_launch",
+  "lag_1",
+  "lag_7",
+  "rolling_mean_7",
+  "rolling_mean_14",
+  "rolling_trend_3",
+  "temperature",
+  "rain",
+  "price",
+  "item_median_price",
+  "price_ratio",
+  "category_avg_last7",
+  "global_avg_last7",
+  "store_total_last3",
+  "store_total_last7",
+  "temp_weekend"
+]

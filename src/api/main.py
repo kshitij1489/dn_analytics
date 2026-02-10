@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, weather, conversations
+from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, forecast_items, weather, conversations
 
 app = FastAPI(title="Analytics Backend")
 
@@ -144,6 +144,7 @@ app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
 app.include_router(config.router, prefix="/api/config", tags=["Config"])
 app.include_router(today.router)
 app.include_router(forecast.router, prefix="/api/forecast", tags=["Forecast"])
+app.include_router(forecast_items.router, prefix="/api/forecast", tags=["Forecast Items"])
 app.include_router(weather.router, prefix="/api/weather", tags=["Weather"])
 app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
 

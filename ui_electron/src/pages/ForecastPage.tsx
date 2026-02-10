@@ -4,6 +4,7 @@ import { Card, LoadingSpinner, ResizableTableWrapper, TabButton } from '../compo
 import {
     ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, Area
 } from 'recharts';
+import ItemDemandForecast from './ItemDemandForecast';
 import './ForecastPage.css';
 
 interface ForecastDataPoint {
@@ -76,9 +77,6 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
         try {
             const res = await endpoints.forecast.get();
             setData(res.data);
-            // Default replay date to yesterday if available, else today
-            // Actually, let's not set a default date to avoid unrelated API calls on load.
-            // User must explicitly pick a date.
         } catch (e: any) {
             console.error('Failed to fetch forecast:', e);
             setError(e.message || 'Failed to generate forecast');
@@ -203,10 +201,7 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
             </div>
 
             {activeTab === 'menu' ? (
-                <div className="forecast-placeholder">
-                    <h2>Menu Items</h2>
-                    <p>Comparison of Menu Item performance vs Forecast coming soon.</p>
-                </div>
+                <ItemDemandForecast />
             ) : (
                 <>
 

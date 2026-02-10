@@ -212,3 +212,40 @@
     color: #ef4444;
     font-style: italic;
 }
+
+/* Item Demand Forecast Styles */
+.item-forecast-section {
+    animation: fadeIn 0.3s ease-out;
+}
+
+.item-forecast-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.item-forecast-controls .styled-select {
+    min-width: 240px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-color);
+    font-size: 0.9rem;
+}
+
+.item-demand-loading {
+    height: 40vh;
+}
+
+.item-demand-error-text {
+    color: var(--text-secondary);
+}
+
+.item-demand-retry {
+    margin-top: 12px;
+}
+
+.item-demand-p90 {
+    font-weight: 600;
+}

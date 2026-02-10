@@ -10,3 +10,5 @@ prophet
 statsmodels
 scikit-learn
 joblib
+lightgbm
+xgboost

@@ -181,12 +181,15 @@ class GaussianProcessForecaster:
 
         logger.info(f"MAE={mae:.2f} RMSE={rmse:.2f} Coverage95={coverage:.2%}")
 
-    def save(self,path:str):
-        joblib.dump((self.model,self.fe),path)
+    def save(self, path: str):
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        joblib.dump((self.model, self.fe), path)
 
-    def load(self,path:str):
-        self.model,self.fe=joblib.load(path)
-        self.fitted=True
+    def load(self, path: str):
+        self.model, self.fe = joblib.load(path)
+        self.fitted = True
 
 # ------------------------------------------------------------
 # Lag Feature Helpers
@@ -309,14 +312,15 @@ class RollingGPForecaster:
     def __init__(self, storage_path: str = None):
         if storage_path is None:
             # Determine writable path dynamically
-            # 1. Try to use the directory where the DB resides (passed by Electron)
             db_url = os.environ.get('DB_URL')
-            if db_url:
+
+            if db_url and os.path.isabs(db_url):
+                # Production (.dmg): DB_URL is absolute — store model alongside DB
                 base_dir = os.path.dirname(db_url)
                 self.storage_path = os.path.join(base_dir, 'gp_model_v1.pkl')
             else:
-                # 2. Fallback to local data/ directory (dev mode)
-                self.storage_path = 'data/gp_model_v1.pkl'
+                # Dev mode: DB_URL is relative or unset — store in data/
+                self.storage_path = os.path.join('data', 'gp_model_v1.pkl')
         else:
             self.storage_path = storage_path
             
@@ -345,7 +349,9 @@ class RollingGPForecaster:
 
     def save(self) -> None:
         """Persist model and metadata."""
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
+        dir_name = os.path.dirname(self.storage_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         
         payload = {
             'model': self.model,
