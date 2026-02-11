@@ -314,13 +314,18 @@ def reset_db_section(data: Dict[str, str]):
         elif section == "sales_forecast":
             # 7. Reset Sales Forecast (Revenue Models)
             # Tables: forecast_cache, revenue_backtest_cache, forecast_snapshots
+            # forecast_snapshots may not exist on fresh DMG installs (only in full schema)
             try:
                 conn.execute("DELETE FROM forecast_cache")
                 conn.execute("DELETE FROM revenue_backtest_cache")
-                conn.execute("DELETE FROM forecast_snapshots")
+                cur = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='forecast_snapshots'"
+                )
+                if cur.fetchone():
+                    conn.execute("DELETE FROM forecast_snapshots")
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_snapshots'")
                 conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_cache'")
                 conn.execute("DELETE FROM sqlite_sequence WHERE name='revenue_backtest_cache'")
-                conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_snapshots'")
                 conn.commit()
 
                 # Delete GP Model from Disk

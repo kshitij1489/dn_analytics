@@ -16,10 +16,26 @@ def startup_db_check():
     from src.core.error_log import get_error_logger
     get_error_logger()
     try:
-        from src.core.db.connection import get_db_connection
+        from src.core.db.connection import get_db_connection, BASE_DIR
+        import os
+
         conn, _ = get_db_connection()
         if conn:
-            # Check/Create weather_daily table if missing (Migration for existing users)
+            # 1. Apply Full Schema (Idempotent: CREATE TABLE IF NOT EXISTS)
+            # This ensures missing tables like forecast_snapshots are created in new installs.
+            schema_file = os.path.join(BASE_DIR, "database", "schema_sqlite.sql")
+            if os.path.exists(schema_file):
+                try:
+                    with open(schema_file, 'r') as f:
+                        schema_sql = f.read()
+                    conn.executescript(schema_sql)
+                    print(f"Startup: Applied schema from {schema_file}")
+                except Exception as e:
+                    print(f"Startup: Warning - Failed to apply schema file: {e}")
+            else:
+                print(f"Startup: Warning - Schema file not found at {schema_file}")
+
+            # 2. Check/Create weather_daily table if missing (Migration for existing users)
             conn.execute("""
             CREATE TABLE IF NOT EXISTS weather_daily (
                 date TEXT,        -- YYYY-MM-DD
