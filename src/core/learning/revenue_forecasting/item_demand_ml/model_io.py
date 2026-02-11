@@ -63,6 +63,9 @@ def save_models(
     """
     Save all model artifacts to disk.
 
+    Before saving, removes deprecated files (any .pkl or item_demand_* not in
+    the current required set) so renamed/versioned models do not accumulate.
+
     Args:
         classifier: Trained classification model.
         regressor_p50: Trained p50 quantile regressor.
@@ -72,6 +75,19 @@ def save_models(
     """
     model_dir = _resolve_model_dir(model_dir)
     os.makedirs(model_dir, exist_ok=True)
+
+    # Remove deprecated model files (not in required set) before saving
+    required_files = {CLASSIFIER_FILE, REGRESSOR_P50_FILE, REGRESSOR_P90_FILE, FEATURE_COLUMNS_FILE}
+    for fname in os.listdir(model_dir):
+        if fname in required_files:
+            continue
+        if fname.endswith('.pkl') or fname.startswith('item_demand_'):
+            fpath = os.path.join(model_dir, fname)
+            try:
+                os.remove(fpath)
+                logger.info(f"Removed deprecated model file: {fpath}")
+            except Exception as e:
+                logger.warning(f"Failed to remove deprecated file {fpath}: {e}")
 
     joblib.dump(classifier, os.path.join(model_dir, CLASSIFIER_FILE))
     joblib.dump(regressor_p50, os.path.join(model_dir, REGRESSOR_P50_FILE))
@@ -161,21 +177,71 @@ def is_model_stale(model_dir: Optional[str] = None) -> bool:
     """
     Check whether the saved model is stale and should be retrained.
 
-    The model is considered stale if it was last saved *before* the current
-    business date.  This means each new business day triggers one background
-    retrain so that yesterday's sales are incorporated.
+    Uses **business dates** (5 AM IST boundary) instead of calendar dates
+    to avoid the edge case where a model trained between midnight and 5 AM
+    appears "fresh" by calendar date but was actually trained during the
+    previous business day and is missing yesterday's data.
+
+    Logic:
+      1. If current time < 5 AM IST: return False (business day hasn't started,
+         the previous day's data isn't finalized yet — no point retraining).
+      2. Convert the model's file mtime to a business date.
+      3. If the model's business-date < today's business-date: stale.
 
     Returns True when:
       - No model file exists on disk.
-      - The model file's modification date is earlier than today's business date.
+      - Current time >= 5 AM IST and the model was last saved during a
+        previous business day.
     """
     trained = get_model_trained_date(model_dir)
     if trained is None:
         return True
 
-    from src.core.utils.business_date import get_current_business_date
-    today_biz = datetime.strptime(
-        get_current_business_date(), '%Y-%m-%d'
-    ).date()
+    from src.core.utils.business_date import (
+        get_current_business_date,
+        get_business_date_from_datetime,
+        BUSINESS_DAY_START_HOUR,
+        IST,
+    )
 
-    return trained.date() < today_biz
+    # Guard: only trigger retraining after the business day starts (5 AM IST).
+    # Before 5 AM the previous day's orders are still coming in — retraining
+    # now would still miss yesterday's data.
+    now_ist = datetime.now(IST)
+    if now_ist.hour < BUSINESS_DAY_START_HOUR:
+        return False
+
+    today_biz = get_current_business_date()
+
+    # Convert file mtime to the business date it belongs to.
+    # A model saved at 3 AM Feb 11 belongs to business day Feb 10.
+    trained_biz = get_business_date_from_datetime(trained)
+
+    return trained_biz < today_biz
+
+
+def delete_models(model_dir: Optional[str] = None) -> None:
+    """
+    Delete all trained model artifacts from disk to force full retraining.
+    """
+    model_dir = _resolve_model_dir(model_dir)
+    if not os.path.exists(model_dir):
+        logger.info(f"No model directory found at {model_dir}, nothing to delete.")
+        return
+
+    files_to_remove = [CLASSIFIER_FILE, REGRESSOR_P50_FILE, REGRESSOR_P90_FILE, FEATURE_COLUMNS_FILE]
+    deleted_count = 0
+    
+    for fname in files_to_remove:
+        fpath = os.path.join(model_dir, fname)
+        if os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+                deleted_count += 1
+                logger.info(f"Deleted model artifact: {fpath}")
+            except Exception as e:
+                logger.error(f"Failed to delete {fpath}: {e}")
+
+    # Also clear the in-memory cache
+    clear_model_cache()
+    logger.info(f"Deleted {deleted_count} model artifacts from {model_dir}/")

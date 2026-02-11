@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from src.core.config.client_learning_config import (
-    CLIENT_LEARNING_API_KEY,
     CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL,
 )
 from src.core.utils.path_helper import get_resource_path
@@ -51,7 +50,7 @@ def upload_pending(
     if uploaded_by:
         payload["uploaded_by"] = uploaded_by
     headers = {"Content-Type": "application/json"}
-    token = auth if auth is not None else CLIENT_LEARNING_API_KEY
+    token = auth
     if token:
         headers["Authorization"] = f"Bearer {token}"
 

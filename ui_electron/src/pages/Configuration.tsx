@@ -592,7 +592,8 @@ export default function Configuration() {
                                     { name: 'Inventory', status: 'Active' },
                                     { name: 'COGS', status: 'Active' },
                                     { name: 'Warehouse', status: 'Active' },
-                                    { name: 'AI Mode', status: 'Active' }
+                                    { name: 'AI Mode', status: 'Active' },
+                                    { name: 'Forecast', status: 'Active' }
                                 ].map(section => (
                                     <div
                                         key={section.name}
@@ -729,28 +730,81 @@ export default function Configuration() {
                                             Petpooja Sync
                                         </button>
                                     )}
-                                    <button
-                                        onClick={() => handleResetSection(selectedDbSection)}
-                                        style={{
-                                            padding: '12px',
-                                            background: 'rgba(239, 68, 68, 0.1)',
-                                            color: '#ef4444',
-                                            border: '1px solid rgba(239, 68, 68, 0.2)',
-                                            borderRadius: '8px',
-                                            cursor: 'pointer',
-                                            fontWeight: 600,
-                                            transition: 'all 0.2s ease'
-                                        }}
-                                        onMouseEnter={e => {
-                                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
-                                        }}
-                                        onMouseLeave={e => {
-                                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
-                                        }}
-                                    >
-                                        🗑️ Reset {selectedDbSection}
-                                    </button>
-
+                                    {selectedDbSection === 'Forecast' && (
+                                        <>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!window.confirm("⚠️ Are you sure you want to HARD RESET Item Demand Forecasts?")) return;
+                                                    if (!window.confirm("This will delete all trained models and history. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    try {
+                                                        const res = await endpoints.config.resetDb("item_demand");
+                                                        alert(`✅ ${res.data.message}`);
+                                                    } catch (e: any) {
+                                                        const errorMsg = e.response?.data?.detail || "Reset Failed";
+                                                        alert(`❌ ${errorMsg}`);
+                                                    }
+                                                }}
+                                                style={{
+                                                    padding: '12px',
+                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                    color: '#ef4444',
+                                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                                    borderRadius: '8px',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 600
+                                                }}
+                                            >
+                                                📉 Reset Item Demand Forecast
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!window.confirm("⚠️ Are you sure you want to HARD RESET Sales Forecasts?")) return;
+                                                    if (!window.confirm("This will delete the GP model and clear all forecast caches. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    try {
+                                                        const res = await endpoints.config.resetDb("sales_forecast");
+                                                        alert(`✅ ${res.data.message}`);
+                                                    } catch (e: any) {
+                                                        const errorMsg = e.response?.data?.detail || "Reset Failed";
+                                                        alert(`❌ ${errorMsg}`);
+                                                    }
+                                                }}
+                                                style={{
+                                                    padding: '12px',
+                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                    color: '#ef4444',
+                                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                                    borderRadius: '8px',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 600
+                                                }}
+                                            >
+                                                📊 Reset Sales Forecast
+                                            </button>
+                                        </>
+                                    )}
+                                    {selectedDbSection !== 'Forecast' && (
+                                        <button
+                                            onClick={() => handleResetSection(selectedDbSection)}
+                                            style={{
+                                                padding: '12px',
+                                                background: 'rgba(239, 68, 68, 0.1)',
+                                                color: '#ef4444',
+                                                border: '1px solid rgba(239, 68, 68, 0.2)',
+                                                borderRadius: '8px',
+                                                cursor: 'pointer',
+                                                fontWeight: 600,
+                                                transition: 'all 0.2s ease'
+                                            }}
+                                            onMouseEnter={e => {
+                                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                                            }}
+                                            onMouseLeave={e => {
+                                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+                                            }}
+                                        >
+                                            🗑️ Reset {selectedDbSection}
+                                        </button>
+                                    )}
 
                                     <button
                                         onClick={() => setSelectedDbSection(null)}

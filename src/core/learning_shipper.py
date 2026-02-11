@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.core.config.client_learning_config import (
-    CLIENT_LEARNING_API_KEY,
     CLIENT_LEARNING_INGEST_URL,
 )
 
@@ -170,7 +169,7 @@ def upload_pending(
     llm_cache_feedback = _select_incorrect_cache_entries()
     # Always POST when URL is set so Tier 3 is sent every run (cache/aggregates/schema)
     headers = {"Content-Type": "application/json"}
-    token = auth if auth is not None else CLIENT_LEARNING_API_KEY
+    token = auth
     if token:
         headers["Authorization"] = f"Bearer {token}"
 

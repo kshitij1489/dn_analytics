@@ -12,13 +12,21 @@ from typing import List, Dict, Optional
 
 import pandas as pd
 
-from src.api.routers.config import get_db_connection
+from src.api.dependencies import get_db
 from src.core.services.weather_service import WeatherService
 from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date, get_last_complete_business_date
 from src.core.utils.weather_helpers import get_rain_cat
 from src.core.learning.revenue_forecasting.weekday import forecast_weekday_avg
 from src.core.learning.revenue_forecasting.holtwinters import forecast_holt_winters
 from src.core.learning.revenue_forecasting.prophet_model import forecast_prophet
+from src.core.learning.revenue_forecasting.forecast_cache import (
+    is_revenue_cache_fresh,
+    load_revenue_forecasts,
+    save_revenue_forecasts,
+    get_missing_revenue_backtest_dates,
+    load_revenue_backtest_forecasts,
+    save_revenue_backtest_forecasts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +53,28 @@ def _load_and_check_stale(gp: RollingGPForecaster) -> bool:
     """
     Load the GP model and check if it needs retraining.
     
+    Uses the 5 AM business-day boundary:
+    - Before 5 AM IST: never stale (business day hasn't ended yet)
+    - After 5 AM: stale if model's training window doesn't include yesterday
+    
     Side effect: Loads the model into `gp` if a persisted model exists.
     
     Returns True if:
     - No model file exists
-    - Model's window_end is older than last complete business date
+    - Current time >= 5 AM and model's window_end < last complete business date
     """
     if not gp.load():
         return True  # No model exists
+
+    # Guard: don't trigger retraining before business day starts.
+    # Before 5 AM the previous day is still in progress.
+    try:
+        from src.core.utils.business_date import BUSINESS_DAY_START_HOUR, IST
+        now_ist = datetime.now(IST)
+        if now_ist.hour < BUSINESS_DAY_START_HOUR:
+            return False  # Too early — previous business day not finalized
+    except Exception:
+        pass  # If timezone import fails, fall through to normal check
     
     expected_end_str = get_last_complete_business_date()
     expected_end = pd.Timestamp(expected_end_str)
@@ -63,12 +85,6 @@ def _load_and_check_stale(gp: RollingGPForecaster) -> bool:
     
     return False
 
-def get_db():
-    conn, _ = get_db_connection()
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 def sync_weather_task(city: str = "Gurugram"):
@@ -85,9 +101,9 @@ def get_historical_data(conn, days: int = 90, start_date: str = None, end_date: 
     today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
     
     if start_date and end_date:
-        # Handle flexible date formats using pandas
-        start_dt = pd.to_datetime(start_date, dayfirst=True).date()
-        end_dt = pd.to_datetime(end_date, dayfirst=True).date()
+        # dayfirst=False silences warning for ISO YYYY-MM-DD; flexible for other formats
+        start_dt = pd.to_datetime(start_date, dayfirst=False).date()
+        end_dt = pd.to_datetime(end_date, dayfirst=False).date()
     else:
         end_dt = today_date + timedelta(days=1)
         start_dt = end_dt - timedelta(days=days + 1)
@@ -149,6 +165,61 @@ def trigger_gp_training(background_tasks: BackgroundTasks, conn=Depends(get_db))
     """Manually trigger daily rolling training for GP model."""
     background_tasks.add_task(train_gp_task)
     return {"message": "GP training started in background"}
+
+
+@router.post("/pull-from-cloud")
+def pull_from_cloud(scope: str = "all", conn=Depends(get_db)):
+    """
+    Manually pull forecast cache from cloud bootstrap endpoint.
+    scope: "revenue" | "items" | "all" — only pull and seed the specified cache(s).
+    """
+    from src.core.forecast_bootstrap import get_bootstrap_endpoint, fetch_and_seed_forecast_bootstrap
+    from src.core.config.cloud_sync_config import get_cloud_sync_config
+    if scope not in ("revenue", "items", "all"):
+        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', or 'all'")
+    endpoint = get_bootstrap_endpoint(conn)
+    if not endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud sync URL not configured. Set cloud_sync_url in Configuration.",
+        )
+    _, auth_key = get_cloud_sync_config(conn)
+    result = fetch_and_seed_forecast_bootstrap(conn, endpoint, auth=auth_key, scope=scope)
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=f"Bootstrap failed: {result['error']}")
+    return {
+        "message": "Forecast data pulled from cloud",
+        "revenue_inserted": result.get("revenue_inserted", 0),
+        "item_inserted": result.get("item_inserted", 0),
+        "revenue_backtest_inserted": result.get("revenue_backtest_inserted", 0),
+        "item_backtest_inserted": result.get("item_backtest_inserted", 0),
+    }
+
+
+@router.post("/full-retrain")
+def full_retrain(background_tasks: BackgroundTasks, scope: str = "all"):
+    """
+    Manually trigger retrain. scope: "revenue" | "items" | "all".
+    Runs in background; charts will populate after training completes (~30–60s).
+    """
+    if scope not in ("revenue", "items", "all"):
+        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', or 'all'")
+    try:
+        from src.api.routers.forecast_items import _train_item_demand_task
+    except ImportError:
+        _train_item_demand_task = None
+    if scope in ("revenue", "all"):
+        background_tasks.add_task(train_gp_task)
+    if scope in ("items", "all") and _train_item_demand_task:
+        background_tasks.add_task(_train_item_demand_task)
+    msg = "Full retrain started"
+    if scope == "revenue":
+        msg = "Sales (GP) retrain started. Refresh in ~30 seconds."
+    elif scope == "items":
+        msg = "Item demand retrain started. Refresh in ~30–60 seconds."
+    else:
+        msg = "Full retrain started (GP + Item Demand). Refresh in ~30–60 seconds."
+    return {"message": msg}
 
 def train_gp_task():
     """Background task for daily GP training with proper locking and error handling."""
@@ -212,6 +283,66 @@ def train_gp_task():
         if conn:
             conn.close()
         _training_lock.release()
+
+
+MODEL_NAMES = ["weekday_avg", "holt_winters", "prophet", "gp"]
+
+
+def _merge_backtest_and_forecast(
+    backtest: Dict[str, List[dict]],
+    forecast: Dict[str, List[dict]],
+    today_str: str,
+) -> Dict[str, List[dict]]:
+    """
+    Merge point-in-time backtest (dates < today) with forward forecast (dates >= today).
+    Backtest rows get temp_max=0, rain_category='none' if missing for UI compatibility.
+    """
+    merged = {}
+    for m in MODEL_NAMES:
+        bt = backtest.get(m, [])
+        fc = forecast.get(m, [])
+        # Normalize backtest rows (add temp_max, rain_category if missing)
+        for r in bt:
+            r.setdefault("temp_max", 0)
+            r.setdefault("rain_category", "none")
+        bt_past = [r for r in bt if r["date"] < today_str]
+        fc_future = [r for r in fc if r["date"] >= today_str]
+        combined = bt_past + fc_future
+        combined.sort(key=lambda x: x["date"])
+        merged[m] = combined
+    return merged
+
+
+def _get_revenue_point_in_time_backtest(conn, today_date, model_names: List[str]) -> Dict[str, List[dict]]:
+    """
+    Point-in-time backtest for all 4 models. Fills cache for missing dates, returns merged backtest.
+    """
+    backtest_end = today_date - timedelta(days=1)
+    backtest_start = backtest_end - timedelta(days=29)
+    forecast_dates = [(backtest_start + timedelta(days=i)).isoformat() for i in range(30)]
+    missing = get_missing_revenue_backtest_dates(conn, forecast_dates, model_names)
+
+    for fd in missing:
+        try:
+            d = datetime.strptime(fd, "%Y-%m-%d").date()
+            start_str = (d - timedelta(days=120)).isoformat()
+            end_str = (d - timedelta(days=1)).isoformat()
+            df = get_historical_data(conn, start_date=start_str, end_date=end_str)
+            if df.empty or len(df) < 14:
+                continue
+            from src.core.learning.revenue_forecasting.backtest_point_in_time import run_backtest_for_date
+            results = run_backtest_for_date(df, fd, model_names, conn=conn)
+            model_through = (d - timedelta(days=1)).isoformat()
+            for m, rows in results.items():
+                if rows:
+                    save_revenue_backtest_forecasts(conn, m, rows, model_through)
+        except Exception as e:
+            logger.warning(f"Revenue backtest failed for {fd}: {e}")
+
+    cached = load_revenue_backtest_forecasts(conn, forecast_dates, model_names)
+    # Ensure all model keys exist with empty list
+    out = {m: cached.get(m, []) for m in model_names}
+    return out
 
 
 def _fetch_forecast_weather(conn, today_str: str, future_dates: list) -> list:
@@ -333,6 +464,9 @@ def forecast_gp(future_weather: pd.DataFrame) -> List[Dict]:
     """
     Generates GP forecast using the persistent trained model.
     
+    Returns BOTH historical fitted values (last 30 days) AND future predictions,
+    matching the pattern of weekday_avg / holt_winters / prophet.
+    
     If model is stale, triggers background training and returns empty result.
     GP data will be available on next page load/refresh.
     """
@@ -343,22 +477,32 @@ def forecast_gp(future_weather: pd.DataFrame) -> List[Dict]:
 
         gp = RollingGPForecaster()
         
-        # Check if model is stale or missing
+        # Check if model is stale or missing — NO auto-trigger; manual Full Retrain only
         if _load_and_check_stale(gp):
-            # Trigger training in background thread (non-blocking)
-            logger.info("GP model is stale or missing, triggering background training...")
-            threading.Thread(target=train_gp_task, daemon=True).start()
-            return []  # GP unavailable this request cycle
-        
-        # Model is loaded and up-to-date, generate predictions
-        forecast_df = gp.predict_next_days(future_weather)
+            logger.info("GP model is stale or missing. Use Full Retrain or Pull from Cloud in Configuration.")
+            return []  # GP unavailable until user triggers manual action
         
         results = []
+        
+        # 1. Historical fitted values (last 30 days) — in-sample predictions
+        hist_df = gp.predict_historical(n_days=30)
+        if not hist_df.empty:
+            for _, row in hist_df.iterrows():
+                results.append({
+                    "date": row['ds'].strftime('%Y-%m-%d') if hasattr(row['ds'], 'strftime') else str(row['ds'])[:10],
+                    "revenue": max(0, float(row['pred_mean'])),
+                    "orders": 0,
+                    "gp_lower": max(0, float(row['lower'])),
+                    "gp_upper": max(0, float(row['upper']))
+                })
+        
+        # 2. Future predictions (7 days ahead)
+        forecast_df = gp.predict_next_days(future_weather)
         for _, row in forecast_df.iterrows():
             results.append({
                 "date": row['ds'].strftime('%Y-%m-%d'),
                 "revenue": max(0, float(row['pred_mean'])),
-                "orders": 0, # GP doesn't predict orders yet
+                "orders": 0,
                 "gp_lower": max(0, float(row['lower'])),
                 "gp_upper": max(0, float(row['upper']))
             })
@@ -374,80 +518,110 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         # Trigger background weather sync
         background_tasks.add_task(sync_weather_task)
 
-        df = get_historical_data(conn, days=90)
-        
-        # Exclude Today from historical "truth" to prevent partial data from skewing stats
         today_str = get_current_business_date()
         today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        
-        df_history = df[df['ds'].dt.date < today_date]
-        
-        history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
-        
 
+        # ---- Check cache first (fast path) ----
+        if is_revenue_cache_fresh(conn, today_str):
+            cached = load_revenue_forecasts(conn, today_str)
+            # Require all 4 models including GP — otherwise we serve empty GP indefinitely
+            # (forecast_gp returns [] when model is stale; we'd never retry after that)
+            has_gp = cached.get("gp") and len(cached.get("gp", [])) > 0
+            if cached and len(cached) >= 4 and has_gp:
+                logger.info(f"Serving revenue forecasts from cache ({len(cached)} models)")
+                # We still need fresh historical data for the blue actuals line
+                df = get_historical_data(conn, days=90)
+                df_history = df[df['ds'].dt.date < today_date]
+                history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
+
+                history_rows = [
+                    {
+                        "sale_date": row['ds'].strftime('%Y-%m-%d'),
+                        "revenue": float(row['y']),
+                        "orders": int(row['orders']),
+                        "temp_max": float(row['temp_max']),
+                        "rain_category": get_rain_cat(float(row['rain_sum']))
+                    }
+                    for _, row in history_30d.iterrows()
+                ]
+
+                raw_forecast = {
+                    "weekday_avg": cached.get("weekday_avg", []),
+                    "holt_winters": cached.get("holt_winters", []),
+                    "prophet": cached.get("prophet", []),
+                    "gp": cached.get("gp", []),
+                }
+                backtest = _get_revenue_point_in_time_backtest(conn, today_date, MODEL_NAMES)
+                merged = _merge_backtest_and_forecast(backtest, raw_forecast, today_str)
+                forecast_weekday = merged["weekday_avg"]
+                forecast_hw = merged["holt_winters"]
+                forecast_proph = merged["prophet"]
+                forecast_gp_res = merged["gp"]
+
+                future_weekday = [f for f in forecast_weekday if f['date'] >= today_str]
+                total_projected_revenue = sum(f['revenue'] for f in future_weekday)
+                total_projected_orders = sum(f.get('orders', 0) for f in future_weekday)
+
+                return {
+                    "summary": {
+                        "generated_at": today_str,
+                        "projected_7d_revenue": total_projected_revenue,
+                        "projected_7d_orders": total_projected_orders
+                    },
+                    "historical": history_rows,
+                    "forecasts": {
+                        "weekday_avg": forecast_weekday,
+                        "holt_winters": forecast_hw,
+                        "prophet": forecast_proph,
+                        "gp": forecast_gp_res
+                    },
+                    "debug_info": {
+                        "holt_winters_error": None,
+                        "prophet_error": None,
+                        "served_from_cache": True,
+                    }
+                }
+
+        # ---- Cache miss — NO auto-compute. Return empty; user must use Pull from Cloud or Full Retrain ----
+        from src.core.forecast_bootstrap import get_bootstrap_endpoint
+        cloud_configured = bool(get_bootstrap_endpoint(conn))
+
+        df = get_historical_data(conn, days=90)
+        df_history = df[df['ds'].dt.date < today_date]
+        history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
         history_rows = [
             {
-                "sale_date": row['ds'].strftime('%Y-%m-%d'), 
-                "revenue": float(row['y']), 
+                "sale_date": row['ds'].strftime('%Y-%m-%d'),
+                "revenue": float(row['y']),
                 "orders": int(row['orders']),
                 "temp_max": float(row['temp_max']),
                 "rain_category": get_rain_cat(float(row['rain_sum']))
             }
             for _, row in history_30d.iterrows()
         ]
-        
-        forecast_weekday = forecast_weekday_avg(df_history, periods=7)
-        # Weekday Forecast doesn't predict weather, so fill defaults
-        for f in forecast_weekday:
-            f['temp_max'] = 0
-            f['rain_category'] = 'none'
-
-        hw_res = forecast_holt_winters(df_history, periods=7)
-        for f in hw_res['data']:
-            f['temp_max'] = 0
-            f['rain_category'] = 'none'
-
-        # Prophet needs FULL df (including Today's snapshot) but knows how to exclude Today from training
-        proph_res = forecast_prophet(df, periods=7)
-        
-        forecast_hw = hw_res["data"]
-        forecast_proph = proph_res["data"]
-        
-        # Calculate Projected Revenue/Orders only for FUTURE dates (next 7 days)
-        # forecast_weekday now includes history, so we must filter.
-        future_start_date = today_str
-        
-        # Filter for summary stats
-        future_weekday = [f for f in forecast_weekday if f['date'] >= future_start_date]
-        
-        total_projected_revenue = sum(f['revenue'] for f in future_weekday)
-        total_projected_orders = sum(f['orders'] for f in future_weekday)
-        
-        # Gaussian Process Forecast (Rolling)
-        # Prepare future weather dataframe for GP
-        # We can reuse Prophet's future dataframe logic or built it simply
-        future_weather_gp = pd.DataFrame({
-            'ds': pd.to_datetime([f['date'] for f in forecast_hw[-7:]]), # Last 7 days are future
-            'temp_max': [f.get('temp_max', 25) for f in forecast_proph[-7:]] # Use prophet's filled weather or default
-        })
-        forecast_gp_res = forecast_gp(future_weather_gp)
-
+        empty_forecast = []
+        message = "Forecast cache is empty. Use Pull from Cloud or Full Retrain to populate."
+        if not cloud_configured:
+            message = "Forecast cache is empty. Configure Cloud Server URL in Configuration to use Pull from Cloud, or use Full Retrain."
         return {
             "summary": {
                 "generated_at": today_str,
-                "projected_7d_revenue": total_projected_revenue,
-                "projected_7d_orders": total_projected_orders
+                "projected_7d_revenue": 0,
+                "projected_7d_orders": 0
             },
             "historical": history_rows,
             "forecasts": {
-                "weekday_avg": forecast_weekday,
-                "holt_winters": forecast_hw,
-                "prophet": forecast_proph,
-                "gp": forecast_gp_res
+                "weekday_avg": empty_forecast,
+                "holt_winters": empty_forecast,
+                "prophet": empty_forecast,
+                "gp": empty_forecast,
             },
             "debug_info": {
-                "holt_winters_error": hw_res.get("error"),
-                "prophet_error": proph_res.get("error")
+                "holt_winters_error": None,
+                "prophet_error": None,
+                "awaiting_action": True,
+                "cloud_not_configured": not cloud_configured,
+                "message": message,
             }
         }
     except Exception as e:

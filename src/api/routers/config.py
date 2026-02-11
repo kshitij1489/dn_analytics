@@ -284,6 +284,57 @@ def reset_db_section(data: Dict[str, str]):
             conn.commit()
             return {"status": "success", "message": "Successfully reset 'AI Mode' database (Logs & Conversations)."}
 
+        elif section == "item_demand":
+            # 6. Reset Item Demand (Forecasts & Models)
+            # Tables: item_forecast_cache, item_backtest_cache
+            # Also deletes trained models to force full retraining
+            try:
+                # Clear DB tables
+                conn.execute("DELETE FROM item_forecast_cache")
+                conn.execute("DELETE FROM item_backtest_cache")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='item_forecast_cache'")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='item_backtest_cache'")
+                conn.commit()
+
+                # Delete Models from Disk to force retraining
+                try:
+                    from src.core.learning.revenue_forecasting.item_demand_ml.model_io import delete_models
+                    delete_models()
+                    model_status = "Models deleted from disk. Full retraining will occur on next request."
+                except ImportError:
+                    model_status = "ML module not active (skipping disk clean)."
+                except Exception as e:
+                    model_status = f"Failed to delete models: {str(e)}"
+                
+                return {"status": "success", "message": f"Item Demand cache cleared. {model_status}"}
+            except Exception as e:
+                conn.rollback()
+                raise e
+
+        elif section == "sales_forecast":
+            # 7. Reset Sales Forecast (Revenue Models)
+            # Tables: forecast_cache, revenue_backtest_cache, forecast_snapshots
+            try:
+                conn.execute("DELETE FROM forecast_cache")
+                conn.execute("DELETE FROM revenue_backtest_cache")
+                conn.execute("DELETE FROM forecast_snapshots")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_cache'")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='revenue_backtest_cache'")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_snapshots'")
+                conn.commit()
+
+                # Delete GP Model from Disk
+                try:
+                    from src.core.learning.revenue_forecasting.gaussianprocess import delete_gp_model
+                    delete_gp_model()
+                except (ImportError, Exception) as e:
+                    print(f"Warning: Failed to delete GP model: {e}")
+
+                return {"status": "success", "message": "Sales Forecast: Cache & Models deleted. Full retraining triggered."}
+            except Exception as e:
+                conn.rollback()
+                raise e
+
         else:
             # Placeholder for other sections
             print(f"DEBUG: Placeholder reset triggered for section: {section}")

@@ -79,6 +79,14 @@ def startup_db_check():
                 except Exception:
                     conn.rollback()
                     pass  # Column already exists
+            # Migration: forecast cloud sync uploaded_at on backtest caches
+            for table in ["revenue_backtest_cache", "item_backtest_cache"]:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN uploaded_at TEXT;")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    pass  # Column already exists
             # Migration: app_users — drop old table (user_id schema) if present, create new (employee_id PK), seed if empty
             try:
                 cur = conn.execute("SELECT user_id FROM app_users LIMIT 1")
@@ -100,6 +108,9 @@ def startup_db_check():
             if cur.fetchone()[0] == 0:
                 conn.execute("INSERT INTO app_users (name, employee_id, is_active) VALUES ('Owner', '0001', 1)")
                 conn.commit()
+            # Forecast bootstrap: DISABLED at startup. Use manual "Pull from Cloud"
+            # or "Full Retrain" buttons in Configuration → Forecast section.
+
             conn.close()
             print("Startup: Verified weather_daily, ai_conversations, and app_users schema.")
     except Exception as e:

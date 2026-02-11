@@ -12,7 +12,6 @@ import os
 from typing import List, Optional, Tuple
 
 from src.core.config.client_learning_config import (
-    CLIENT_LEARNING_API_KEY,
     CLIENT_LEARNING_ERROR_INGEST_URL,
 )
 from src.core.error_log import DEFAULT_LOG_DIR, DEFAULT_ERROR_FILE
@@ -88,7 +87,7 @@ def upload_pending(
         with_ids = _build_records_with_ids(path, records)
         all_records.extend(with_ids)
 
-    token = auth if auth is not None else CLIENT_LEARNING_API_KEY
+    token = auth
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

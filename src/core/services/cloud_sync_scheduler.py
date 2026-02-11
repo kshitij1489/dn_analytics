@@ -11,6 +11,7 @@ import os
 from src.core.db.connection import get_db_connection
 from src.core.client_learning_shipper import run_all as run_client_learning_shippers
 from services.sync_conversations import run_sync_cycle as run_conversation_sync
+from src.core.config.cloud_sync_config import get_cloud_sync_config
 
 # Default interval: 5 minutes
 SYNC_INTERVAL_SECONDS = 300
@@ -34,14 +35,7 @@ async def background_sync_task():
                 
             try:
                 # 1. Fetch Config
-                cursor = conn.execute("SELECT value FROM system_config WHERE key='cloud_sync_url'")
-                row = cursor.fetchone()
-                cloud_sync_url = row[0] if row else None
-                
-                # Fetch API Key (optional)
-                cursor = conn.execute("SELECT value FROM system_config WHERE key='cloud_sync_api_key'")
-                row = cursor.fetchone()
-                cloud_sync_api_key = row[0] if row else None
+                cloud_sync_url, cloud_sync_api_key = get_cloud_sync_config(conn)
                 
                 if not cloud_sync_url:
                     # If not configured, we might skip or fallback to env vars if we want legacy support.
@@ -49,8 +43,8 @@ async def background_sync_task():
                     # print("[Cloud Sync] No URL configured in system_config. Skipping.")
                     continue
                 
-                # Ensure no trailing slash for consistency
-                base_url = cloud_sync_url.rstrip('/')
+                # Ensure no trailing slash for consistency (get_cloud_sync_config already strips)
+                base_url = cloud_sync_url
                 
                 # 2. Run Learning/Error/Menu Sync (Synchronous function)
                 # run_all returns a dict, we can log it if needed

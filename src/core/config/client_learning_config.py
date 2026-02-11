@@ -32,8 +32,19 @@ CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL = os.environ.get(
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/ingest",
 ).strip()
 
-# Optional: Bearer token for cloud API auth
-CLIENT_LEARNING_API_KEY = os.environ.get("CLIENT_LEARNING_API_KEY", "").strip()
+# Forecast ingest: POST revenue + item forecasts + backtest caches
+CLIENT_LEARNING_FORECAST_INGEST_URL = os.environ.get(
+    "CLIENT_LEARNING_FORECAST_INGEST_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/forecasts/ingest",
+).strip()
+
+# Forecast bootstrap: GET precomputed forecast cache (optional, for new .dmg installs)
+CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL = os.environ.get(
+    "CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/forecasts/bootstrap",
+).strip()
+
+
 
 
 def _is_placeholder(url: str) -> bool:
@@ -54,3 +65,13 @@ def should_upload_learning() -> bool:
 def should_upload_menu_bootstrap() -> bool:
     """True if menu bootstrap upload is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL)
+
+
+def should_upload_forecasts() -> bool:
+    """True if forecast ingest is configured (non-empty URL)."""
+    return bool(CLIENT_LEARNING_FORECAST_INGEST_URL)
+
+
+def should_fetch_forecast_bootstrap() -> bool:
+    """True if forecast bootstrap URL is configured (for new .dmg seed)."""
+    return bool(CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL)

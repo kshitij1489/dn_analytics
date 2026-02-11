@@ -7,6 +7,7 @@
 # - No refit after hyperparameter optimization
 # - Strict numerical checks (no NaN masking)
 
+import glob
 import os
 import logging
 import warnings
@@ -311,20 +312,15 @@ class RollingGPForecaster:
     """
     def __init__(self, storage_path: str = None):
         if storage_path is None:
-            # Determine writable path dynamically
-            db_url = os.environ.get('DB_URL')
-
-            if db_url and os.path.isabs(db_url):
-                # Production (.dmg): DB_URL is absolute — store model alongside DB
-                base_dir = os.path.dirname(db_url)
-                self.storage_path = os.path.join(base_dir, 'gp_model_v1.pkl')
-            else:
-                # Dev mode: DB_URL is relative or unset — store in data/
-                self.storage_path = os.path.join('data', 'gp_model_v1.pkl')
+            # Use the same path_helper utility as item demand models.
+            # - Production (.dmg): resolves to ~/Library/Application Support/.../data/
+            # - Dev: resolves to <project_root>/data/
+            from src.core.utils.path_helper import get_data_path
+            self.storage_path = get_data_path(os.path.join('data', 'gp_model.pkl'))
         else:
             self.storage_path = storage_path
-            
-        logger.info(f"GaussianProcessForecaster initialized with storage_path: {self.storage_path}")
+
+        logger.info(f"RollingGPForecaster storage_path: {self.storage_path}")
 
         self.model = GaussianProcessForecaster()
         self.window_start: Optional[pd.Timestamp] = None
@@ -352,7 +348,17 @@ class RollingGPForecaster:
         dir_name = os.path.dirname(self.storage_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        
+
+        # Remove deprecated gp_model_*.pkl files (e.g. gp_model_v1.pkl)
+        pattern = os.path.join(dir_name, 'gp_model_*.pkl')
+        for fpath in glob.glob(pattern):
+            if os.path.abspath(fpath) != os.path.abspath(self.storage_path):
+                try:
+                    os.remove(fpath)
+                    logger.info(f"Removed deprecated GP model file: {fpath}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove deprecated GP file {fpath}: {e}")
+
         payload = {
             'model': self.model,
             'window_start': self.window_start,
@@ -439,6 +445,38 @@ class RollingGPForecaster:
         # 4. Save immediately
         self.save()
 
+    def predict_historical(self, n_days: int = 30) -> pd.DataFrame:
+        """
+        Generate in-sample predictions for the last n_days of training data.
+        
+        This produces fitted values analogous to Holt-Winters' fittedvalues
+        and Prophet's predict() on historical dates.  The GP model interpolates
+        through (or very close to) training points, so in-sample std is small.
+        
+        Returns:
+            DataFrame with columns [ds, pred_mean, pred_std, lower, upper]
+            or empty DataFrame if model is not fitted.
+        """
+        if self.training_data is None or not self.model.fitted:
+            return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
+        
+        df = self.training_data.tail(n_days).copy()
+        if df.empty:
+            return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
+        
+        try:
+            mean, std = self.model.predict(df)
+            return pd.DataFrame({
+                'ds': df['ds'].values,
+                'pred_mean': mean,
+                'pred_std': std,
+                'lower': mean - 1.96 * std,
+                'upper': mean + 1.96 * std,
+            })
+        except Exception as e:
+            logger.warning(f"GP historical prediction failed: {e}")
+            return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
+
     def predict_next_days(self, future_weather: pd.DataFrame) -> pd.DataFrame:
         """Generate multi-day forecast using roll-forward simulation."""
         if self.training_data is None or not self.model.fitted:
@@ -483,3 +521,20 @@ if __name__ == '__main__':
     forecast = forecast_days(gp, df, future_weather)
     print("\n7-Day Forecast:")
     print(forecast.to_string(index=False))
+
+def delete_gp_model():
+    """Delete the persisted GP model file to force retraining."""
+    try:
+        # Re-use logic from __init__ to resolve path
+        from src.core.utils.path_helper import get_data_path
+        storage_path = get_data_path(os.path.join('data', 'gp_model.pkl'))
+        
+        if os.path.exists(storage_path):
+            os.remove(storage_path)
+            logger.info(f"Deleted GP model file at {storage_path}")
+        else:
+            logger.info("No GP model file found to delete.")
+            
+    except Exception as e:
+        logger.error(f"Failed to delete GP model: {e}")
+        # Don't raise, just log - we want the DB clear to succeed regardless

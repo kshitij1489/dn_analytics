@@ -26,6 +26,8 @@ Thumbs.db
 
 # Data files
 *.db
+data/models/item_demand_backtest/
+data/models/gp_backtest/
 *.db-shm
 *.db-wal
 *.sqlite

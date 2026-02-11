@@ -4,6 +4,8 @@ Uses Facebook Prophet with weather regressors (temp_max, rain_sum) for revenue f
 """
 import json
 import logging
+import warnings
+
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict
@@ -54,8 +56,10 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         )
         model.add_regressor('temp_max')
         model.add_regressor('rain_sum')
-        model.fit(prophet_df)
-        
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            model.fit(prophet_df)
+
         # Create future dataframe
         future = model.make_future_dataframe(periods=periods)
         
@@ -95,9 +99,11 @@ def forecast_prophet(df: pd.DataFrame, periods: int = 7) -> Dict:
         # Fallback for any remaining NaNs
         future['temp_max'] = future['temp_max'].ffill().fillna(25.0)
         future['rain_sum'] = future['rain_sum'].fillna(0)
-        
+
         # Generate predictions
-        forecast = model.predict(future)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            forecast = model.predict(future)
         
         results = []
         

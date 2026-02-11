@@ -27,8 +27,10 @@ def df_to_json(df: pd.DataFrame) -> List[Dict[str, Any]]:
     for col in df.columns:
         if df[col].dtype == 'object':
             try:
-                df[col] = pd.to_numeric(df[col], errors='ignore')
-            except:
+                converted = pd.to_numeric(df[col], errors='coerce')
+                if converted.notna().any():
+                    df[col] = converted
+            except (ValueError, TypeError):
                 pass
     
     # Replace inf and nan with None for JSON compatibility

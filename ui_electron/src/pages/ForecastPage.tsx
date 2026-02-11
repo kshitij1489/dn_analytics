@@ -17,14 +17,6 @@ interface ForecastDataPoint {
     gp_upper?: number;
 }
 
-interface ReplayDataPoint {
-    date: string;
-    pred_mean: number;
-    pred_std?: number;
-    lower_95: number;
-    upper_95: number;
-    actual_revenue: number | null;
-}
 
 interface ForecastResponse {
     summary: {
@@ -39,6 +31,7 @@ interface ForecastResponse {
         prophet: ForecastDataPoint[];
         gp: ForecastDataPoint[];
     };
+    debug_info?: { awaiting_action?: boolean; message?: string; cloud_not_configured?: boolean };
 }
 
 export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
@@ -47,12 +40,6 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'forecast' | 'menu'>('forecast');
     const [activeModels, setActiveModels] = useState<string[]>(['weekday_avg', 'holt_winters', 'prophet']);
-
-    // Replay Mode State
-    const [replayDate, setReplayDate] = useState<string>('');
-    const [replayData, setReplayData] = useState<ReplayDataPoint[] | null>(null);
-    const [replayLoading, setReplayLoading] = useState(false);
-    const [replayError, setReplayError] = useState<string | null>(null);
 
     const toggleModel = (model: string) => {
         setActiveModels(prev =>
@@ -63,13 +50,6 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     useEffect(() => {
         loadData();
     }, [lastDbSync]);
-
-    // Effect to fetch replay data when date changes
-    useEffect(() => {
-        if (replayDate) {
-            loadReplayData(replayDate);
-        }
-    }, [replayDate]);
 
     const loadData = async () => {
         setLoading(true);
@@ -82,21 +62,6 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
             setError(e.message || 'Failed to generate forecast');
         } finally {
             setLoading(false);
-        }
-    };
-
-    const loadReplayData = async (date: string) => {
-        setReplayLoading(true);
-        setReplayError(null);
-        try {
-            const res = await endpoints.forecast.replay(date);
-            setReplayData(res.data.data);
-        } catch (e: any) {
-            console.error(e);
-            setReplayError(e.message || 'Failed to load forecast replay');
-            setReplayData([]);
-        } finally {
-            setReplayLoading(false);
         }
     };
 
@@ -204,7 +169,50 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                 <ItemDemandForecast />
             ) : (
                 <>
-
+                    {data?.debug_info?.awaiting_action && (
+                        <div style={{
+                            padding: '12px 16px',
+                            marginBottom: '16px',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            border: '1px solid rgba(245, 158, 11, 0.4)',
+                            borderRadius: '8px',
+                            color: 'var(--text-color)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px',
+                            flexWrap: 'wrap',
+                        }}>
+                            <span>{data.debug_info.message || 'Forecast cache is empty. Use Pull from Cloud or Full Retrain to populate.'}</span>
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        const res = await endpoints.forecast.pullFromCloud('revenue');
+                                        const msg = res.data as { revenue_inserted?: number };
+                                        alert(`Done. Revenue: ${msg.revenue_inserted ?? 0}`);
+                                        loadData();
+                                    } catch (e: any) {
+                                        alert(e.response?.data?.detail || "Pull failed");
+                                    }
+                                }}
+                                style={{ padding: '8px 14px', background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                            >
+                                Pull from Cloud
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        await endpoints.forecast.fullRetrain('revenue');
+                                        alert('Sales retrain started. Refresh in ~30 seconds.');
+                                    } catch (e: any) {
+                                        alert(e.response?.data?.detail || "Retrain failed");
+                                    }
+                                }}
+                                style={{ padding: '8px 14px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                            >
+                                Full Retrain
+                            </button>
+                        </div>
+                    )}
                     <div className="forecast-kpis">
                         <div className="forecast-kpi-card forecast-kpi-revenue">
                             <span className="kpi-label">Projected 7-Day Revenue (Prophet)</span>
@@ -497,113 +505,6 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                         </ResizableTableWrapper>
                     </Card>
 
-                    {/* Forecast Replay (Audit Mode) */}
-                    <Card
-                        title={replayDate ? `Forecast Audit: ${formatDate(replayDate)}` : 'Forecast Audit (Replay Mode)'}
-                        headerAction={
-                            <div className="audit-controls">
-                                <label>Model Run Date:</label>
-                                <input
-                                    type="date"
-                                    className="audit-date-input"
-                                    value={replayDate}
-                                    onChange={(e) => setReplayDate(e.target.value)}
-                                />
-                            </div>
-                        }
-                    >
-                        <div className="forecast-chart-container forecast-chart-container--replay">
-                            {replayLoading && <div className="loading-overlay"><LoadingSpinner /></div>}
-
-                            {!replayDate && (
-                                <div className="empty-state-message">
-                                    Select a past date to replay the forecast generated on that day.
-                                </div>
-                            )}
-
-                            {replayDate && replayError && (
-                                <div className="replay-error-message">
-                                    ⚠️ {replayError}
-                                </div>
-                            )}
-
-                            {replayDate && !replayError && replayData && replayData.length === 0 && (
-                                <div className="empty-state-message">
-                                    No forecast snapshot found for {formatDate(replayDate)}.
-                                </div>
-                            )}
-
-                            {replayDate && !replayError && replayData && replayData.length > 0 && (
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ComposedChart data={replayData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
-                                        <XAxis
-                                            dataKey="date"
-                                            tickFormatter={formatDate}
-                                            tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
-                                        />
-                                        <YAxis
-                                            tickFormatter={(val) => `₹${val / 1000}k`}
-                                            tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
-                                            axisLine={false}
-                                        />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: 'var(--card-bg)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
-                                            labelFormatter={formatDate}
-                                            formatter={(val: number | undefined, name?: string) => {
-                                                if (val === undefined || val === null) return ['—', name || ''];
-                                                return [formatCurrency(val), name || ''];
-                                            }}
-                                        />
-                                        <Legend />
-
-                                        {/* Confidence Interval Band (two stacked areas) */}
-                                        <Area
-                                            type="monotone"
-                                            dataKey="upper_95"
-                                            stroke="none"
-                                            fill="#93C5FD"
-                                            fillOpacity={0.3}
-                                            name="Upper 95%"
-                                            legendType="none"
-                                            tooltipType="none"
-                                        />
-                                        <Area
-                                            type="monotone"
-                                            dataKey="lower_95"
-                                            stroke="none"
-                                            fill="var(--card-bg)"
-                                            fillOpacity={1}
-                                            name="Lower 95%"
-                                            legendType="none"
-                                            tooltipType="none"
-                                        />
-
-                                        {/* Forecast Mean (Blue) */}
-                                        <Line
-                                            type="monotone"
-                                            dataKey="pred_mean"
-                                            name={`Forecast (${formatDate(replayDate)})`}
-                                            stroke="#3B82F6"
-                                            strokeWidth={3}
-                                            dot={true}
-                                        />
-
-                                        {/* Actual Revenue (Black) */}
-                                        <Line
-                                            type="monotone"
-                                            dataKey="actual_revenue"
-                                            name="Actual Revenue"
-                                            stroke="#000000"
-                                            strokeWidth={2}
-                                            dot={true}
-                                            connectNulls={true}
-                                        />
-                                    </ComposedChart>
-                                </ResponsiveContainer>
-                            )}
-                        </div>
-                    </Card>
                 </>
             )}
         </div>

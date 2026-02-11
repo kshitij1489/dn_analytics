@@ -183,6 +183,10 @@ export const endpoints = {
         get: () => api.get('/forecast'),
         replay: (run_date: string) => api.get('/forecast/replay', { params: { run_date } }),
         items: (params?: { item_id?: string; days?: number }) => api.get('/forecast/items', { params }),
+        pullFromCloud: (scope?: 'revenue' | 'items' | 'all') =>
+            api.post('/forecast/pull-from-cloud', null, { params: { scope: scope || 'all' } }),
+        fullRetrain: (scope?: 'revenue' | 'items' | 'all') =>
+            api.post('/forecast/full-retrain', null, { params: { scope: scope || 'all' } }),
     },
 
     petpooja: {

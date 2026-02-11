@@ -246,3 +246,109 @@ def forecast_items(
     logger.info(f"Forecast generated: {len(result)} rows, "
                 f"{result['item_id'].nunique()} items")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Historical backtest — in-sample predictions for overlay chart
+# ---------------------------------------------------------------------------
+
+_EMPTY_BACKTEST_COLS = [
+    'date', 'item_id', 'item_name',
+    'predicted_p50', 'predicted_p90', 'probability_of_sale',
+]
+
+
+def backtest_items(
+    df_history: pd.DataFrame,
+    n_days: int = 30,
+    model_dir: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Generate in-sample predictions for the last n_days of historical data.
+
+    Unlike forecast_items() which uses autoregressive day-by-day prediction,
+    this function uses *actual* lag features for each historical date —
+    giving a fair comparison of model-fit vs reality.
+
+    This is analogous to Holt-Winters' fittedvalues / Prophet's predict() on
+    historical dates / GP's predict_historical().
+
+    Args:
+        df_history: Full historical DataFrame (≥90 days recommended) with
+                    columns [date, item_id, quantity_sold, ...].
+        n_days: Number of recent days to backtest (default 30).
+        model_dir: Optional path to model directory.
+
+    Returns:
+        DataFrame with columns:
+            date, item_id, item_name, predicted_p50, predicted_p90,
+            probability_of_sale
+    """
+    logger.info(f"Backtesting items: last {n_days} days of history")
+
+    try:
+        classifier, reg_p50, reg_p90, feature_cols = get_models(model_dir)
+    except FileNotFoundError:
+        logger.warning("No trained models found — cannot backtest.")
+        return pd.DataFrame(columns=_EMPTY_BACKTEST_COLS)
+
+    clf_degenerate = _is_classifier_degenerate(classifier)
+
+    if df_history is None or len(df_history) == 0:
+        return pd.DataFrame(columns=_EMPTY_BACKTEST_COLS)
+
+    # Densify to get a complete (date × item) grid with zero-fills
+    df_dense = densify_daily_grid(df_history)
+
+    # Build features on the full history (uses actual lag values)
+    df_feat = build_features(df_dense, is_future=False)
+
+    if df_feat.empty:
+        return pd.DataFrame(columns=_EMPTY_BACKTEST_COLS)
+
+    # Filter to last n_days
+    cutoff = df_feat['date'].max() - pd.Timedelta(days=n_days)
+    df_target = df_feat[df_feat['date'] > cutoff].copy()
+
+    if df_target.empty:
+        return pd.DataFrame(columns=_EMPTY_BACKTEST_COLS)
+
+    # Fill any remaining NaN features with 0
+    X = df_target[feature_cols].fillna(0)
+
+    # ---- Stage 1: Classification — P(sold) ----
+    if clf_degenerate:
+        prob_sold = np.ones(len(X))
+    else:
+        prob_sold = classifier.predict_proba(X)[:, 1]
+
+    # ---- Stage 2: Regression — quantity if sold ----
+    pred_p50 = np.maximum(0, reg_p50.predict(X))
+    pred_p90 = np.maximum(0, reg_p90.predict(X))
+
+    # Quantile crossing fix
+    pred_p90 = np.maximum(pred_p90, pred_p50)
+
+    # Final demand = probability × quantity
+    final_p50 = prob_sold * pred_p50
+    final_p90 = prob_sold * pred_p90
+
+    item_names = (
+        df_target['item_name'].values
+        if 'item_name' in df_target.columns
+        else ['Unknown'] * len(df_target)
+    )
+
+    result = pd.DataFrame({
+        'date': df_target['date'].values,
+        'item_id': df_target['item_id'].values,
+        'item_name': item_names,
+        'predicted_p50': np.round(final_p50, 2),
+        'predicted_p90': np.round(final_p90, 2),
+        'probability_of_sale': np.round(prob_sold, 4),
+    })
+
+    logger.info(f"Backtest generated: {len(result)} rows, "
+                f"{result['item_id'].nunique()} items, "
+                f"{result['date'].min()} to {result['date'].max()}")
+    return result

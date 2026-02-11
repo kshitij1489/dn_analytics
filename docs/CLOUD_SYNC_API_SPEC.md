@@ -15,6 +15,8 @@
 | `/desktop-analytics-sync/learning/ingest` | POST | AI pipeline metadata (ai_logs, ai_feedback) + Tier 3 (cache_stats, aggregated_counters, schema_hash) |
 | `/desktop-analytics-sync/menu-bootstrap/ingest` | POST | Menu knowledge: id_maps + cluster_state (for new-user bootstrap) |
 | `/desktop-analytics-sync/conversations/sync` | POST | AI conversations + messages (existing sync) |
+| `/desktop-analytics-sync/forecasts/ingest` | POST | Revenue + item demand forecast cache + backtest cache (historical + future predictions) |
+| `/desktop-analytics-sync/forecasts/bootstrap` | GET | Return latest forecast cache + backtest so new .dmg can seed without precomputing |
 | `/desktop-analytics-sync/menu-bootstrap/latest` | GET | *(Optional)* Return latest merged menu bootstrap for new clients to pull |
 
 Base URL and optional API key are configured on the client via environment variables.
@@ -512,6 +514,268 @@ class IngestConversationMessage(models.Model):
 
 ---
 
+### 3.6 Forecasts Ingest
+
+**POST** `/desktop-analytics-sync/forecasts/ingest`
+
+**Purpose:** Sync cached revenue forecasts (from all 4 models: Weekday Avg, Holt-Winters, Prophet, GP), item-level demand forecasts, and **point-in-time backtest caches** to the cloud. Enables new .dmg installs to pull precomputed data and skip expensive recomputation.
+
+**Request body:**
+
+```json
+{
+  "revenue_forecasts": [
+    {
+      "forecast_date": "2026-02-11",
+      "model_name": "gp",
+      "generated_on": "2026-02-11",
+      "revenue": 32500.0,
+      "orders": 0,
+      "pred_std": 5000.0,
+      "lower_95": 22700.0,
+      "upper_95": 42300.0,
+      "temp_max": 28.5,
+      "rain_category": "none"
+    }
+  ],
+  "item_forecasts": [
+    {
+      "forecast_date": "2026-02-11",
+      "item_id": "uuid-or-menu-item-id",
+      "generated_on": "2026-02-11",
+      "p50": 4.0,
+      "p90": 8.0,
+      "probability": 0.72,
+      "recommended_prep": 7
+    }
+  ],
+  "revenue_backtest": [
+    {
+      "forecast_date": "2026-02-10",
+      "model_name": "gp",
+      "model_trained_through": "2026-02-09",
+      "revenue": 31200.0,
+      "orders": 0,
+      "pred_std": 4800.0,
+      "lower_95": 21800.0,
+      "upper_95": 40600.0
+    }
+  ],
+  "item_backtest": [
+    {
+      "forecast_date": "2026-02-10",
+      "item_id": "uuid-or-menu-item-id",
+      "model_trained_through": "2026-02-09",
+      "p50": 3.5,
+      "p90": 7.2,
+      "probability": 0.68
+    }
+  ],
+  "uploaded_by": {
+    "employee_id": "string",
+    "name": "string"
+  }
+}
+```
+
+- **`revenue_forecasts`** — Forward predictions from all 4 models. `model_name` is one of: `weekday_avg`, `holt_winters`, `prophet`, `gp`. GP-specific fields (`pred_std`, `lower_95`, `upper_95`) are null for other models. Prophet includes `temp_max` and `rain_category`.
+- **`item_forecasts`** — Item-level demand predictions (future dates).
+- **`revenue_backtest`** — Point-in-time T→T+1 backtest: for each `forecast_date` D, predictions made by models trained on data through `model_trained_through` (D-1). Key: `(forecast_date, model_name, model_trained_through)`.
+- **`item_backtest`** — Point-in-time T→T+1 backtest per item. Key: `(forecast_date, item_id, model_trained_through)`.
+
+All arrays may be empty.
+
+**Response:** `200 OK` with any JSON body (e.g. `{"revenue_received": 50, "items_received": 200, "revenue_backtest_received": 120, "item_backtest_received": 3000}`). Client marks sent rows as uploaded.
+
+**Idempotency:** Use composite unique keys per table; upsert or ignore duplicates.
+
+---
+
+### 3.6.1 PostgreSQL Schema — Forecasts
+
+**Forward forecast caches (today’s predictions for future dates):**
+
+```sql
+CREATE TABLE ingest_revenue_forecasts (
+    id BIGSERIAL PRIMARY KEY,
+    employee_id VARCHAR(64),
+    forecast_date DATE NOT NULL,
+    model_name VARCHAR(32) NOT NULL,
+    generated_on DATE NOT NULL,
+    revenue FLOAT,
+    orders INTEGER DEFAULT 0,
+    pred_std FLOAT,
+    lower_95 FLOAT,
+    upper_95 FLOAT,
+    temp_max FLOAT,
+    rain_category VARCHAR(16),
+    ingested_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(forecast_date, model_name, generated_on, employee_id)
+);
+
+CREATE INDEX idx_ingest_revenue_forecasts_model ON ingest_revenue_forecasts (model_name, generated_on);
+CREATE INDEX idx_ingest_revenue_forecasts_employee ON ingest_revenue_forecasts (employee_id);
+
+CREATE TABLE ingest_item_forecasts (
+    id BIGSERIAL PRIMARY KEY,
+    employee_id VARCHAR(64),
+    forecast_date DATE NOT NULL,
+    item_id VARCHAR(64) NOT NULL,
+    generated_on DATE NOT NULL,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    recommended_prep INTEGER,
+    ingested_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(forecast_date, item_id, generated_on, employee_id)
+);
+
+CREATE INDEX idx_ingest_item_forecasts_item ON ingest_item_forecasts (item_id, generated_on);
+CREATE INDEX idx_ingest_item_forecasts_employee ON ingest_item_forecasts (employee_id);
+```
+
+**Point-in-time backtest caches (T→T+1: at T, what did we predict for T+1?):**
+
+```sql
+CREATE TABLE ingest_revenue_backtest (
+    id BIGSERIAL PRIMARY KEY,
+    employee_id VARCHAR(64),
+    forecast_date DATE NOT NULL,
+    model_name VARCHAR(32) NOT NULL,
+    model_trained_through DATE NOT NULL,
+    revenue FLOAT,
+    orders INTEGER DEFAULT 0,
+    pred_std FLOAT,
+    lower_95 FLOAT,
+    upper_95 FLOAT,
+    ingested_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(forecast_date, model_name, model_trained_through, employee_id)
+);
+
+CREATE INDEX idx_ingest_revenue_backtest_dates ON ingest_revenue_backtest (forecast_date, model_trained_through);
+CREATE INDEX idx_ingest_revenue_backtest_employee ON ingest_revenue_backtest (employee_id);
+
+CREATE TABLE ingest_item_backtest (
+    id BIGSERIAL PRIMARY KEY,
+    employee_id VARCHAR(64),
+    forecast_date DATE NOT NULL,
+    item_id VARCHAR(64) NOT NULL,
+    model_trained_through DATE NOT NULL,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    ingested_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(forecast_date, item_id, model_trained_through, employee_id)
+);
+
+CREATE INDEX idx_ingest_item_backtest_dates ON ingest_item_backtest (forecast_date, model_trained_through);
+CREATE INDEX idx_ingest_item_backtest_employee ON ingest_item_backtest (employee_id);
+```
+
+### 3.6.2 Django Model Examples — Forecasts
+
+```python
+class IngestRevenueForecast(models.Model):
+    uploader = models.ForeignKey(SyncUploader, null=True, on_delete=models.SET_NULL)
+    forecast_date = models.DateField()
+    model_name = models.CharField(max_length=32)
+    generated_on = models.DateField()
+    revenue = models.FloatField(null=True)
+    orders = models.IntegerField(default=0)
+    pred_std = models.FloatField(null=True)
+    lower_95 = models.FloatField(null=True)
+    upper_95 = models.FloatField(null=True)
+    temp_max = models.FloatField(null=True)
+    rain_category = models.CharField(max_length=16, null=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("forecast_date", "model_name", "generated_on", "uploader")]
+
+class IngestItemForecast(models.Model):
+    uploader = models.ForeignKey(SyncUploader, null=True, on_delete=models.SET_NULL)
+    forecast_date = models.DateField()
+    item_id = models.CharField(max_length=64)
+    generated_on = models.DateField()
+    p50 = models.FloatField(null=True)
+    p90 = models.FloatField(null=True)
+    probability = models.FloatField(null=True)
+    recommended_prep = models.IntegerField(null=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("forecast_date", "item_id", "generated_on", "uploader")]
+
+class IngestRevenueBacktest(models.Model):
+    uploader = models.ForeignKey(SyncUploader, null=True, on_delete=models.SET_NULL)
+    forecast_date = models.DateField()
+    model_name = models.CharField(max_length=32)
+    model_trained_through = models.DateField()
+    revenue = models.FloatField(null=True)
+    orders = models.IntegerField(default=0)
+    pred_std = models.FloatField(null=True)
+    lower_95 = models.FloatField(null=True)
+    upper_95 = models.FloatField(null=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("forecast_date", "model_name", "model_trained_through", "uploader")]
+
+class IngestItemBacktest(models.Model):
+    uploader = models.ForeignKey(SyncUploader, null=True, on_delete=models.SET_NULL)
+    forecast_date = models.DateField()
+    item_id = models.CharField(max_length=64)
+    model_trained_through = models.DateField()
+    p50 = models.FloatField(null=True)
+    p90 = models.FloatField(null=True)
+    probability = models.FloatField(null=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("forecast_date", "item_id", "model_trained_through", "uploader")]
+```
+
+---
+
+### 3.6.3 Forecasts Bootstrap (pull for new .dmg)
+
+**GET** `/desktop-analytics-sync/forecasts/bootstrap`
+
+**Purpose:** New .dmg installs can call this to download the latest merged forecast cache (forward + backtest) and seed their local SQLite. Avoids expensive recomputation on first launch.
+
+**Query parameters (optional):**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `generated_on` | DATE | Filter to this generation date (default: latest) |
+| `backtest_days` | int | Max days of backtest to return (default: 30) |
+| `scope` | string | `"revenue"`, `"items"`, or omit for all. Server may use this to filter the response. |
+
+**Response:** `200 OK` with JSON:
+
+```json
+{
+  "revenue_forecasts": [ { "forecast_date": "...", "model_name": "gp", "generated_on": "...", "revenue": 32500, ... } ],
+  "item_forecasts": [ { "forecast_date": "...", "item_id": "...", "generated_on": "...", "p50": 4, ... } ],
+  "revenue_backtest": [ { "forecast_date": "...", "model_name": "gp", "model_trained_through": "...", "revenue": 31200, ... } ],
+  "item_backtest": [ { "forecast_date": "...", "item_id": "...", "model_trained_through": "...", "p50": 3.5, ... } ]
+}
+```
+
+- Client inserts into `forecast_cache`, `item_forecast_cache`, `revenue_backtest_cache`, and `item_backtest_cache` locally.
+- If no data exists, return `200` with empty arrays.
+
+**Client SQLite schema (reference)** — Response fields map to these client tables:
+
+| Client table | Key columns | Notes |
+|--------------|-------------|-------|
+| `forecast_cache` | forecast_date, model_name, generated_on | Forward predictions |
+| `item_forecast_cache` | forecast_date, item_id, generated_on | Item demand (future) |
+| `revenue_backtest_cache` | forecast_date, model_name, model_trained_through | T→T+1 backtest |
+| `item_backtest_cache` | forecast_date, item_id, model_trained_through | T→T+1 backtest |
+
+---
+
 ## 6. Idempotency and Deduplication
 
 | Source | Client ID field | Recommendation |
@@ -521,6 +785,10 @@ class IngestConversationMessage(models.Model):
 | AI feedback | `feedback_id` + `query_id` | UPSERT by (feedback_id, query_id). |
 | Conversations | `conversation_id`, `message_id` | UPSERT conversation by conversation_id; UPSERT messages by (conversation_id, message_id). |
 | Menu bootstrap | No client-side id | Append or merge; update `menu_bootstrap_latest` when you want to expose latest. |
+| Revenue forecasts | `forecast_date` + `model_name` + `generated_on` | UPSERT by (forecast_date, model_name, generated_on, employee_id). |
+| Item forecasts | `forecast_date` + `item_id` + `generated_on` | UPSERT by (forecast_date, item_id, generated_on, employee_id). |
+| Revenue backtest | `forecast_date` + `model_name` + `model_trained_through` | UPSERT by (forecast_date, model_name, model_trained_through, employee_id). |
+| Item backtest | `forecast_date` + `item_id` + `model_trained_through` | UPSERT by (forecast_date, item_id, model_trained_through, employee_id). |
 
 Use PostgreSQL `ON CONFLICT (unique_column) DO UPDATE SET ...` or Django `update_or_create` to avoid duplicates when the client retries.
 
@@ -545,8 +813,9 @@ The analytics client uses these environment variables. You provide the base URL 
 | `CLIENT_LEARNING_API_KEY` | Bearer token for the three above |
 | `MASTER_SERVER_URL` | Base URL for conversation sync (e.g. `https://your-server.com`) |
 | `MASTER_SERVER_API_KEY` | Bearer token for conversation sync |
+| `CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL` | Full URL for GET forecast bootstrap (e.g. `https://your-server.com/desktop-analytics-sync/forecasts/bootstrap`) |
 
-Conversation sync uses `MASTER_SERVER_URL` + `/desktop-analytics-sync/conversations/sync`. The other three use full URLs. All use JSON and `Content-Type: application/json`.
+Conversation sync uses `MASTER_SERVER_URL` + `/desktop-analytics-sync/conversations/sync`. The other ingest endpoints use full URLs. Forecast bootstrap uses `CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL` when set. All use JSON and `Content-Type: application/json`.
 
 ---
 
@@ -556,9 +825,11 @@ Conversation sync uses `MASTER_SERVER_URL` + `/desktop-analytics-sync/conversati
 - [ ] Implement POST `/desktop-analytics-sync/learning/ingest` (body: ai_logs, ai_feedback, cache_stats, aggregated_counters, schema_hash, optional uploaded_by); store with query_id / feedback_id deduplication.
 - [ ] Implement POST `/desktop-analytics-sync/menu-bootstrap/ingest` (body: id_maps, cluster_state, optional uploaded_by); merge into menu_bootstrap_latest if desired.
 - [ ] Implement POST `/desktop-analytics-sync/conversations/sync` (body: conversations with messages); upsert by conversation_id and message_id.
+- [ ] Implement POST `/desktop-analytics-sync/forecasts/ingest` (body: revenue_forecasts, item_forecasts, revenue_backtest, item_backtest, optional uploaded_by); upsert by composite keys per §3.6.
+- [ ] Optional: GET `/desktop-analytics-sync/forecasts/bootstrap` returning revenue_forecasts, item_forecasts, revenue_backtest, item_backtest (for new .dmg seed).
 - [ ] Optional: GET `/desktop-analytics-sync/menu-bootstrap/latest` returning id_maps + cluster_state.
 - [ ] Auth: validate Bearer token, return 401 if required and missing/invalid.
-- [ ] Postgres: create tables (or Django models) per §4–5; add indexes for query_id, record_id, employee_id, and time ranges.
+- [ ] Postgres: create tables (or Django models) per §4–5 + §3.6.1; add ingest_revenue_backtest and ingest_item_backtest; add indexes for query_id, record_id, employee_id, forecast_date, model_trained_through, and time ranges.
 - [ ] Idempotency: use client IDs to deduplicate; document retention and PII handling.
 
 This specification is the single reference for implementing the cloud side of the analytics client data sync.

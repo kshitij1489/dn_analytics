@@ -513,3 +513,93 @@ CREATE TABLE IF NOT EXISTS forecast_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_run_date ON forecast_snapshots(forecast_run_date);
 
+-- ============================================================================
+-- 21. FORECAST CACHE (Revenue Models)
+-- ============================================================================
+-- Persists historical fitted values + future predictions for all revenue models.
+-- Used as a read-through cache (keyed by generated_on = today's business date)
+-- and as the source for cloud sync (uploaded_at tracking).
+CREATE TABLE IF NOT EXISTS forecast_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,          -- Target date being predicted
+    model_name TEXT NOT NULL,             -- 'weekday_avg' | 'holt_winters' | 'prophet' | 'gp'
+    generated_on DATE NOT NULL,           -- Business date when this was computed
+    revenue FLOAT,
+    orders INTEGER DEFAULT 0,
+    pred_std FLOAT,                       -- GP only: standard deviation
+    lower_95 FLOAT,                       -- GP only: 95% CI lower bound
+    upper_95 FLOAT,                       -- GP only: 95% CI upper bound
+    temp_max FLOAT,                       -- Prophet: temperature regressor
+    rain_category TEXT,                   -- Prophet: rain category
+    uploaded_at TEXT,                      -- Cloud sync: set after successful upload
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(forecast_date, model_name, generated_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_generated ON forecast_cache(generated_on);
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_uploaded ON forecast_cache(uploaded_at);
+
+-- ============================================================================
+-- 22. ITEM FORECAST CACHE (Item Demand)
+-- ============================================================================
+-- Persists backtest (historical) + forward predictions per item.
+CREATE TABLE IF NOT EXISTS item_forecast_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,          -- Target date
+    item_id TEXT NOT NULL,
+    generated_on DATE NOT NULL,           -- Business date when computed
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    recommended_prep INTEGER,
+    uploaded_at TEXT,                      -- Cloud sync tracking
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(forecast_date, item_id, generated_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_forecast_cache_generated ON item_forecast_cache(generated_on);
+CREATE INDEX IF NOT EXISTS idx_item_forecast_cache_uploaded ON item_forecast_cache(uploaded_at);
+
+-- ============================================================================
+-- 23. ITEM BACKTEST CACHE (Point-in-time T→T+1 forecasts)
+-- ============================================================================
+-- For each forecast_date D, we store predictions made with a model trained
+-- on data through (D-1). Key: (forecast_date, item_id, model_trained_through).
+-- Enables "at T, what did we predict for T+1" without retraining when cached.
+CREATE TABLE IF NOT EXISTS item_backtest_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,          -- Date being predicted (T+1)
+    item_id TEXT NOT NULL,
+    model_trained_through DATE NOT NULL,  -- Last date in training data (T)
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    uploaded_at TEXT,                     -- Cloud sync: set after successful upload
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(forecast_date, item_id, model_trained_through)
+);
+CREATE INDEX IF NOT EXISTS idx_item_backtest_cache_dates ON item_backtest_cache(forecast_date, model_trained_through);
+
+-- ============================================================================
+-- 24. REVENUE BACKTEST CACHE (Point-in-time T→T+1 for all 4 models)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS revenue_backtest_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,
+    model_name TEXT NOT NULL,
+    model_trained_through DATE NOT NULL,
+    revenue FLOAT,
+    orders INTEGER DEFAULT 0,
+    pred_std FLOAT,
+    lower_95 FLOAT,
+    upper_95 FLOAT,
+    uploaded_at TEXT,                      -- Cloud sync: set after successful upload
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(forecast_date, model_name, model_trained_through)
+);
+CREATE INDEX IF NOT EXISTS idx_revenue_backtest_cache_dates ON revenue_backtest_cache(forecast_date, model_trained_through);
+
