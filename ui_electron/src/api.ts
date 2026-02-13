@@ -70,6 +70,7 @@ export const endpoints = {
         hourlyRevenueByDate: (date: string) => api.get('/insights/hourly_revenue_by_date', { params: { date } }),
         orderSource: (params?: any) => api.get('/insights/order_source', { params }),
         customerReorderRate: (params?: any) => api.get('/insights/customer/reorder_rate', { params }),
+        reorderRateTrend: (params?: any) => api.get('/insights/customer/reorder_rate_trend', { params }),
         customerLoyalty: (params?: any) => api.get('/insights/customer/loyalty', { params }),
         topCustomers: (params?: any) => api.get('/insights/customer/top', { params }),
         avgRevenueByDay: (params?: any) => api.get('/insights/avg_revenue_by_day', { params }),

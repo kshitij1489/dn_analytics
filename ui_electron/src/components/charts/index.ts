@@ -16,3 +16,4 @@ export { HourlyRevenueChart } from './HourlyRevenueChart';
 export { OrderSourceChart } from './OrderSourceChart';
 export { AverageRevenueByDayChart } from './AverageRevenueByDayChart';
 export { BrandAwarenessChart } from './BrandAwarenessChart';
+export { ReorderRateChart } from './ReorderRateChart';

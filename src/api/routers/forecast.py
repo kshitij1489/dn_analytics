@@ -614,65 +614,113 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
         today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
 
         # ---- Check cache first (fast path) ----
+        # ---- Check cache first (fast path) ----
+        target_date = today_str
+        using_fallback = False
+        cached = {}
+        
+        # 1. Try loading today's cache
         if is_revenue_cache_fresh(conn, today_str):
             cached = load_revenue_forecasts(conn, today_str)
-            # Require all 4 models including GP — otherwise we serve empty GP indefinitely
-            # (forecast_gp returns [] when model is stale; we'd never retry after that)
-            has_gp = cached.get("gp") and len(cached.get("gp", [])) > 0
-            if cached and len(cached) >= 4 and has_gp:
-                logger.info(f"Serving revenue forecasts from cache ({len(cached)} models)")
-                # We still need fresh historical data for the blue actuals line
-                df = get_historical_data(conn, days=90)
-                df_history = df[df['ds'].dt.date < today_date]
-                history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
 
-                history_rows = [
-                    {
-                        "sale_date": row['ds'].strftime('%Y-%m-%d'),
-                        "revenue": float(row['y']),
-                        "orders": int(row['orders']),
-                        "temp_max": float(row['temp_max']),
-                        "rain_category": get_rain_cat(float(row['rain_sum']))
-                    }
-                    for _, row in history_30d.iterrows()
-                ]
+        # 2. Check if today's cache is complete (has all 4 models + GP)
+        has_gp = cached.get("gp") and len(cached.get("gp", [])) > 0
+        is_complete = cached and len(cached) >= 4 and has_gp
+        
+        # 3. If missing or incomplete, try fallback to latest available
+        if not is_complete:
+            from src.core.learning.revenue_forecasting.forecast_cache import (
+                get_latest_revenue_cache_generated_on,
+                get_previous_revenue_cache_generated_on
+            )
+            latest_date = get_latest_revenue_cache_generated_on(conn)
+            
+            # If latest is today (which is incomplete), try the previous one
+            if latest_date == today_str:
+                latest_date = get_previous_revenue_cache_generated_on(conn, today_str)
 
-                raw_forecast = {
-                    "weekday_avg": cached.get("weekday_avg", []),
-                    "holt_winters": cached.get("holt_winters", []),
-                    "prophet": cached.get("prophet", []),
-                    "gp": cached.get("gp", []),
+            if latest_date and latest_date != today_str:
+                logger.info(f"Forecast cache incomplete/missing for {today_str}. Checking fallback: {latest_date}")
+                fallback_cached = load_revenue_forecasts(conn, latest_date)
+                
+                # Check if fallback is complete
+                fb_has_gp = fallback_cached.get("gp") and len(fallback_cached.get("gp", [])) > 0
+                if fallback_cached and len(fallback_cached) >= 4 and fb_has_gp:
+                    cached = fallback_cached
+                    target_date = latest_date
+                    using_fallback = True
+                    is_complete = True
+                    logger.info(f"Using fallback forecast from {target_date}")
+
+        # 4. Serve if complete (either today or fallback)
+        if is_complete:
+            if using_fallback:
+                 logger.info(f"Serving fallback revenue forecasts from cache ({len(cached)} models) generated {target_date}")
+            else:
+                 logger.info(f"Serving revenue forecasts from cache ({len(cached)} models)")
+
+            # We still need fresh historical data for the blue actuals line
+            df = get_historical_data(conn, days=90)
+            df_history = df[df['ds'].dt.date < today_date]
+            history_30d = df_history[df_history['ds'] >= pd.Timestamp(today_date - timedelta(days=30))]
+
+            history_rows = [
+                {
+                    "sale_date": row['ds'].strftime('%Y-%m-%d'),
+                    "revenue": float(row['y']),
+                    "orders": int(row['orders']),
+                    "temp_max": float(row['temp_max']),
+                    "rain_category": get_rain_cat(float(row['rain_sum']))
                 }
-                backtest = _load_revenue_backtest(conn, today_date, MODEL_NAMES)
-                merged = _merge_backtest_and_forecast(backtest, raw_forecast, today_str)
-                forecast_weekday = merged["weekday_avg"]
-                forecast_hw = merged["holt_winters"]
-                forecast_proph = merged["prophet"]
-                forecast_gp_res = merged["gp"]
+                for _, row in history_30d.iterrows()
+            ]
 
-                future_weekday = [f for f in forecast_weekday if f['date'] >= today_str]
-                total_projected_revenue = sum(f['revenue'] for f in future_weekday)
-                total_projected_orders = sum(f.get('orders', 0) for f in future_weekday)
+            raw_forecast = {
+                "weekday_avg": cached.get("weekday_avg", []),
+                "holt_winters": cached.get("holt_winters", []),
+                "prophet": cached.get("prophet", []),
+                "gp": cached.get("gp", []),
+            }
+            # Note: Backtest should also try fallback date if we are using fallback forecast
+            backtest_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+            backtest = _load_revenue_backtest(conn, backtest_date, MODEL_NAMES)
+            
+            merged = _merge_backtest_and_forecast(backtest, raw_forecast, target_date)
+            forecast_weekday = merged["weekday_avg"]
+            forecast_hw = merged["holt_winters"]
+            forecast_proph = merged["prophet"]
+            forecast_gp_res = merged["gp"]
 
-                return {
-                    "summary": {
-                        "generated_at": today_str,
-                        "projected_7d_revenue": total_projected_revenue,
-                        "projected_7d_orders": total_projected_orders
-                    },
-                    "historical": history_rows,
-                    "forecasts": {
-                        "weekday_avg": forecast_weekday,
-                        "holt_winters": forecast_hw,
-                        "prophet": forecast_proph,
-                        "gp": forecast_gp_res
-                    },
-                    "debug_info": {
-                        "holt_winters_error": None,
-                        "prophet_error": None,
-                        "served_from_cache": True,
-                    }
+
+            forecast_gp_res = merged["gp"]
+
+            future_weekday = [f for f in forecast_weekday if f['date'] >= today_str]
+            total_projected_revenue = sum(f['revenue'] for f in future_weekday)
+            total_projected_orders = sum(f.get('orders', 0) for f in future_weekday)
+
+            return {
+                "summary": {
+                    "generated_at": today_str,
+                    "projected_7d_revenue": total_projected_revenue,
+                    "projected_7d_orders": total_projected_orders
+                },
+                "historical": history_rows,
+                "forecasts": {
+                    "weekday_avg": forecast_weekday,
+                    "holt_winters": forecast_hw,
+                    "prophet": forecast_proph,
+                    "gp": forecast_gp_res
+                },
+                "debug_info": {
+                    "holt_winters_error": None,
+                    "prophet_error": None,
+                    "served_from_cache": True,
+                    "using_fallback": using_fallback,
+                    "original_generated_at": target_date if using_fallback else None,
                 }
+            }
+
+
 
         # ---- Cache miss — NO auto-compute. Return empty; user must use Pull from Cloud or Full Retrain ----
         from src.core.forecast_bootstrap import get_bootstrap_endpoint

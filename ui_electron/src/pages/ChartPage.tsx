@@ -9,7 +9,8 @@ import {
     HourlyRevenueChart,
     OrderSourceChart,
     AverageRevenueByDayChart,
-    BrandAwarenessChart
+    BrandAwarenessChart,
+    ReorderRateChart
 } from '../components/charts';
 
 import { endpoints } from '../api';
@@ -41,7 +42,8 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
         { id: 'aovTrend', label: '📊 Avg Order Val' },
         { id: 'hourlyRevenue', label: '⏰ Hourly Rev' },
         { id: 'avgRevenueByDay', label: '📅 Avg Rev/Day' },
-        { id: 'brandAwareness', label: '📈 Brand Awareness' }
+        { id: 'brandAwareness', label: '📈 Brand Awareness' },
+        { id: 'reorderRate', label: '🔄 Reorder Rate' }
     ];
 
     const row2 = [
@@ -124,6 +126,7 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
                 {chartType === 'orderSource' && <OrderSourceChart key={chartKey} />}
                 {chartType === 'avgRevenueByDay' && <AverageRevenueByDayChart key={chartKey} />}
                 {chartType === 'brandAwareness' && <BrandAwarenessChart key={chartKey} />}
+                {chartType === 'reorderRate' && <ReorderRateChart key={chartKey} />}
             </div>
         </div>
     );

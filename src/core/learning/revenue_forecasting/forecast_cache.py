@@ -176,6 +176,34 @@ def is_revenue_cache_fresh(conn, generated_on: str) -> bool:
         return False
 
 
+
+def get_latest_revenue_cache_generated_on(conn) -> Optional[str]:
+    """Return the most recent generated_on in forecast_cache, or None."""
+    try:
+        ensure_tables_exist(conn)
+        cur = conn.execute(
+            "SELECT MAX(generated_on) FROM forecast_cache"
+        )
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
+def get_previous_revenue_cache_generated_on(conn, current_date: str) -> Optional[str]:
+    """Return the recent generated_on strictly before current_date, or None."""
+    try:
+        ensure_tables_exist(conn)
+        cur = conn.execute(
+            "SELECT MAX(generated_on) FROM forecast_cache WHERE generated_on < ?",
+            (current_date,)
+        )
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
 def load_revenue_forecasts(
     conn, generated_on: str
 ) -> Dict[str, List[Dict[str, Any]]]:

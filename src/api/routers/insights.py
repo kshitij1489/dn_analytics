@@ -5,6 +5,7 @@ Provides endpoints for dashboard KPIs, sales trends, customer analytics, etc.
 """
 
 from fastapi import APIRouter, Depends
+import pandas as pd
 from src.core.queries import insights_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
@@ -123,6 +124,24 @@ def get_customer_reorder_rate(conn=Depends(get_db)):
     from src.core.queries.customer_queries import fetch_customer_reorder_rate
     data = fetch_customer_reorder_rate(conn)
     return data if data else {}
+
+
+@router.get("/customer/reorder_rate_trend")
+def get_reorder_rate_trend(
+    granularity: str = 'day',
+    start_date: str = None,
+    end_date: str = None,
+    metric: str = 'orders',
+    conn=Depends(get_db)
+):
+    """
+    Get reorder rate trend over time.
+    Granularity: 'day', 'week', 'month'
+    Metric: 'orders' (Repeat Order Rate), 'customers' (Repeat Customer Rate)
+    """
+    from src.core.queries.customer_queries import fetch_reorder_rate_trend
+    data = fetch_reorder_rate_trend(conn, granularity, start_date, end_date, metric)
+    return df_to_json(pd.DataFrame(data)) if data else []
 
 
 @router.get("/customer/loyalty")
