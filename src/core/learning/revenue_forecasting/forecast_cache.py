@@ -90,14 +90,69 @@ CREATE TABLE IF NOT EXISTS item_backtest_cache (
 )
 """
 
+_VOLUME_FORECAST_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS volume_forecast_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,
+    item_id TEXT NOT NULL,
+    generated_on DATE NOT NULL,
+    volume_value FLOAT NOT NULL,
+    unit TEXT NOT NULL,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    recommended_volume FLOAT,
+    uploaded_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(forecast_date, item_id, generated_on)
+)
+"""
+
+_VOLUME_BACKTEST_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS volume_backtest_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,
+    item_id TEXT NOT NULL,
+    model_trained_through DATE NOT NULL,
+    volume_value FLOAT,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    uploaded_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(forecast_date, item_id, model_trained_through)
+)
+"""
+
+
+def _migrate_volume_tables_to_item_id(conn) -> None:
+    """Migrate volume tables from variant_id to item_id. Drops and recreates if old schema detected."""
+    try:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='volume_forecast_cache'"
+        )
+        if not cur.fetchone():
+            return
+        cur = conn.execute("PRAGMA table_info(volume_forecast_cache)")
+        cols = [row[1] for row in cur.fetchall()]
+        if cols and "variant_id" in cols and "item_id" not in cols:
+            logger.info("Migrating volume tables from variant_id to item_id (menu-item-level)...")
+            conn.execute("DROP TABLE IF EXISTS volume_forecast_cache")
+            conn.execute("DROP TABLE IF EXISTS volume_backtest_cache")
+    except Exception as e:
+        logger.debug(f"Volume table migration check: {e}")
+
 
 def ensure_tables_exist(conn) -> None:
     """Create cache tables if they do not exist yet."""
     try:
+        _migrate_volume_tables_to_item_id(conn)
         conn.execute(_REVENUE_TABLE_SQL)
         conn.execute(_ITEM_TABLE_SQL)
         conn.execute(_BACKTEST_TABLE_SQL)
         conn.execute(_REVENUE_BACKTEST_TABLE_SQL)
+        conn.execute(_VOLUME_FORECAST_TABLE_SQL)
+        conn.execute(_VOLUME_BACKTEST_TABLE_SQL)
         conn.commit()
     except Exception as e:
         logger.warning(f"Could not ensure forecast cache tables: {e}")
@@ -563,3 +618,201 @@ def save_revenue_backtest_forecasts(
         logger.info(f"Cached {len(rows)} {model_name} backtest rows for model_trained_through={model_trained_through}")
     except Exception as e:
         logger.warning(f"Failed to save revenue backtest: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Volume forecast cache (variant-level volume predictions)
+# ---------------------------------------------------------------------------
+
+def is_volume_cache_fresh(conn, generated_on: str) -> bool:
+    """Return True if volume_forecast_cache has rows for this generated_on date."""
+    try:
+        ensure_tables_exist(conn)
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM volume_forecast_cache WHERE generated_on = ?",
+            (generated_on,),
+        )
+        count = cur.fetchone()[0]
+        return count > 0
+    except Exception:
+        return False
+
+
+def get_latest_volume_cache_generated_on(conn) -> Optional[str]:
+    """Return the most recent generated_on in volume_forecast_cache, or None if empty."""
+    try:
+        ensure_tables_exist(conn)
+        cur = conn.execute(
+            "SELECT MAX(generated_on) FROM volume_forecast_cache"
+        )
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
+def load_volume_forecasts(conn, generated_on: str) -> List[Dict[str, Any]]:
+    """Load cached volume forecasts for a specific generation date (per menu item)."""
+    ensure_tables_exist(conn)
+    results: List[Dict[str, Any]] = []
+    try:
+        cur = conn.execute(
+            """SELECT forecast_date, item_id, volume_value, unit,
+                      p50, p90, probability, recommended_volume
+               FROM volume_forecast_cache
+               WHERE generated_on = ?
+               ORDER BY forecast_date, item_id""",
+            (generated_on,),
+        )
+        for row in cur.fetchall():
+            results.append({
+                "date": row[0],
+                "item_id": row[1],
+                "volume_value": row[2],
+                "unit": row[3],
+                "p50": row[4],
+                "p90": row[5],
+                "probability": row[6],
+                "recommended_volume": row[7],
+            })
+    except Exception as e:
+        logger.warning(f"Failed to load volume forecasts from cache: {e}")
+    return results
+
+
+def save_volume_forecasts(
+    conn,
+    forecasts: List[Dict[str, Any]],
+    generated_on: str,
+) -> None:
+    """Persist volume forecast results to the cache."""
+    ensure_tables_exist(conn)
+    if not forecasts:
+        return
+
+    rows = []
+    for f in forecasts:
+        rows.append((
+            f.get("date"),
+            f.get("item_id"),
+            generated_on,
+            f.get("volume_value", 0),
+            f.get("unit", "mg"),
+            f.get("p50"),
+            f.get("p90"),
+            f.get("probability"),
+            f.get("recommended_volume"),
+        ))
+
+    try:
+        conn.executemany(
+            """INSERT OR REPLACE INTO volume_forecast_cache
+               (forecast_date, item_id, generated_on,
+                volume_value, unit, p50, p90, probability, recommended_volume)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        conn.commit()
+        logger.info(f"Cached {len(rows)} volume forecast rows for {generated_on}")
+    except Exception as e:
+        logger.warning(f"Failed to save volume forecasts to cache: {e}")
+
+
+def get_missing_volume_backtest_dates(
+    conn,
+    forecast_dates: List[str],
+    item_ids: List[str],
+) -> List[str]:
+    """Return forecast_dates that lack complete backtest cache for the given menu items."""
+    ensure_tables_exist(conn)
+    if not forecast_dates or not item_ids:
+        return list(forecast_dates)
+    try:
+        from datetime import datetime, timedelta
+        missing = []
+        for fd in forecast_dates:
+            d = datetime.strptime(fd, "%Y-%m-%d").date()
+            trained_through = (d - timedelta(days=1)).isoformat()
+            placeholders = ",".join("?" * len(item_ids))
+            cur = conn.execute(
+                f"""SELECT COUNT(*) FROM volume_backtest_cache
+                    WHERE forecast_date = ? AND model_trained_through = ?
+                    AND item_id IN ({placeholders})""",
+                [fd, trained_through] + list(item_ids),
+            )
+            count = cur.fetchone()[0]
+            if count < len(item_ids):
+                missing.append(fd)
+        return missing
+    except Exception:
+        return list(forecast_dates)
+
+
+def load_volume_backtest_forecasts(
+    conn,
+    forecast_dates: List[str],
+    item_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Load cached volume backtest forecasts (per menu item)."""
+    ensure_tables_exist(conn)
+    results: List[Dict[str, Any]] = []
+    try:
+        if not forecast_dates:
+            return results
+        placeholders = ",".join("?" * len(forecast_dates))
+        params: List[Any] = list(forecast_dates)
+        q = f"""SELECT forecast_date, item_id, volume_value, p50, p90, probability
+                FROM volume_backtest_cache
+                WHERE forecast_date IN ({placeholders})"""
+        if item_ids:
+            q += " AND item_id IN (" + ",".join("?" * len(item_ids)) + ")"
+            params.extend(item_ids)
+        q += " ORDER BY forecast_date, item_id"
+        cur = conn.execute(q, params)
+        for row in cur.fetchall():
+            results.append({
+                "date": row[0],
+                "item_id": row[1],
+                "volume_value": row[2],
+                "p50": row[3],
+                "p90": row[4],
+                "probability": row[5],
+            })
+    except Exception as e:
+        logger.warning(f"Failed to load volume backtest forecasts: {e}")
+    return results
+
+
+def save_volume_backtest_forecasts(
+    conn,
+    forecasts: List[Dict[str, Any]],
+    model_trained_through: str,
+) -> None:
+    """Persist volume backtest forecasts to cache."""
+    ensure_tables_exist(conn)
+    if not forecasts:
+        return
+    rows = [
+        (
+            f.get("date"),
+            f.get("item_id"),
+            model_trained_through,
+            f.get("volume_value"),
+            f.get("p50"),
+            f.get("p90"),
+            f.get("probability"),
+        )
+        for f in forecasts
+    ]
+    try:
+        conn.executemany(
+            """INSERT OR REPLACE INTO volume_backtest_cache
+               (forecast_date, item_id, model_trained_through,
+                volume_value, p50, p90, probability)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        conn.commit()
+        logger.info(f"Cached {len(rows)} volume backtest rows for model_trained_through={model_trained_through}")
+    except Exception as e:
+        logger.warning(f"Failed to save volume backtest forecasts: {e}")

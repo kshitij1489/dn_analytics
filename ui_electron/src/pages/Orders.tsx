@@ -10,10 +10,9 @@ import { useNavigation } from '../contexts/NavigationContext';
 
 // --- Shared Components (Duplicated from Menu for now to keep independent) ---
 
-function exportToCSV(data: any[], filename: string, headers?: string[]) {
+function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
-        alert('No data to export');
-        return;
+        return false;
     }
     const csvHeaders = headers || Object.keys(data[0]);
     const csvRows = [];
@@ -40,6 +39,7 @@ function exportToCSV(data: any[], filename: string, headers?: string[]) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    return true;
 }
 
 // Resizable Table Wrapper

@@ -3,6 +3,8 @@ import './App.css';
 import { endpoints } from './api';
 import type { JobResponse } from './api';
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext'; // Import Context
+import { ErrorPopup } from './components';
+import type { PopupMessage } from './components';
 
 // Components
 import Insights from './pages/Insights';
@@ -28,6 +30,7 @@ function AppContent() {
   const [polling, setPolling] = useState(false);
   const [lastDbSync, setLastDbSync] = useState<number>(Date.now());
   const [showSyncStatus, setShowSyncStatus] = useState(false);
+  const [popup, setPopup] = useState<PopupMessage | null>(null);
 
   // Theme Config
   useEffect(() => {
@@ -61,7 +64,7 @@ function AppContent() {
               setLastDbSync(Date.now());
               setShowSyncStatus(true);
             } else if (res.data.status === 'failed') {
-              alert(`❌ Sync Failed: ${res.data.message}`);
+              setPopup({ type: 'error', message: `Sync Failed: ${res.data.message}` });
             }
           } else {
             setJob(res.data);
@@ -115,7 +118,7 @@ function AppContent() {
       }, 300);
     } catch (err) {
       console.error(err);
-      alert("Failed to start sync");
+      setPopup({ type: 'error', message: "Failed to start sync" });
     }
   };
 
@@ -141,7 +144,7 @@ function AppContent() {
 
         // Trigger Sync
         startSync();
-        alert("Startup: No data found. Auto-sync started.");
+        setPopup({ type: 'info', message: "No data found. Auto-sync started." });
       }
     } catch (e) {
       console.error("Auto-sync check failed", e);
@@ -158,6 +161,7 @@ function AppContent() {
 
   return (
     <div className="app-container">
+      <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
       <aside className="sidebar">
         <img
           src="logo.png"

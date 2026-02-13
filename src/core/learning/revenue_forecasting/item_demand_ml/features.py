@@ -115,7 +115,12 @@ def _add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _add_store_context_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add store-wide demand signals (same value for all items on a given date)."""
+    """
+    Store-wide demand signals EXCLUDING the current item to avoid leakage.
+    store_total_excluding_item = total_store_quantity - item_quantity
+    Without this, the model learns identity (high store total → high item) because
+    the item's own quantity is part of the store total.
+    """
     # Daily total quantity across ALL items
     daily_total = df.groupby('date')['quantity_sold'].sum()
 
@@ -134,6 +139,14 @@ def _add_store_context_features(df: pd.DataFrame) -> pd.DataFrame:
     df['store_total_last3'] = df['store_total_last3'].fillna(0)
     df['store_total_last7'] = df['store_total_last7'].fillna(0)
 
+    # Per-item contribution to those windows (exclude from store total to prevent leakage)
+    df = df.sort_values(['item_id', 'date']).reset_index(drop=True)
+    grp = df.groupby('item_id')['quantity_sold']
+    item_last3 = grp.transform(lambda x: x.shift(1).rolling(3, min_periods=1).sum())
+    item_last7 = grp.transform(lambda x: x.shift(1).rolling(7, min_periods=1).sum())
+
+    df['store_total_last3'] = np.maximum(0, df['store_total_last3'] - item_last3.fillna(0))
+    df['store_total_last7'] = np.maximum(0, df['store_total_last7'] - item_last7.fillna(0))
     return df
 
 

@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { endpoints } from '../api';
+import { ErrorPopup } from '../components';
+import type { PopupMessage } from '../components';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
@@ -30,10 +32,9 @@ const Card = ({ children, title }: { children: React.ReactNode, title: string })
 );
 
 // --- CSV Export Utility ---
-function exportToCSV(data: any[], filename: string, headers?: string[]) {
+function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
-        alert('No data to export');
-        return;
+        return false;
     }
     const csvHeaders = headers || Object.keys(data[0]);
     const csvRows = [];
@@ -60,6 +61,7 @@ function exportToCSV(data: any[], filename: string, headers?: string[]) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    return true;
 }
 
 // --- Resizable Table Wrapper ---
@@ -177,6 +179,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [targetId, setTargetId] = useState('');
     const [mergeHistory, setMergeHistory] = useState<any[]>([]);
     const [loadingMerge, setLoadingMerge] = useState(false);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     // State for Table
     const [tableData, setTableData] = useState<any[]>([]);
@@ -230,20 +233,20 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const handleMerge = async () => {
-        if (!sourceId || !targetId) return alert("Select both items");
-        if (sourceId === targetId) return alert("Cannot merge same item");
+        if (!sourceId || !targetId) { setPopup({ type: 'error', message: "Select both items" }); return; }
+        if (sourceId === targetId) { setPopup({ type: 'error', message: "Cannot merge same item" }); return; }
         if (!confirm("Are you sure? Source item will be deleted.")) return;
 
         setLoadingMerge(true);
         try {
             await endpoints.menu.merge({ source_id: sourceId, target_id: targetId });
-            alert("Merged successfully");
+            setPopup({ type: 'success', message: "Merged successfully" });
             setSourceId(''); setTargetId('');
             loadDropdowns();
             loadHistory();
             loadTable();
         } catch (e: any) {
-            alert("Error: " + (e.response?.data?.detail || e.message));
+            setPopup({ type: 'error', message: e.response?.data?.detail || e.message });
         } finally {
             setLoadingMerge(false);
         }
@@ -255,7 +258,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
             await endpoints.menu.undoMerge({ merge_id: mergeId });
             loadHistory();
             loadTable();
-        } catch (e: any) { alert("Error: " + (e.response?.data?.detail || e.message)); }
+        } catch (e: any) { setPopup({ type: 'error', message: e.response?.data?.detail || e.message }); }
     };
 
     const handleSort = (key: string) => {
@@ -275,6 +278,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 
     return (
         <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 <CollapsibleCard title="🛠️ Merge Menu Items" defaultCollapsed={true}>
                     <p style={{ fontSize: '0.9em', color: '#ccc' }}>Merge a duplicate item (Source) into a canonical item (Target).</p>
@@ -508,6 +512,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [targetItem, setTargetItem] = useState('');
     const [targetVariant, setTargetVariant] = useState('');
     const [matrixData, setMatrixData] = useState<any[]>([]);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -541,9 +546,9 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const handleRemap = async () => {
         try {
             await endpoints.menu.remap({ order_item_id: oid, new_menu_item_id: targetItem, new_variant_id: targetVariant });
-            alert("Remapped successfully!");
+            setPopup({ type: 'success', message: "Remapped successfully!" });
             setOid(''); setCheckResult(null); loadMatrix();
-        } catch (e: any) { alert("Error: " + (e.response?.data?.detail || e.message)); }
+        } catch (e: any) { setPopup({ type: 'error', message: e.response?.data?.detail || e.message }); }
     };
 
     // --- Client Side Sorting & Pagination Logic ---
@@ -585,6 +590,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
     return (
         <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             {/* Remap Order Item Card - Keep this as Card or change to flat? Keeping as Card for now as it's a form */}
             <Card title="🔄 Remap Order Item">
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -674,6 +680,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
 function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [items, setItems] = useState<any[]>([]);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     const load = async () => {
         const res = await endpoints.menu.unverified();
@@ -686,11 +693,12 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         try {
             await endpoints.menu.verify({ menu_item_id: id, new_name: newName, new_type: newType });
             load();
-        } catch (e: any) { alert("Error: " + e.message); }
+        } catch (e: any) { setPopup({ type: 'error', message: e.message }); }
     };
 
     return (
         <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
             {items.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-color)' }}>

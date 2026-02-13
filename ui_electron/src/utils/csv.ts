@@ -4,10 +4,9 @@
  * Exports data to CSV format with proper handling of special characters.
  */
 
-export function exportToCSV(data: any[], filename: string, headers?: string[]) {
+export function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
-        alert('No data to export');
-        return;
+        return false;
     }
 
     // Get headers from first data item if not provided
@@ -47,4 +46,5 @@ export function exportToCSV(data: any[], filename: string, headers?: string[]) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    return true;
 }

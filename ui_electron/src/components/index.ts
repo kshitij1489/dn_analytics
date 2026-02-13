@@ -14,4 +14,8 @@ export { LoadingSpinner, LoadingText } from './LoadingSpinner';
 export { ActionButton } from './ActionButton';
 export { Select, createOptions } from './Select';
 export { DateSelector } from './DateSelector';
+export { default as TrainingOverlay } from './TrainingOverlay';
+export type { TrainingStatus } from './TrainingOverlay';
+export { default as ErrorPopup } from './ErrorPopup';
+export type { PopupMessage } from './ErrorPopup';
 

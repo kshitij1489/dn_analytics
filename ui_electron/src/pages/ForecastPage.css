@@ -249,3 +249,112 @@
 .item-demand-p90 {
     font-weight: 600;
 }
+
+/* =================================
+   TRAINING OVERLAY
+   ================================= */
+
+.training-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    border-radius: 12px;
+}
+
+.training-overlay-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 32px;
+    width: 440px;
+    max-width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.training-overlay-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.training-overlay-header h3 {
+    margin: 0;
+    font-size: 1.15em;
+    color: var(--text-color);
+}
+
+.training-overlay-spinner {
+    width: 18px;
+    height: 18px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.training-overlay-phase {
+    margin: 0 0 12px;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+}
+
+.training-overlay-progress-track {
+    height: 8px;
+    background: var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.training-overlay-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+
+.training-overlay-percent {
+    margin: 4px 0 12px;
+    font-size: 0.82em;
+    text-align: right;
+    color: var(--text-secondary);
+}
+
+.training-overlay-message {
+    margin: 0 0 12px;
+    font-size: 0.85em;
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.training-overlay-logs {
+    max-height: 140px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 0.75em;
+    line-height: 1.7;
+    color: var(--text-secondary);
+}
+
+.training-overlay-log-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Disabled tabs during training */
+.forecast-segmented-control.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}

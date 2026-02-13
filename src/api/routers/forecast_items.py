@@ -17,6 +17,9 @@ from typing import Optional
 import pandas as pd
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
+
+from src.api.routers import forecast_training_status
 
 from src.api.dependencies import get_db
 from src.core.utils.business_date import BUSINESS_DATE_SQL, get_current_business_date
@@ -59,17 +62,16 @@ router = APIRouter()
 _item_training_lock = threading.Lock()
 
 
-def _get_point_in_time_backtest_rows(
+def _fill_item_backtest(
     conn,
     items_info: pd.DataFrame,
     active_items: set,
     today_date,
     n_days: int = 30,
-    item_id: Optional[str] = None,
-) -> list:
+) -> None:
     """
-    Point-in-time backtest (T→T+1): for each date D, train on 120 days through D-1, predict D.
-    Only trains for dates missing in item_backtest_cache.
+    CPU-heavy: fill item backtest cache for missing dates.
+    Called ONLY during training. Checks is_shutting_down() per date.
     """
     backtest_end = today_date - timedelta(days=1)
     backtest_start = backtest_end - timedelta(days=n_days - 1)
@@ -81,6 +83,9 @@ def _get_point_in_time_backtest_rows(
     missing_dates = get_missing_backtest_dates(conn, forecast_dates, item_ids) if item_ids else []
 
     for fd in missing_dates:
+        if forecast_training_status.is_shutting_down():
+            forecast_training_status.log("Shutdown requested — stopping item backtest fill.")
+            return
         if not ITEM_DEMAND_AVAILABLE:
             break
         try:
@@ -88,7 +93,7 @@ def _get_point_in_time_backtest_rows(
             start_str = (d - timedelta(days=120)).isoformat()
             end_str = (d - timedelta(days=1)).isoformat()
             df_train = _get_item_historical_data_range(
-                conn, start_str, end_str, item_id=None  # Always train on ALL items
+                conn, start_str, end_str, item_id=None
             )
             if df_train.empty or len(df_train) < 30:
                 continue
@@ -111,9 +116,28 @@ def _get_point_in_time_backtest_rows(
                 for _, row in result.iterrows()
             ]
             save_backtest_forecasts(conn, to_save, model_through)
+            forecast_training_status.log(f"  Item backtest filled for {fd}")
         except Exception as e:
             logger.warning(f"Point-in-time backtest failed for {fd}: {e}")
 
+
+def _load_item_backtest(
+    conn,
+    items_info: pd.DataFrame,
+    active_items: set,
+    today_date,
+    n_days: int = 30,
+    item_id: Optional[str] = None,
+) -> list:
+    """
+    Read-only: load item backtest from cache. No fill — fast path for GET handler.
+    """
+    backtest_end = today_date - timedelta(days=1)
+    backtest_start = backtest_end - timedelta(days=n_days - 1)
+    forecast_dates = [
+        (backtest_start + timedelta(days=i)).isoformat()
+        for i in range(n_days)
+    ]
     cached = load_backtest_forecasts(conn, forecast_dates)
     name_by_id = dict(zip(items_info["item_id"], items_info["item_name"]))
     backtest_rows = []
@@ -204,10 +228,8 @@ def _get_item_historical_data(conn, item_id: Optional[str] = None, days: int = 9
 
 def _train_item_demand_task():
     """
-    Background task: retrain item demand models on latest data.
-
-    Uses a threading lock to prevent concurrent runs.  Opens its own DB
-    connection (independent of any request lifecycle).
+    Background task: retrain item demand models on latest data,
+    then generate predictions for all active items and save to cache.
     """
     if not _item_training_lock.acquire(blocking=False):
         logger.warning("Item demand training already in progress, skipping.")
@@ -218,11 +240,13 @@ def _train_item_demand_task():
         from src.api.routers.config import get_db_connection
         conn, _ = get_db_connection()
         logger.info("Starting background item demand training...")
+        forecast_training_status.log("Fetching item history (120 days)…")
 
         # Fetch 120 days of history (extra buffer for lag features)
         df = _get_item_historical_data(conn, days=120)
         if df.empty:
             logger.warning("No historical data available — skipping item demand training.")
+            forecast_training_status.log("No item history data — skipped.")
             return
 
         logger.info(f"Training data: {len(df)} rows, "
@@ -230,16 +254,77 @@ def _train_item_demand_task():
                      f"{df['date'].min().date()} to {df['date'].max().date()}")
 
         # Retrain — skip held-out evaluation for speed (this is a routine refresh)
+        forecast_training_status.log(f"Training item demand model ({df['item_id'].nunique()} items)…")
         save_dir = _resolve_model_dir()
         train_pipeline(df=df, save_path=save_dir, evaluate=False)
 
-        # Clear cached models so the next API request loads the fresh ones
+        # Clear cached models so we load the fresh ones
         clear_model_cache()
 
-        logger.info("Background item demand training completed successfully.")
+        forecast_training_status.log("Item model trained. Generating predictions…")
+
+        # ── Populate item_forecast_cache ─────────────────────────
+        today_str = get_current_business_date()
+        today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+
+        # Filter history to complete days only
+        df_history = df[df['date'] < pd.Timestamp(today_date)].copy()
+
+        # Active items: sold in last 14 days
+        cutoff = today_date - timedelta(days=14)
+        active_items = set(
+            df_history[df_history['date'] >= pd.Timestamp(cutoff)]['item_id'].unique()
+        )
+        df_active = df_history[df_history['item_id'].isin(active_items)]
+
+        items_info = df_active.groupby('item_id').agg({
+            'item_name': 'first',
+            'category': 'first',
+            'price': 'first',
+        }).reset_index()
+
+        # Cross product: items × future dates (14 days)
+        future_dates = pd.date_range(today_date, periods=14, freq='D')
+        df_future = items_info.assign(key=1).merge(
+            pd.DataFrame({'date': future_dates, 'key': 1}), on='key'
+        ).drop('key', axis=1)
+
+        # Weather fallback: recent average
+        recent_temp = df_history.groupby('date')['temperature'].first().tail(7).mean()
+        recent_rain = df_history.groupby('date')['rain'].first().tail(7).mean()
+        df_future['temperature'] = round(recent_temp if pd.notna(recent_temp) else 25.0, 1)
+        df_future['rain'] = round(recent_rain if pd.notna(recent_rain) else 0.0, 1)
+
+        forecast_df = forecast_items(
+            df_future_dates=df_future,
+            df_history=df_history,
+        )
+
+        forecast_rows = [
+            {
+                "date": row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else str(row['date'])[:10],
+                "item_id": row['item_id'],
+                "item_name": row['item_name'],
+                "p50": round(float(row['predicted_p50']), 2),
+                "p90": round(float(row['predicted_p90']), 2),
+                "probability": round(float(row['probability_of_sale']), 4),
+                "recommended_prep": int(row['recommended_prep']) if 'recommended_prep' in row.index else 0,
+            }
+            for _, row in forecast_df.iterrows()
+        ]
+
+        save_item_forecasts(conn, forecast_rows, today_str)
+        forecast_training_status.log(f"Cached {len(forecast_rows)} item forecast rows.")
+
+        # ── Fill item backtest cache ─────────────────────────────
+        forecast_training_status.log("Filling item backtest cache (30 days)…")
+        _fill_item_backtest(conn, items_info, active_items, today_date, n_days=30)
+
+        logger.info("Background item demand training + cache population completed.")
 
     except Exception as e:
         logger.error(f"Background item demand training failed: {e}", exc_info=True)
+        forecast_training_status.log(f"ERROR in item demand training: {e}")
     finally:
         if conn:
             conn.close()
@@ -292,6 +377,13 @@ def get_item_forecast(item_id: Optional[str] = None, days: int = 14, conn=Depend
         - Stale model → triggers background retrain, returns current (stale) forecast.
         - Fresh model → returns forecast normally.
     """
+    # 503 during training — frontend shows overlay instead of fetching data
+    if forecast_training_status.is_training():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Training in progress", "training_status": forecast_training_status.get_status()}
+        )
+
     try:
         if not ITEM_DEMAND_AVAILABLE:
             raise HTTPException(
@@ -355,7 +447,7 @@ def get_item_forecast(item_id: Optional[str] = None, days: int = 14, conn=Depend
             else:
                 df_hist_final = pd.DataFrame(columns=['date', 'item_id', 'item_name', 'quantity_sold'])
             history_rows = [{"date": row['date'].strftime('%Y-%m-%d'), "item_id": row['item_id'], "qty": int(row['quantity_sold'])} for _, row in df_hist_final.iterrows()]
-            backtest_rows = _get_point_in_time_backtest_rows(conn, items_info, active_items, today_date, n_days=30, item_id=item_id)
+            backtest_rows = _load_item_backtest(conn, items_info, active_items, today_date, n_days=30, item_id=item_id)
             cached = load_item_forecasts(conn, cache_generated_on)
             name_by_id = dict(zip(items_info['item_id'], items_info['item_name']))
             filtered = [r for r in cached if r['item_id'] in active_items and (item_id is None or r['item_id'] == item_id) and r['date'] >= today_str]
@@ -475,7 +567,7 @@ def get_item_forecast(item_id: Optional[str] = None, days: int = 14, conn=Depend
         ]
 
         # ---- Backtest: point-in-time T→T+1 (always; fills cache for missing dates) ----
-        backtest_rows = _get_point_in_time_backtest_rows(
+        backtest_rows = _load_item_backtest(
             conn, items_info, active_items, today_date, n_days=30, item_id=item_id
         )
 

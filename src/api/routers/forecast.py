@@ -7,8 +7,11 @@ import threading
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from datetime import timedelta, datetime
 from typing import List, Dict, Optional
+
+from src.api.routers import forecast_training_status
 
 import pandas as pd
 
@@ -47,6 +50,12 @@ router = APIRouter()
 # NOTE: Only effective for single-worker deployments. For multi-worker (uvicorn --workers > 1),
 # use a file lock (e.g., filelock) or external coordinator to prevent model file corruption.
 _training_lock = threading.Lock()
+
+
+@router.get("/training-status")
+def get_training_status():
+    """Returns current training status for the frontend overlay."""
+    return forecast_training_status.get_status()
 
 
 def _load_and_check_stale(gp: RollingGPForecaster) -> bool:
@@ -171,12 +180,12 @@ def trigger_gp_training(background_tasks: BackgroundTasks, conn=Depends(get_db))
 def pull_from_cloud(scope: str = "all", conn=Depends(get_db)):
     """
     Manually pull forecast cache from cloud bootstrap endpoint.
-    scope: "revenue" | "items" | "all" — only pull and seed the specified cache(s).
+    scope: "revenue" | "items" | "volume" | "all" — only pull and seed the specified cache(s).
     """
     from src.core.forecast_bootstrap import get_bootstrap_endpoint, fetch_and_seed_forecast_bootstrap
     from src.core.config.cloud_sync_config import get_cloud_sync_config
-    if scope not in ("revenue", "items", "all"):
-        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', or 'all'")
+    if scope not in ("revenue", "items", "volume", "all"):
+        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', 'volume', or 'all'")
     endpoint = get_bootstrap_endpoint(conn)
     if not endpoint:
         raise HTTPException(
@@ -191,94 +200,163 @@ def pull_from_cloud(scope: str = "all", conn=Depends(get_db)):
         "message": "Forecast data pulled from cloud",
         "revenue_inserted": result.get("revenue_inserted", 0),
         "item_inserted": result.get("item_inserted", 0),
+        "volume_inserted": result.get("volume_inserted", 0),
         "revenue_backtest_inserted": result.get("revenue_backtest_inserted", 0),
         "item_backtest_inserted": result.get("item_backtest_inserted", 0),
+        "volume_backtest_inserted": result.get("volume_backtest_inserted", 0),
     }
 
 
 @router.post("/full-retrain")
 def full_retrain(background_tasks: BackgroundTasks, scope: str = "all"):
     """
-    Manually trigger retrain. scope: "revenue" | "items" | "all".
-    Runs in background; charts will populate after training completes (~30–60s).
+    Manually trigger retrain. scope: "revenue" | "items" | "volume" | "all".
+    Runs in background **sequentially** (GP → Items → Volume).
+    Returns 409 if training is already in progress.
     """
-    if scope not in ("revenue", "items", "all"):
-        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', or 'all'")
+    if scope not in ("revenue", "items", "volume", "all"):
+        raise HTTPException(status_code=400, detail="scope must be 'revenue', 'items', 'volume', or 'all'")
+
+    # Reject duplicate retrain requests
+    if forecast_training_status.is_training():
+        raise HTTPException(status_code=409, detail="Training already in progress")
+
+    background_tasks.add_task(_full_retrain_task, scope)
+    return {"message": f"Full retrain started (scope={scope}). Monitor progress via the training overlay."}
+
+
+def _full_retrain_task(scope: str):
+    """
+    Sequential wrapper: runs applicable training tasks one at a time,
+    updating forecast_training_status at each phase.
+    """
     try:
         from src.api.routers.forecast_items import _train_item_demand_task
     except ImportError:
         _train_item_demand_task = None
-    if scope in ("revenue", "all"):
-        background_tasks.add_task(train_gp_task)
-    if scope in ("items", "all") and _train_item_demand_task:
-        background_tasks.add_task(_train_item_demand_task)
-    msg = "Full retrain started"
-    if scope == "revenue":
-        msg = "Sales (GP) retrain started. Refresh in ~30 seconds."
-    elif scope == "items":
-        msg = "Item demand retrain started. Refresh in ~30–60 seconds."
-    else:
-        msg = "Full retrain started (GP + Item Demand). Refresh in ~30–60 seconds."
-    return {"message": msg}
+    try:
+        from src.api.routers.forecast_volume import _train_volume_task
+    except ImportError:
+        _train_volume_task = None
+
+    forecast_training_status.start("revenue", "Starting sales model training…")
+    try:
+        if scope in ("revenue", "all"):
+            forecast_training_status.update(5, "Training revenue models (GP + Prophet + HW + WeekdayAvg)…")
+            train_gp_task()
+
+        if forecast_training_status.is_shutting_down():
+            forecast_training_status.log("Shutdown requested — aborting retrain.")
+            return
+
+        if scope in ("items", "all") and _train_item_demand_task:
+            forecast_training_status.update(33, "Training item demand model…")
+            _train_item_demand_task()
+
+        if forecast_training_status.is_shutting_down():
+            forecast_training_status.log("Shutdown requested — aborting retrain.")
+            return
+
+        if scope in ("volume", "all") and _train_volume_task:
+            forecast_training_status.update(66, "Training volume model…")
+            _train_volume_task()
+
+        forecast_training_status.update(100, "All training complete.")
+    except Exception as e:
+        logger.error(f"Full retrain task failed: {e}", exc_info=True)
+        forecast_training_status.log(f"ERROR: {e}")
+    finally:
+        forecast_training_status.finish()
 
 def train_gp_task():
-    """Background task for daily GP training with proper locking and error handling."""
+    """
+    Background task: trains GP model, then runs all 4 revenue forecast models
+    and saves results to forecast_cache so the GET handler serves from cache.
+    """
     # Idempotency: prevent concurrent training runs
     if not _training_lock.acquire(blocking=False):
         logger.warning("GP training already in progress, skipping duplicate request.")
         return
-    
+
     conn = None
     try:
         from src.api.routers.config import get_db_connection
         conn, _ = get_db_connection()
         logger.info("Starting Daily GP Training...")
-        
+        forecast_training_status.log("Fetching historical data (120 days)…")
+
         # Fetch enough data for lag features + 90 days window
         df = get_historical_data(conn, days=120)
-        
+
         # CRITICAL: Filter to only include complete business days
-        # Use last complete business date (yesterday relative to 5am cutoff)
         last_complete_str = get_last_complete_business_date()
         last_complete_date = pd.Timestamp(last_complete_str)
         df = df[df['ds'] <= last_complete_date].copy()
-        
-        # NOTE: Do NOT filter y > 0 here! The lag features must be computed on the
-        # full calendar first (inside update_and_fit) to preserve temporal ordering.
-        # Zero-revenue days are handled inside RollingGPForecaster.update_and_fit().
-        
-        logger.info(f"Training data after date filtering: {len(df)} rows, ending at {df['ds'].max()}")
-        
-        # RollingGPForecaster handles the windowing logic (keeping last 90 days)
-        if not GP_AVAILABLE:
-            logger.error("Gaussian Process module not available. Cannot train.")
-            return
 
-        gp = RollingGPForecaster()
-        gp.update_and_fit(df)
-        
-        # ----------------------------------------------------
-        # Generate and Save Forecast Snapshot 
-        # ----------------------------------------------------
-        logger.info("Generating forecast snapshot...")
+        logger.info(f"Training data: {len(df)} rows, ending at {df['ds'].max()}")
+
         today_str = get_current_business_date()
         today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
-        
-        # Fetch actual forecast weather from weather_daily table
+
+        # Build future weather (shared by GP + prophet)
         future_dates = [today_date + timedelta(days=i) for i in range(7)]
         future_weather = pd.DataFrame({'ds': pd.to_datetime(future_dates)})
-        
-        # Try to get weather from Today's forecast_snapshot in DB
         weather_temps = _fetch_forecast_weather(conn, today_str, future_dates)
         future_weather['temp_max'] = weather_temps
-        
-        forecast_df = gp.predict_next_days(future_weather)
-        gp.save_daily_forecast_snapshot(conn, today_str, forecast_df)
-        
-        logger.info("Daily GP Training & Snapshot Completed.")
-        
+
+        # ── 1. Train & predict GP ───────────────────────────────
+        gp_results = []
+        if GP_AVAILABLE:
+            forecast_training_status.log("Training Gaussian Process model…")
+            gp = RollingGPForecaster()
+            gp.update_and_fit(df)
+
+            forecast_training_status.log("Generating GP predictions…")
+            gp_results = forecast_gp(future_weather)
+        else:
+            logger.warning("GP module unavailable — skipping GP forecast.")
+            forecast_training_status.log("GP module unavailable — skipped.")
+
+        # ── 2. Weekday Average ──────────────────────────────────
+        forecast_training_status.log("Computing Weekday Average forecast…")
+        wa_results = forecast_weekday_avg(df, periods=7)
+
+        # ── 3. Holt-Winters ────────────────────────────────────
+        forecast_training_status.log("Computing Holt-Winters forecast…")
+        hw_out = forecast_holt_winters(df, periods=7)
+        hw_results = hw_out.get("data", [])
+        if hw_out.get("error"):
+            forecast_training_status.log(f"Holt-Winters warning: {hw_out['error']}")
+
+        # ── 4. Prophet ─────────────────────────────────────────
+        forecast_training_status.log("Computing Prophet forecast…")
+        pr_out = forecast_prophet(df, periods=7)
+        pr_results = pr_out.get("data", [])
+        if pr_out.get("error"):
+            forecast_training_status.log(f"Prophet warning: {pr_out['error']}")
+
+        # ── Save all 4 models to forecast_cache ────────────────
+        forecast_training_status.log("Saving forecasts to cache…")
+        for model_name, rows in [
+            ("weekday_avg", wa_results),
+            ("holt_winters", hw_results),
+            ("prophet", pr_results),
+            ("gp", gp_results),
+        ]:
+            if rows:
+                save_revenue_forecasts(conn, model_name, rows, today_str)
+                forecast_training_status.log(f"  Cached {len(rows)} {model_name} rows.")
+
+        # ── Fill revenue backtest cache (CPU-heavy, done during training) ──
+        forecast_training_status.log("Filling revenue backtest cache (30 days)…")
+        _fill_revenue_backtest(conn, today_date, MODEL_NAMES)
+
+        logger.info("Revenue model training & cache population complete.")
+        forecast_training_status.log("Revenue training complete.")
+
     except Exception as e:
         logger.error(f"GP Training failed: {e}", exc_info=True)
+        forecast_training_status.log(f"ERROR in revenue training: {e}")
     finally:
         if conn:
             conn.close()
@@ -313,9 +391,10 @@ def _merge_backtest_and_forecast(
     return merged
 
 
-def _get_revenue_point_in_time_backtest(conn, today_date, model_names: List[str]) -> Dict[str, List[dict]]:
+def _fill_revenue_backtest(conn, today_date, model_names: List[str]) -> None:
     """
-    Point-in-time backtest for all 4 models. Fills cache for missing dates, returns merged backtest.
+    CPU-heavy: fill revenue backtest cache for missing dates.
+    Called ONLY during training. Checks is_shutting_down() per date.
     """
     backtest_end = today_date - timedelta(days=1)
     backtest_start = backtest_end - timedelta(days=29)
@@ -323,6 +402,9 @@ def _get_revenue_point_in_time_backtest(conn, today_date, model_names: List[str]
     missing = get_missing_revenue_backtest_dates(conn, forecast_dates, model_names)
 
     for fd in missing:
+        if forecast_training_status.is_shutting_down():
+            forecast_training_status.log("Shutdown requested — stopping revenue backtest fill.")
+            return
         try:
             d = datetime.strptime(fd, "%Y-%m-%d").date()
             start_str = (d - timedelta(days=120)).isoformat()
@@ -336,11 +418,19 @@ def _get_revenue_point_in_time_backtest(conn, today_date, model_names: List[str]
             for m, rows in results.items():
                 if rows:
                     save_revenue_backtest_forecasts(conn, m, rows, model_through)
+            forecast_training_status.log(f"  Backtest filled for {fd}")
         except Exception as e:
             logger.warning(f"Revenue backtest failed for {fd}: {e}")
 
+
+def _load_revenue_backtest(conn, today_date, model_names: List[str]) -> Dict[str, List[dict]]:
+    """
+    Read-only: load revenue backtest from cache. No fill — fast path for GET handler.
+    """
+    backtest_end = today_date - timedelta(days=1)
+    backtest_start = backtest_end - timedelta(days=29)
+    forecast_dates = [(backtest_start + timedelta(days=i)).isoformat() for i in range(30)]
     cached = load_revenue_backtest_forecasts(conn, forecast_dates, model_names)
-    # Ensure all model keys exist with empty list
     out = {m: cached.get(m, []) for m in model_names}
     return out
 
@@ -384,7 +474,7 @@ def _fetch_forecast_weather(conn, today_str: str, future_dates: list) -> list:
 @router.get("/replay")
 def get_forecast_replay(run_date: str, conn=Depends(get_db)):
     """
-    Returns the forecast snapshot generated on 'run_date' 
+    Returns the cached forecasts generated on 'run_date' (from forecast_cache)
     AND the actual revenue that occurred on those target dates.
     """
     # Validate run_date format
@@ -394,18 +484,16 @@ def get_forecast_replay(run_date: str, conn=Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"Invalid date format: '{run_date}'. Expected YYYY-MM-DD.")
     
     try:
-        # 1. Fetch Forecast Snapshot (include pred_std and model window metadata)
+        # 1. Fetch from forecast_cache (GP model, keyed by generated_on = run_date)
         cursor = conn.execute("""
-            SELECT target_date, pred_mean, pred_std, lower_95, upper_95, 
-                   model_window_start, model_window_end
-            FROM forecast_snapshots
-            WHERE forecast_run_date = ?
-            ORDER BY target_date ASC
+            SELECT forecast_date, revenue, pred_std, lower_95, upper_95
+            FROM forecast_cache
+            WHERE generated_on = ? AND model_name = 'gp'
+            ORDER BY forecast_date ASC
         """, (run_date,))
         
         forecast_rows = []
         target_dates = []
-        model_window: Optional[Dict] = None
         
         for row in cursor.fetchall():
             target_dates.append(row[0])  # string 'YYYY-MM-DD'
@@ -416,8 +504,6 @@ def get_forecast_replay(run_date: str, conn=Depends(get_db)):
                 "lower_95": row[3],
                 "upper_95": row[4]
             })
-            if model_window is None and (row[5] or row[6]):
-                model_window = {"start": row[5], "end": row[6]}
             
         # 2. Fetch Actuals for those dates
         actuals_map = {}
@@ -446,12 +532,12 @@ def get_forecast_replay(run_date: str, conn=Depends(get_db)):
                 "pred_std": item['pred_std'],
                 "lower_95": item['lower_95'],
                 "upper_95": item['upper_95'],
-                "actual_revenue": actuals_map.get(dt, None)  # Null if not occurred yet
+                "actual_revenue": actuals_map.get(dt, None)
             })
             
         return {
             "data": results,
-            "model_window": model_window
+            "model_window": None  # no longer tracked per-snapshot
         }
 
     except HTTPException:
@@ -514,6 +600,12 @@ def forecast_gp(future_weather: pd.DataFrame) -> List[Dict]:
 
 @router.get("/")
 def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
+    # 503 during training — frontend shows overlay instead of fetching data
+    if forecast_training_status.is_training():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Training in progress", "training_status": forecast_training_status.get_status()}
+        )
     try:
         # Trigger background weather sync
         background_tasks.add_task(sync_weather_task)
@@ -551,7 +643,7 @@ def get_sales_forecast(background_tasks: BackgroundTasks, conn=Depends(get_db)):
                     "prophet": cached.get("prophet", []),
                     "gp": cached.get("gp", []),
                 }
-                backtest = _get_revenue_point_in_time_backtest(conn, today_date, MODEL_NAMES)
+                backtest = _load_revenue_backtest(conn, today_date, MODEL_NAMES)
                 merged = _merge_backtest_and_forecast(backtest, raw_forecast, today_str)
                 forecast_weekday = merged["weekday_avg"]
                 forecast_hw = merged["holt_winters"]

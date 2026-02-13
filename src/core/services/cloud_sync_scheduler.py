@@ -26,7 +26,16 @@ async def background_sync_task():
     while True:
         try:
             await asyncio.sleep(SYNC_INTERVAL_SECONDS)
-            
+
+            # Skip sync while forecast training is in progress to avoid CPU contention
+            try:
+                from src.api.routers.forecast_training_status import is_training
+                if is_training():
+                    print("[Cloud Sync] Skipping — forecast training in progress")
+                    continue
+            except ImportError:
+                pass  # Module not available, proceed normally
+
             # Open a fresh connection for this cycle
             conn, _ = get_db_connection()
             if not conn:

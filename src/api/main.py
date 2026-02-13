@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, forecast_items, weather, conversations
+from src.api.routers import insights, menu, operations, resolutions, sql, orders, system, ai, config, today, forecast, forecast_items, forecast_volume, weather, conversations
 
 app = FastAPI(title="Analytics Backend")
 
@@ -9,6 +9,26 @@ async def start_background_tasks():
     from src.core.services.cloud_sync_scheduler import background_sync_task
     import asyncio
     asyncio.create_task(background_sync_task())
+
+
+@app.on_event("shutdown")
+def shutdown_handler():
+    """Signal background training tasks to stop and wait for them to finish."""
+    from src.api.routers import forecast_training_status
+    import time
+
+    forecast_training_status.signal_shutdown()
+    if forecast_training_status.is_training():
+        print("[Shutdown] Waiting for active forecast training to finish (up to 60s)…")
+        deadline = time.time() + 60
+        while forecast_training_status.is_training() and time.time() < deadline:
+            time.sleep(1)
+        if forecast_training_status.is_training():
+            print("[Shutdown] Training did not finish in time — proceeding with shutdown.")
+        else:
+            print("[Shutdown] Training finished cleanly.")
+    else:
+        print("[Shutdown] No active training — shutting down immediately.")
 
 @app.on_event("startup")
 def startup_db_check():
@@ -21,8 +41,8 @@ def startup_db_check():
 
         conn, _ = get_db_connection()
         if conn:
-            # 1. Apply Full Schema (Idempotent: CREATE TABLE IF NOT EXISTS)
-            # This ensures missing tables like forecast_snapshots are created in new installs.
+            # 1. Apply Full Schema (Idempotent: CREATE TABLE IF NOT EXISTS / migrations)
+            # This ensures missing tables are created in new installs and migrations run.
             schema_file = os.path.join(BASE_DIR, "database", "schema_sqlite.sql")
             if os.path.exists(schema_file):
                 try:
@@ -172,6 +192,7 @@ app.include_router(config.router, prefix="/api/config", tags=["Config"])
 app.include_router(today.router)
 app.include_router(forecast.router, prefix="/api/forecast", tags=["Forecast"])
 app.include_router(forecast_items.router, prefix="/api/forecast", tags=["Forecast Items"])
+app.include_router(forecast_volume.router, prefix="/api/forecast", tags=["Forecast Volume"])
 app.include_router(weather.router, prefix="/api/weather", tags=["Weather"])
 app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
 

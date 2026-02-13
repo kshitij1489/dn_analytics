@@ -10,12 +10,13 @@ interface CardProps {
     children: React.ReactNode;
     title: string;
     headerAction?: React.ReactNode;
+    style?: React.CSSProperties;
 }
 
 /**
  * Basic Card component with title
  */
-export function Card({ children, title, headerAction }: CardProps) {
+export function Card({ children, title, headerAction, style }: CardProps) {
     return (
         <div style={{
             background: 'var(--card-bg)',
@@ -23,7 +24,8 @@ export function Card({ children, title, headerAction }: CardProps) {
             borderRadius: '12px',
             marginBottom: '20px',
             border: '1px solid var(--border-color)',
-            boxShadow: 'var(--shadow)'
+            boxShadow: 'var(--shadow)',
+            ...style
         }}>
             <div style={{
                 display: 'flex',

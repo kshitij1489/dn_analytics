@@ -311,19 +311,39 @@ def reset_db_section(data: Dict[str, str]):
                 conn.rollback()
                 raise e
 
+        elif section == "volume_forecast":
+            # 6b. Reset Volume Forecast (menu items)
+            # Tables: volume_forecast_cache, volume_backtest_cache (may not exist in older DBs)
+            try:
+                for tbl in ["volume_forecast_cache", "volume_backtest_cache"]:
+                    cur = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
+                    )
+                    if cur.fetchone():
+                        conn.execute(f"DELETE FROM {tbl}")
+                        conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (tbl,))
+                conn.commit()
+
+                try:
+                    from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models
+                    delete_models()
+                    model_status = "Models deleted. Full retraining will occur on next request."
+                except ImportError:
+                    model_status = "ML module not active (skipping disk clean)."
+                except Exception as e:
+                    model_status = f"Failed to delete models: {str(e)}"
+
+                return {"status": "success", "message": f"Volume Forecast cache cleared. {model_status}"}
+            except Exception as e:
+                conn.rollback()
+                raise e
+
         elif section == "sales_forecast":
             # 7. Reset Sales Forecast (Revenue Models)
-            # Tables: forecast_cache, revenue_backtest_cache, forecast_snapshots
-            # forecast_snapshots may not exist on fresh DMG installs (only in full schema)
+            # Tables: forecast_cache, revenue_backtest_cache
             try:
                 conn.execute("DELETE FROM forecast_cache")
                 conn.execute("DELETE FROM revenue_backtest_cache")
-                cur = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='forecast_snapshots'"
-                )
-                if cur.fetchone():
-                    conn.execute("DELETE FROM forecast_snapshots")
-                    conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_snapshots'")
                 conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_cache'")
                 conn.execute("DELETE FROM sqlite_sequence WHERE name='revenue_backtest_cache'")
                 conn.commit()

@@ -73,8 +73,10 @@ def fetch_and_seed_forecast_bootstrap(
             return {
                 "revenue_inserted": 0,
                 "item_inserted": 0,
+                "volume_inserted": 0,
                 "revenue_backtest_inserted": 0,
                 "item_backtest_inserted": 0,
+                "volume_backtest_inserted": 0,
                 "error": f"HTTP {r.status_code}",
             }
         data = r.json()
@@ -82,19 +84,27 @@ def fetch_and_seed_forecast_bootstrap(
         return {
             "revenue_inserted": 0,
             "item_inserted": 0,
+            "volume_inserted": 0,
             "revenue_backtest_inserted": 0,
             "item_backtest_inserted": 0,
+            "volume_backtest_inserted": 0,
             "error": str(e),
         }
 
     revenue = data.get("revenue_forecasts", [])
     item = data.get("item_forecasts", [])
+    volume = data.get("volume_forecasts", [])
     revenue_bt = data.get("revenue_backtest", [])
     item_bt = data.get("item_backtest", [])
+    volume_bt = data.get("volume_backtest", [])
 
-    stats = {"revenue_inserted": 0, "item_inserted": 0, "revenue_backtest_inserted": 0, "item_backtest_inserted": 0}
+    stats = {
+        "revenue_inserted": 0, "item_inserted": 0, "volume_inserted": 0,
+        "revenue_backtest_inserted": 0, "item_backtest_inserted": 0, "volume_backtest_inserted": 0,
+    }
     do_revenue = scope in ("revenue", "all")
     do_items = scope in ("items", "all")
+    do_volume = scope in ("volume", "all")
 
     try:
         # revenue_forecasts → forecast_cache
@@ -179,6 +189,54 @@ def fetch_and_seed_forecast_bootstrap(
                     ),
                 )
                 stats["item_backtest_inserted"] += 1
+
+        # volume_forecasts → volume_forecast_cache (per menu item)
+        if do_volume:
+            for row in volume:
+                item_id = row.get("item_id") or row.get("variant_id")
+                if not item_id:
+                    continue
+                conn.execute(
+                    """INSERT OR REPLACE INTO volume_forecast_cache
+                       (forecast_date, item_id, generated_on,
+                        volume_value, unit, p50, p90, probability, recommended_volume, uploaded_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'bootstrap')""",
+                    (
+                        row.get("forecast_date"),
+                        item_id,
+                        row.get("generated_on"),
+                        row.get("volume_value", 0),
+                        row.get("unit", "mg"),
+                        row.get("p50"),
+                        row.get("p90"),
+                        row.get("probability"),
+                        row.get("recommended_volume"),
+                    ),
+                )
+                stats["volume_inserted"] += 1
+
+        # volume_backtest → volume_backtest_cache
+        if do_volume:
+            for row in volume_bt:
+                item_id = row.get("item_id") or row.get("variant_id")
+                if not item_id:
+                    continue
+                conn.execute(
+                    """INSERT OR REPLACE INTO volume_backtest_cache
+                       (forecast_date, item_id, model_trained_through,
+                        volume_value, p50, p90, probability, uploaded_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'bootstrap')""",
+                    (
+                        row.get("forecast_date"),
+                        item_id,
+                        row.get("model_trained_through"),
+                        row.get("volume_value"),
+                        row.get("p50"),
+                        row.get("p90"),
+                        row.get("probability"),
+                    ),
+                )
+                stats["volume_backtest_inserted"] += 1
 
         conn.commit()
         if any(stats.values()):

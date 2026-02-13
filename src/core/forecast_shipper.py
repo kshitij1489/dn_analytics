@@ -20,6 +20,46 @@ BATCH_LIMIT_REVENUE = 500
 BATCH_LIMIT_ITEMS = 1000
 BATCH_LIMIT_REVENUE_BACKTEST = 500
 BATCH_LIMIT_ITEM_BACKTEST = 1000
+BATCH_LIMIT_VOLUME = 1000
+BATCH_LIMIT_VOLUME_BACKTEST = 500
+
+
+def _select_unsent_volume_forecasts(conn, limit: int = BATCH_LIMIT_VOLUME) -> List[Dict[str, Any]]:
+    """Select volume_forecast_cache rows where uploaded_at IS NULL (per menu item)."""
+    try:
+        cursor = conn.execute("""
+            SELECT id, forecast_date, item_id, generated_on,
+                   volume_value, unit, p50, p90, probability, recommended_volume
+            FROM volume_forecast_cache
+            WHERE uploaded_at IS NULL
+            ORDER BY generated_on, forecast_date
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    except Exception as e:
+        logger.debug(f"Could not read volume_forecast_cache: {e}")
+        return []
+
+
+def _select_unsent_volume_backtest(conn, limit: int = BATCH_LIMIT_VOLUME_BACKTEST) -> List[Dict[str, Any]]:
+    """Select volume_backtest_cache rows where uploaded_at IS NULL (per menu item)."""
+    try:
+        cursor = conn.execute("""
+            SELECT id, forecast_date, item_id, model_trained_through,
+                   volume_value, p50, p90, probability
+            FROM volume_backtest_cache
+            WHERE uploaded_at IS NULL
+            ORDER BY model_trained_through, forecast_date
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    except Exception as e:
+        logger.debug(f"Could not read volume_backtest_cache: {e}")
+        return []
 
 
 def _select_unsent_revenue_forecasts(conn, limit: int = BATCH_LIMIT_REVENUE) -> List[Dict[str, Any]]:
@@ -124,21 +164,25 @@ def upload_pending(
 
     url = (endpoint or CLIENT_LEARNING_FORECAST_INGEST_URL).strip()
     if not url:
-        return {"revenue_sent": 0, "items_sent": 0, "revenue_backtest_sent": 0, "item_backtest_sent": 0, "error": None}
+        return {"revenue_sent": 0, "items_sent": 0, "volume_sent": 0, "revenue_backtest_sent": 0, "item_backtest_sent": 0, "volume_backtest_sent": 0, "error": None}
 
     token = auth
 
     revenue_rows = _select_unsent_revenue_forecasts(conn)
     item_rows = _select_unsent_item_forecasts(conn)
+    volume_rows = _select_unsent_volume_forecasts(conn)
     revenue_backtest_rows = _select_unsent_revenue_backtest(conn)
     item_backtest_rows = _select_unsent_item_backtest(conn)
+    volume_backtest_rows = _select_unsent_volume_backtest(conn)
 
-    if not revenue_rows and not item_rows and not revenue_backtest_rows and not item_backtest_rows:
+    if not revenue_rows and not item_rows and not volume_rows and not revenue_backtest_rows and not item_backtest_rows and not volume_backtest_rows:
         return {
             "revenue_sent": 0,
             "items_sent": 0,
+            "volume_sent": 0,
             "revenue_backtest_sent": 0,
             "item_backtest_sent": 0,
+            "volume_backtest_sent": 0,
             "error": None,
         }
 
@@ -148,8 +192,10 @@ def upload_pending(
     payload: Dict[str, Any] = {
         "revenue_forecasts": strip_id(revenue_rows),
         "item_forecasts": strip_id(item_rows),
+        "volume_forecasts": strip_id(volume_rows),
         "revenue_backtest": strip_id(revenue_backtest_rows),
         "item_backtest": strip_id(item_backtest_rows),
+        "volume_backtest": strip_id(volume_backtest_rows),
     }
     if uploaded_by:
         payload["uploaded_by"] = uploaded_by
@@ -165,16 +211,20 @@ def upload_pending(
             return {
                 "revenue_sent": 0,
                 "items_sent": 0,
+                "volume_sent": 0,
                 "revenue_backtest_sent": 0,
                 "item_backtest_sent": 0,
+                "volume_backtest_sent": 0,
                 "error": f"HTTP {r.status_code}",
             }
     except Exception as e:
         return {
             "revenue_sent": 0,
             "items_sent": 0,
+            "volume_sent": 0,
             "revenue_backtest_sent": 0,
             "item_backtest_sent": 0,
+            "volume_backtest_sent": 0,
             "error": str(e),
         }
 
@@ -184,8 +234,10 @@ def upload_pending(
     for rows, table in [
         (revenue_rows, "forecast_cache"),
         (item_rows, "item_forecast_cache"),
+        (volume_rows, "volume_forecast_cache"),
         (revenue_backtest_rows, "revenue_backtest_cache"),
         (item_backtest_rows, "item_backtest_cache"),
+        (volume_backtest_rows, "volume_backtest_cache"),
     ]:
         if rows:
             ids = [r["id"] for r in rows]
@@ -203,7 +255,9 @@ def upload_pending(
     return {
         "revenue_sent": len(revenue_rows),
         "items_sent": len(item_rows),
+        "volume_sent": len(volume_rows),
         "revenue_backtest_sent": len(revenue_backtest_rows),
         "item_backtest_sent": len(item_backtest_rows),
+        "volume_backtest_sent": len(volume_backtest_rows),
         "error": None,
     }

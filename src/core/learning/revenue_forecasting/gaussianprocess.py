@@ -249,34 +249,34 @@ def append_prediction(history: pd.DataFrame, date, pred_mean: float) -> pd.DataF
     return pd.concat([history, new_row], ignore_index=True)
 
 
-def forecast_days(model: GaussianProcessForecaster, df_history: pd.DataFrame, 
+def forecast_days(model: GaussianProcessForecaster, df_history: pd.DataFrame,
                   future_weather: pd.DataFrame) -> pd.DataFrame:
     """
     Recursive forecaster for multi-day predictions.
-    
+
     This function implements roll-forward simulation: each day's forecast
     uses the previous day's predicted value as lag1, and 7-days-ago value as lag7.
-    
+
     Args:
         model: Fitted GaussianProcessForecaster instance
         df_history: Historical dataframe with 'ds' and 'y' columns (after lag creation)
         future_weather: DataFrame with columns [ds, temp_max] for future dates
-    
+
     Returns:
         DataFrame with columns [ds, pred_mean, pred_std, lower, upper]
     """
     history = df_history[['ds', 'y']].copy()
     results = []
-    
+
     for _, row in future_weather.iterrows():
         next_row = make_next_row(
             row['ds'],
             row['temp_max'],
             history
         )
-        
+
         mean, std = model.predict(next_row)
-        
+
         results.append({
             'ds': row['ds'],
             'pred_mean': mean[0],
@@ -284,10 +284,79 @@ def forecast_days(model: GaussianProcessForecaster, df_history: pd.DataFrame,
             'lower': mean[0] - 1.96 * std[0],
             'upper': mean[0] + 1.96 * std[0]
         })
-        
+
         # CRITICAL: Feed prediction back into history for next iteration
         history = append_prediction(history, row['ds'], mean[0])
-    
+
+    return pd.DataFrame(results)
+
+
+def _compute_rolling_historical(
+    df_full: pd.DataFrame,
+    raw_data: pd.DataFrame,
+    n_days: int = 30,
+    window_size: int = 90,
+    min_train_rows: int = 30,
+) -> pd.DataFrame:
+    """
+    Point-in-time rolling backtest: for each of the last n_days, train on data
+    strictly before that date and predict. Avoids evaluation leakage from
+    in-sample GP interpolation.
+
+    Args:
+        df_full: Full filtered data (with lags, y>0) — NOT truncated to window.
+        raw_data: Raw data with [ds, temp_max] for temperature lookup on any date.
+        n_days: Number of historical days to produce rolling predictions for.
+        window_size: Max training window size per day.
+        min_train_rows: Minimum rows required to fit (skip if insufficient).
+
+    Returns:
+        DataFrame with columns [ds, pred_mean, pred_std, lower, upper]
+    """
+    if df_full.empty or len(df_full) < min_train_rows:
+        return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
+
+    last_date = pd.to_datetime(df_full['ds']).max()
+    target_dates = pd.date_range(end=last_date, periods=n_days, freq='D')
+
+    # Build temp lookup: date -> temp_max
+    raw_data = raw_data.copy()
+    raw_data['ds'] = pd.to_datetime(raw_data['ds'])
+    temp_lookup = raw_data.set_index('ds')['temp_max'].to_dict() if 'temp_max' in raw_data.columns else {}
+
+    results = []
+    prev_model = None
+
+    for target_date in target_dates:
+        df_train = df_full[df_full['ds'] < target_date].tail(window_size)
+        if len(df_train) < min_train_rows:
+            continue
+
+        temp = temp_lookup.get(pd.Timestamp(target_date))
+        if temp is None or pd.isna(temp):
+            temp = float(df_train['temp_max'].tail(7).mean()) if 'temp_max' in df_train.columns else 25.0
+
+        future_weather = pd.DataFrame({'ds': [pd.Timestamp(target_date)], 'temp_max': [temp]})
+
+        temp_model = GaussianProcessForecaster()
+        warm_start = False
+        if prev_model is not None and prev_model.fitted and hasattr(prev_model.model, 'kernel_'):
+            temp_model.model.kernel = prev_model.model.kernel_
+            temp_model.fitted = True
+            warm_start = True
+        try:
+            temp_model.fit(df_train, warm_start=warm_start)
+        except Exception as e:
+            logger.warning(f"Rolling historical fit failed for {target_date.date()}: {e}")
+            continue
+
+        pred_df = forecast_days(temp_model, df_train[['ds', 'y']], future_weather)
+        if not pred_df.empty:
+            results.append(pred_df.iloc[0].to_dict())
+        prev_model = temp_model
+
+    if not results:
+        return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
     return pd.DataFrame(results)
 
 
@@ -326,6 +395,7 @@ class RollingGPForecaster:
         self.window_start: Optional[pd.Timestamp] = None
         self.window_end: Optional[pd.Timestamp] = None
         self.training_data: Optional[pd.DataFrame] = None
+        self.rolling_historical_cache: Optional[pd.DataFrame] = None
 
     def load(self) -> bool:
         """Load model and metadata if exists. Returns True if loaded successfully."""
@@ -337,6 +407,7 @@ class RollingGPForecaster:
                     self.window_start = data.get('window_start')
                     self.window_end = data.get('window_end')
                     self.training_data = data.get('training_data')
+                    self.rolling_historical_cache = data.get('rolling_historical_cache')
                     logger.info(f"Loaded RollingGP model. Window: {self.window_start} to {self.window_end}")
                     return True
             except Exception as e:
@@ -363,45 +434,11 @@ class RollingGPForecaster:
             'model': self.model,
             'window_start': self.window_start,
             'window_end': self.window_end,
-            'training_data': self.training_data
+            'training_data': self.training_data,
+            'rolling_historical_cache': self.rolling_historical_cache,
         }
         joblib.dump(payload, self.storage_path)
         logger.info(f"Saved RollingGP model to {self.storage_path}")
-
-    def save_daily_forecast_snapshot(self, conn, run_date: str, forecast_df: pd.DataFrame) -> None:
-        """
-        Save the forecast snapshot to the database for auditing.
-        
-        Raises:
-            RuntimeError: If the snapshot could not be saved (prevents silent failures).
-        """
-        try:
-            cursor = conn.cursor()
-            rows_to_insert = []
-            
-            for _, row in forecast_df.iterrows():
-                rows_to_insert.append((
-                    run_date,
-                    row['ds'].strftime('%Y-%m-%d'),
-                    float(row['pred_mean']),
-                    float(row['pred_std']),
-                    float(row['lower']),
-                    float(row['upper']),
-                    self.window_start.strftime('%Y-%m-%d') if self.window_start else None,
-                    self.window_end.strftime('%Y-%m-%d') if self.window_end else None
-                ))
-            
-            cursor.executemany("""
-                INSERT OR REPLACE INTO forecast_snapshots 
-                (forecast_run_date, target_date, pred_mean, pred_std, lower_95, upper_95, model_window_start, model_window_end)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, rows_to_insert)
-            conn.commit()
-            logger.info(f"Saved {len(rows_to_insert)} forecast snapshots for run_date={run_date}")
-            
-        except Exception as e:
-            logger.error(f"Failed to save forecast snapshot: {e}")
-            raise RuntimeError(f"Failed to save forecast snapshot: {e}") from e
 
     def update_and_fit(self, latest_db_data: pd.DataFrame) -> None:
         """
@@ -415,67 +452,64 @@ class RollingGPForecaster:
         exists = self.load()
         
         # 2. Prepare Data Window: construct 90-day window ending TODAY
-        # CRITICAL: Compute lags BEFORE filtering y > 0 to preserve temporal ordering
-        df = add_lag_features(latest_db_data.sort_values('ds'))
-        
-        # Now filter zero-revenue rows (holidays, closures) from training target
-        # Lags are already computed correctly from the full calendar
-        original_len = len(df)
-        df = df[df['y'] > 0].copy()
-        if original_len != len(df):
-            logger.info(f"Filtered {original_len - len(df)} zero-revenue rows from training data")
-        
-        # Keep only last 90 days
+        # CRITICAL: Filter closures BEFORE computing lags.
+        # At forecast time, history only has open days — lag1 = prev open day's revenue.
+        # If we computed lags on full calendar then filtered, Mon would see lag1=0 (from Sun),
+        # but at forecast lag1=Sat's revenue. That mismatch causes closure/calendar leakage.
+        clean = latest_db_data[latest_db_data['y'] > 0].copy().sort_values('ds')
+        original_len = len(latest_db_data)
+        if original_len != len(clean):
+            logger.info(f"Filtered {original_len - len(clean)} zero-revenue rows (closures, holidays)")
+        df = add_lag_features(clean)
+
+        df_full = df.copy()
+        # Keep only last 90 days for main model
         window_size = 90
         if len(df) > window_size:
             df = df.iloc[-window_size:].reset_index(drop=True)
-            
+
         self.window_start = df['ds'].min()
         self.window_end = df['ds'].max()
         self.training_data = df
-        
+
         logger.info(f"Training Window: {len(df)} rows, {self.window_start} to {self.window_end}")
-        
+
         # 3. Fit (Warm Start if prior model exists)
         warm_start = exists and self.model.fitted
-        
+
         logger.info(f"Starting training (Warm Start: {warm_start})...")
         self.model.fit(df, warm_start=warm_start)
-        
-        # 4. Save immediately
+
+        # 4. Compute rolling historical (point-in-time backtest, no evaluation leakage)
+        logger.info("Computing rolling historical predictions (point-in-time backtest)...")
+        self.rolling_historical_cache = _compute_rolling_historical(
+            df_full=df_full,
+            raw_data=latest_db_data,
+            n_days=30,
+            window_size=window_size,
+        )
+        logger.info(f"Rolling historical: {len(self.rolling_historical_cache)} days")
+
+        # 5. Save immediately
         self.save()
 
     def predict_historical(self, n_days: int = 30) -> pd.DataFrame:
         """
-        Generate in-sample predictions for the last n_days of training data.
-        
-        This produces fitted values analogous to Holt-Winters' fittedvalues
-        and Prophet's predict() on historical dates.  The GP model interpolates
-        through (or very close to) training points, so in-sample std is small.
-        
+        Return point-in-time rolling backtest predictions for the last n_days.
+
+        These are true out-of-sample forecasts: for each day t, the model was
+        trained only on data before t. This avoids evaluation leakage from
+        in-sample GP interpolation (which would show misleadingly good fit).
+
         Returns:
             DataFrame with columns [ds, pred_mean, pred_std, lower, upper]
-            or empty DataFrame if model is not fitted.
+            or empty DataFrame if not available (e.g., model loaded before retrain).
         """
-        if self.training_data is None or not self.model.fitted:
+        if self.rolling_historical_cache is None or self.rolling_historical_cache.empty:
             return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
-        
-        df = self.training_data.tail(n_days).copy()
-        if df.empty:
-            return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
-        
-        try:
-            mean, std = self.model.predict(df)
-            return pd.DataFrame({
-                'ds': df['ds'].values,
-                'pred_mean': mean,
-                'pred_std': std,
-                'lower': mean - 1.96 * std,
-                'upper': mean + 1.96 * std,
-            })
-        except Exception as e:
-            logger.warning(f"GP historical prediction failed: {e}")
-            return pd.DataFrame(columns=['ds', 'pred_mean', 'pred_std', 'lower', 'upper'])
+
+        df = self.rolling_historical_cache.tail(n_days).copy()
+        return df[['ds', 'pred_mean', 'pred_std', 'lower', 'upper']].copy()
 
     def predict_next_days(self, future_weather: pd.DataFrame) -> pd.DataFrame:
         """Generate multi-day forecast using roll-forward simulation."""

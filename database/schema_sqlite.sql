@@ -489,29 +489,10 @@ CREATE TABLE IF NOT EXISTS weather_daily (
 );
 
 -- ============================================================================
--- 20. FORECAST SNAPSHOTS (Audit/Replay)
+-- 20. FORECAST SNAPSHOTS — REMOVED
+-- Migrated to forecast_cache. Drop leftover table from existing installs.
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS forecast_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    forecast_run_date DATE NOT NULL,      -- When the forecast was generated (e.g., Today)
-    target_date DATE NOT NULL,            -- The future date being predicted
-    
-    -- Predictions
-    pred_mean FLOAT,
-    pred_std FLOAT,
-    lower_95 FLOAT,
-    upper_95 FLOAT,
-    
-    -- Metadata for Audit
-    model_window_start DATE,
-    model_window_end DATE,
-    
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    
-    UNIQUE(forecast_run_date, target_date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_run_date ON forecast_snapshots(forecast_run_date);
+DROP TABLE IF EXISTS forecast_snapshots;
 
 -- ============================================================================
 -- 21. FORECAST CACHE (Revenue Models)
@@ -602,4 +583,44 @@ CREATE TABLE IF NOT EXISTS revenue_backtest_cache (
     UNIQUE(forecast_date, model_name, model_trained_through)
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_backtest_cache_dates ON revenue_backtest_cache(forecast_date, model_trained_through);
+
+-- ============================================================================
+-- 25. VOLUME FORECAST CACHE (Menu-item-level volume predictions)
+-- ============================================================================
+-- Persists backtest (historical) + forward predictions per menu item (gms/ml/units).
+CREATE TABLE IF NOT EXISTS volume_forecast_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,
+    item_id TEXT NOT NULL,
+    generated_on DATE NOT NULL,
+    volume_value FLOAT NOT NULL,
+    unit TEXT NOT NULL,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    recommended_volume FLOAT,
+    uploaded_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(forecast_date, item_id, generated_on)
+);
+CREATE INDEX IF NOT EXISTS idx_volume_forecast_cache_generated ON volume_forecast_cache(generated_on);
+CREATE INDEX IF NOT EXISTS idx_volume_forecast_cache_uploaded ON volume_forecast_cache(uploaded_at);
+
+-- ============================================================================
+-- 26. VOLUME BACKTEST CACHE (Point-in-time T→T+1 for volume)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS volume_backtest_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_date DATE NOT NULL,
+    item_id TEXT NOT NULL,
+    model_trained_through DATE NOT NULL,
+    volume_value FLOAT,
+    p50 FLOAT,
+    p90 FLOAT,
+    probability FLOAT,
+    uploaded_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(forecast_date, item_id, model_trained_through)
+);
+CREATE INDEX IF NOT EXISTS idx_volume_backtest_cache_dates ON volume_backtest_cache(forecast_date, model_trained_through);
 

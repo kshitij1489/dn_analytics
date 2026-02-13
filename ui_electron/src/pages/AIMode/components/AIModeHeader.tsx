@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import { HistoryPanel } from './HistoryPanel';
 import { SuggestionsDropdown } from './SuggestionsDropdown';
 import type { Conversation, Suggestion } from '../types';
 import { segmentButtonStyle, pillButtonStyle, pillContainerStyle, segmentedControlContainerStyle } from '../styles';
+import { ErrorPopup } from '../../../components';
+import type { PopupMessage } from '../../../components';
 
 type ViewMode = 'assistant' | 'telemetry';
 
@@ -64,17 +67,21 @@ export function AIModeHeader({
     onRetry,
     onResetAll
 }: AIModeHeaderProps) {
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
+
     const handleResetAll = async () => {
         if (!onResetAll || !window.confirm(RESET_ALL_CONFIRM_MESSAGE)) return;
         try {
             await Promise.resolve(onResetAll());
         } catch (err) {
             console.error('Failed to reset LLM cache:', err);
-            alert('Failed to reset cache. Please try again.');
+            setPopup({ type: 'error', message: 'Failed to reset cache. Please try again.' });
         }
     };
 
     return (
+        <>
+        <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
         <div
             style={{
                 padding: '20px 0',
@@ -225,5 +232,6 @@ export function AIModeHeader({
                 />
             )}
         </div>
+        </>
     );
 }

@@ -28,6 +28,9 @@ Thumbs.db
 *.db
 data/models/item_demand_backtest/
 data/models/gp_backtest/
+data/models/volume_demand_ml/
+data/models/volume_demand_backtest/
+data/gp_model.pkl
 *.db-shm
 *.db-wal
 *.sqlite
@@ -56,3 +59,4 @@ node_modules
 # Jupyter Notebooks
 .ipynb_checkpoints/
 *.ipynb
+data/models/item_demand_ml/

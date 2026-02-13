@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Card } from '../components/Card';
+import { ErrorPopup } from '../components';
+import type { PopupMessage } from '../components';
 import { endpoints } from '../api';
 
 // Type declaration for Electron IPC
@@ -29,6 +31,7 @@ export default function Configuration() {
     const [userForm, setUserForm] = useState({ name: '', employee_id: '' });
     const [savingUser, setSavingUser] = useState(false);
     const [userLoadError, setUserLoadError] = useState<string | null>(null);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -79,18 +82,18 @@ export default function Configuration() {
 
     const handleSaveUser = async () => {
         if (!userForm.name || !userForm.employee_id) {
-            alert("Name and Employee ID are required");
+            setPopup({ type: 'error', message: "Name and Employee ID are required" });
             return;
         }
         setSavingUser(true);
         try {
             await endpoints.config.saveUser(userForm);
-            alert("User saved successfully!");
+            setPopup({ type: 'success', message: "User saved successfully!" });
             setUserLoadError(null);
             loadUsers();
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Failed to save user";
-            alert(`❌ ${errorMsg}`);
+            setPopup({ type: 'error', message: errorMsg });
         } finally {
             setSavingUser(false);
         }
@@ -113,9 +116,9 @@ export default function Configuration() {
         setSaving(true);
         try {
             await endpoints.config.update(settings);
-            alert("Settings saved successfully!");
+            setPopup({ type: 'success', message: "Settings saved successfully!" });
         } catch (e) {
-            alert("Failed to save settings.");
+            setPopup({ type: 'error', message: "Failed to save settings." });
             console.error(e);
         } finally {
             setSaving(false);
@@ -147,10 +150,10 @@ export default function Configuration() {
     const handleTestConnection = async (type: string) => {
         try {
             const res = await endpoints.config.verify(type, settings);
-            alert(res.data.message);
+            setPopup({ type: 'success', message: res.data.message });
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Connection Failed";
-            alert(`❌ ${errorMsg}`);
+            setPopup({ type: 'error', message: errorMsg });
         }
     };
 
@@ -160,11 +163,11 @@ export default function Configuration() {
 
         try {
             const res = await endpoints.config.resetDb(section.toLowerCase());
-            alert(`✅ ${res.data.message}`);
+            setPopup({ type: 'success', message: res.data.message });
             setSelectedDbSection(null);
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Reset Failed";
-            alert(`❌ ${errorMsg}`);
+            setPopup({ type: 'error', message: errorMsg });
         }
     };
 
@@ -172,7 +175,7 @@ export default function Configuration() {
     const handlePetpoojaBackfill = async () => {
         const apiKey = settings['integration_orders_key'];
         if (!apiKey) {
-            alert("❌ Orders API Key is missing in Integrations settings.");
+            setPopup({ type: 'error', message: "Orders API Key is missing in Integrations settings." });
             return;
         }
 
@@ -180,9 +183,9 @@ export default function Configuration() {
 
         try {
             await endpoints.petpooja.backfill(apiKey);
-            alert(`✅ Sync triggered successfully`);
+            setPopup({ type: 'success', message: "Sync triggered successfully" });
         } catch (e: any) {
-            alert(`❌ Sync Failed`);
+            setPopup({ type: 'error', message: "Sync Failed" });
         }
     };
 
@@ -193,12 +196,12 @@ export default function Configuration() {
 
         try {
             const res = await endpoints.config.resetDb("integrations");
-            alert(`✅ ${res.data.message}`);
+            setPopup({ type: 'success', message: res.data.message });
             // Reload settings to reflect changes
             loadSettings();
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Reset Failed";
-            alert(`❌ ${errorMsg}`);
+            setPopup({ type: 'error', message: errorMsg });
         }
     };
 
@@ -209,12 +212,12 @@ export default function Configuration() {
 
         try {
             const res = await endpoints.config.resetDb("ai_models");
-            alert(`✅ ${res.data.message}`);
+            setPopup({ type: 'success', message: res.data.message });
             // Reload settings to reflect changes
             loadSettings();
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Reset Failed";
-            alert(`❌ ${errorMsg}`);
+            setPopup({ type: 'error', message: errorMsg });
         }
     };
 
@@ -280,7 +283,7 @@ export default function Configuration() {
 
     return (
         <div className="page-container" style={{ padding: '20px', fontFamily: 'Inter, sans-serif', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
 
             {/* Segmented Control */}
             <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'var(--card-bg)', padding: '5px', borderRadius: '30px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
@@ -650,10 +653,10 @@ export default function Configuration() {
                                         if (window.confirm("Are you sure you want to delete the local database?")) {
                                             if (window.confirm("Are you sure you would like to clear the DB from this app, locally. (Under construction)")) {
                                                 endpoints.resetAll().then(res => {
-                                                    alert(`✅ ${res.data.message}`);
-                                                    window.location.reload();
+                                                    setPopup({ type: 'success', message: res.data.message });
+                                                    setTimeout(() => window.location.reload(), 1500);
                                                 }).catch(err => {
-                                                    alert(`❌ Reset Failed: ${err.message}`);
+                                                    setPopup({ type: 'error', message: `Reset Failed: ${err.message}` });
                                                 });
                                             }
                                         }
@@ -738,10 +741,10 @@ export default function Configuration() {
                                                     if (!window.confirm("This will delete all trained models and history. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
                                                     try {
                                                         const res = await endpoints.config.resetDb("item_demand");
-                                                        alert(`✅ ${res.data.message}`);
+                                                        setPopup({ type: 'success', message: res.data.message });
                                                     } catch (e: any) {
                                                         const errorMsg = e.response?.data?.detail || "Reset Failed";
-                                                        alert(`❌ ${errorMsg}`);
+                                                        setPopup({ type: 'error', message: errorMsg });
                                                     }
                                                 }}
                                                 style={{
@@ -762,10 +765,10 @@ export default function Configuration() {
                                                     if (!window.confirm("This will delete the GP model and clear all forecast caches. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
                                                     try {
                                                         const res = await endpoints.config.resetDb("sales_forecast");
-                                                        alert(`✅ ${res.data.message}`);
+                                                        setPopup({ type: 'success', message: res.data.message });
                                                     } catch (e: any) {
                                                         const errorMsg = e.response?.data?.detail || "Reset Failed";
-                                                        alert(`❌ ${errorMsg}`);
+                                                        setPopup({ type: 'error', message: errorMsg });
                                                     }
                                                 }}
                                                 style={{
@@ -779,6 +782,30 @@ export default function Configuration() {
                                                 }}
                                             >
                                                 📊 Reset Sales Forecast
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!window.confirm("⚠️ Are you sure you want to HARD RESET Volume Forecasts?")) return;
+                                                    if (!window.confirm("This will delete all volume models and cache. Use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    try {
+                                                        const res = await endpoints.config.resetDb("volume_forecast");
+                                                        setPopup({ type: 'success', message: res.data.message });
+                                                    } catch (e: any) {
+                                                        const errorMsg = e.response?.data?.detail || "Reset Failed";
+                                                        setPopup({ type: 'error', message: errorMsg });
+                                                    }
+                                                }}
+                                                style={{
+                                                    padding: '12px',
+                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                    color: '#ef4444',
+                                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                                    borderRadius: '8px',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 600
+                                                }}
+                                            >
+                                                📦 Reset Volume Forecast
                                             </button>
                                         </>
                                     )}

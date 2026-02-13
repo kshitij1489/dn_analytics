@@ -1,0 +1,113 @@
+/* ─── ErrorPopup: shared in-app popup ────────────────────────────── */
+
+.error-popup-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.35);
+    padding: 24px;          /* keep card away from window edges */
+    box-sizing: border-box;
+}
+
+.error-popup-card {
+    background: var(--card-bg, #1e1e1e);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    width: 100%;
+    max-width: 440px;
+    max-height: calc(100vh - 48px);   /* never exceeds window */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-color, #333);
+    animation: errorPopupSlideIn 0.18s ease-out;
+}
+
+@keyframes errorPopupSlideIn {
+    from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+
+.error-popup-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 10px;
+    flex-shrink: 0;
+}
+
+.error-popup-icon {
+    font-size: 1.15rem;
+}
+
+.error-popup-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-color, #fff);
+    flex: 1;
+}
+
+.error-popup-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary, #888);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+}
+.error-popup-close:hover {
+    background: var(--hover-bg, #3d3d3d);
+    color: var(--text-color, #fff);
+}
+
+/* ── Body (scrollable) ──────────────────────────────────────────── */
+
+.error-popup-body {
+    padding: 4px 16px 16px;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--text-secondary, #ccc);
+    overflow-y: auto;
+    max-height: 45vh;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+/* Minimal scrollbar inside popup */
+.error-popup-body::-webkit-scrollbar {
+    width: 5px;
+}
+.error-popup-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+}
+
+/* ── Type accents (left border) ─────────────────────────────────── */
+
+.error-popup-error {
+    border-left: 4px solid #ef4444;
+}
+.error-popup-error .error-popup-title {
+    color: #ef4444;
+}
+
+.error-popup-success {
+    border-left: 4px solid #22c55e;
+}
+.error-popup-success .error-popup-title {
+    color: #22c55e;
+}
+
+.error-popup-info {
+    border-left: 4px solid var(--accent-color, #0A84FF);
+}
+.error-popup-info .error-popup-title {
+    color: var(--accent-color, #0A84FF);
+}
