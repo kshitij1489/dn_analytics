@@ -493,10 +493,11 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             {/* KPIs */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '20px' }}>
-                <KPICard title="Total Customers" value={reorderRate?.total_customers?.toLocaleString() || 0} />
-                <KPICard title="Returning Customers" value={reorderRate?.returning_customers?.toLocaleString() || 0} />
-                <KPICard title="Return Rate" value={`${reorderRate?.reorder_rate?.toFixed(1) || 0}%`} />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '20px' }}>
+                <KPICard title="Total Verified Customers" value={reorderRate?.total_verified_customers?.toLocaleString() || 0} />
+                <KPICard title="Avg Monthly Verified Customers (3M)" value={reorderRate?.total_customers?.toLocaleString() || 0} />
+                <KPICard title="Avg Monthly Repeat Customers (3M)" value={reorderRate?.returning_customers?.toLocaleString() || 0} />
+                <KPICard title="Repeat Customer % (3M)" value={`${reorderRate?.reorder_rate?.toFixed(1) || 0}%`} />
             </div>
 
             <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
@@ -596,8 +597,6 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
         </div>
     );
 }
-
-
 
 
 
