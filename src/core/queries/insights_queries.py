@@ -4,20 +4,34 @@ from src.core.utils.business_date import (
     get_current_business_date, 
     get_business_date_range
 )
+from src.core.utils.customer_estimate import estimate_customer_count_range_from_split
 
 def fetch_kpis(conn):
-    """Fetch Top-level KPIs: Revenue, Orders, Avg Order, Total Customers"""
+    """Fetch Top-level KPIs: Revenue, Orders, Avg Order, estimated customer count range."""
     
     # Get range for "today" (Business Date)
     today_str = get_current_business_date()
     start_dt, end_dt = get_business_date_range(today_str)
     
-    query = f"""
+    query = """
         SELECT 
             COUNT(*) as total_orders,
             SUM(total) as total_revenue,
             AVG(total) as avg_order_value,
-            (SELECT COUNT(*) FROM customers) as total_customers,
+            (
+                SELECT COUNT(*)
+                FROM orders o
+                INNER JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.order_status = 'Success'
+                  AND c.is_verified = 1
+            ) as verified_orders,
+            (
+                SELECT COUNT(DISTINCT o.customer_id)
+                FROM orders o
+                INNER JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.order_status = 'Success'
+                  AND c.is_verified = 1
+            ) as verified_customers,
             (
                 SELECT COALESCE(SUM(total), 0) 
                 FROM orders 
@@ -29,7 +43,19 @@ def fetch_kpis(conn):
     """
     cursor = conn.execute(query, (start_dt, end_dt))
     row = cursor.fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    data = dict(row)
+    total_orders = float(data.get("total_orders") or 0)
+    verified_orders = float(data.get("verified_orders") or 0)
+    verified_customers = float(data.get("verified_customers") or 0)
+    unverified_orders = max(0.0, total_orders - verified_orders)
+    _, _, low_i, high_i = estimate_customer_count_range_from_split(
+        verified_orders, unverified_orders, verified_customers
+    )
+    data["total_customers_estimate_low"] = low_i
+    data["total_customers_estimate_high"] = high_i
+    return data
 
 def fetch_daily_sales(conn):
     """Fetch Daily Sales Performance"""

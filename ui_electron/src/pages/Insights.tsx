@@ -3,6 +3,7 @@ import { endpoints } from '../api';
 import { ResizableTableWrapper, TabButton, KPICard } from '../components';
 import { CustomerLink } from '../components/CustomerLink';
 import { exportToCSV } from '../utils/csv';
+import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState('dailySales');
     const [kpis, setKpis] = useState<any>(null);
@@ -33,7 +34,11 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
                 <KPICard title="Today's Revenue" value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`} />
                 <KPICard title="Orders" value={kpis?.total_orders?.toLocaleString() || 0} />
                 <KPICard title="Avg Order" value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`} />
-                <KPICard title="Customers" value={kpis?.total_customers?.toLocaleString() || 0} />
+                <KPICard
+                    title="Total Customers (est.)"
+                    value={formatCustomerEstimateRange(kpis)}
+                    hint={CUSTOMERS_ESTIMATE_HINT}
+                />
             </div>
 
             <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />

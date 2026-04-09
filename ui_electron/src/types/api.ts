@@ -34,7 +34,9 @@ export interface KPIData {
     total_revenue?: number;
     total_orders?: number;
     avg_order_value?: number;
-    total_customers?: number;
+    /** Inclusive range from verified vs unverified order split (see API tooltip copy). */
+    total_customers_estimate_low?: number;
+    total_customers_estimate_high?: number;
     [key: string]: any;
 }
 

@@ -14,6 +14,8 @@ import {
 } from '../components/charts';
 
 import { endpoints } from '../api';
+import { KPICard } from '../components';
+import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 
 export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
     const [chartType, setChartType] = useState('salesTrend');
@@ -87,7 +89,11 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
                 <KPICard title="Revenue" value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`} />
                 <KPICard title="Orders" value={kpis?.total_orders?.toLocaleString() || 0} />
                 <KPICard title="Avg Order" value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`} />
-                <KPICard title="Customers" value={kpis?.total_customers?.toLocaleString() || 0} />
+                <KPICard
+                    title="Total Customers (est.)"
+                    value={formatCustomerEstimateRange(kpis)}
+                    hint={CUSTOMERS_ESTIMATE_HINT}
+                />
             </div>
 
             <hr style={{ margin: '30px 0', border: 'none', borderTop: '1px solid #333' }} />
@@ -128,15 +134,6 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
                 {chartType === 'brandAwareness' && <BrandAwarenessChart key={chartKey} />}
                 {chartType === 'reorderRate' && <ReorderRateChart key={chartKey} />}
             </div>
-        </div>
-    );
-}
-
-function KPICard({ title, value }: { title: string, value: string | number }) {
-    return (
-        <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
-            <h3 style={{ margin: '0 0 10px 0', color: 'var(--text-secondary)', fontSize: '0.9em' }}>{title}</h3>
-            <div style={{ fontSize: '1.8em', fontWeight: 'bold', color: 'var(--accent-color)' }}>{value}</div>
         </div>
     );
 }

@@ -7,11 +7,15 @@
 interface KPICardProps {
     title: string;
     value: string | number;
+    /** Shown as native tooltip on the card (e.g. methodology note). */
+    hint?: string;
 }
 
-export function KPICard({ title, value }: KPICardProps) {
+export function KPICard({ title, value, hint }: KPICardProps) {
     return (
-        <div style={{
+        <div
+            title={hint}
+            style={{
             background: 'var(--card-bg)',
             padding: '20px',
             borderRadius: '12px',
