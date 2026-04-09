@@ -48,6 +48,13 @@ interface ResolutionItem {
     name: string;
     type: string;
     created_at: string;
+    source_variant_id: string;
+    source_variant_name: string;
+    display_name?: string | null;
+    sample_order_name?: string | null;
+    unresolved_mapping_rows?: number;
+    order_item_rows?: number;
+    order_item_qty?: number;
     suggestion_id?: string | null;
     suggestion_name?: string | null;
     suggestion_type?: string | null;
@@ -149,6 +156,14 @@ const getMergeSuggestionLabel = (item: ResolutionItem) => {
     if (!item.suggested_variant_name) return `Merge with ${item.suggestion_name}`;
     return `Merge with ${item.suggestion_name} (${item.suggested_variant_name})`;
 };
+
+const formatVariantDisplayName = (variantName?: string | null) => (
+    variantName ? formatColumnHeader(variantName) : 'Unknown Variant'
+);
+
+const formatResolutionTitle = (item: ResolutionItem) => (
+    `${item.name} (${formatVariantDisplayName(item.source_variant_name)})`
+);
 
 // --- CSV Export Utility ---
 function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
@@ -994,8 +1009,10 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         return res.data;
     };
 
-    const removeResolvedItem = (menuItemId: string) => {
-        setItems(prev => prev.filter(item => item.menu_item_id !== menuItemId));
+    const removeResolvedItem = (menuItemId: string, sourceVariantId: string) => {
+        setItems(prev => prev.filter(item =>
+            !(item.menu_item_id === menuItemId && item.source_variant_id === sourceVariantId)
+        ));
     };
 
     const refreshAll = async () => {
@@ -1034,6 +1051,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                 const res = await endpoints.menu.mergePreview({
                     source_id: modalItem.menu_item_id,
                     target_id: selectedTargetId,
+                    source_variant_id: modalItem.source_variant_id,
                 });
                 if (!cancelled) {
                     setMergePreview(res.data);
@@ -1123,7 +1141,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         setMergePreview(null);
         setRenameName(item.name);
         setRenameType(item.type);
-        setRenameVariantId('');
+        setRenameVariantId(item.suggested_variant_id || item.source_variant_id || '');
     };
 
     const closeResolutionModal = () => {
@@ -1152,22 +1170,11 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         }
 
         const sourceVariants = mergePreview?.source_variants || [];
-        const variantMappings = sourceVariants.map(sourceVariant => {
-            const selectedTargetVariant = selectedTargetVariants[sourceVariant.variant_id];
-            const newVariantName = (newVariantNames[sourceVariant.variant_id] || '').trim();
-
-            if (selectedTargetVariant === '__new__') {
-                return {
-                    source_variant_id: sourceVariant.variant_id,
-                    new_variant_name: newVariantName,
-                };
-            }
-
-            return {
-                source_variant_id: sourceVariant.variant_id,
-                target_variant_id: selectedTargetVariant || undefined,
-            };
-        });
+        const selectedSourceVariant = sourceVariants[0];
+        if (!selectedSourceVariant) {
+            setPopup({ type: 'error', message: 'Unable to load the selected source variant preview.' });
+            return;
+        }
 
         const missingVariantMapping = sourceVariants.some(sourceVariant => {
             const selectedTargetVariant = selectedTargetVariants[sourceVariant.variant_id];
@@ -1184,13 +1191,18 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 
         setMergeSubmitting(true);
         try {
-            const res = await endpoints.menu.merge({
-                source_id: modalItem.menu_item_id,
-                target_id: selectedTargetId,
-                variant_mappings: variantMappings,
+            const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
+            const res = await endpoints.menu.resolve({
+                source_menu_item_id: modalItem.menu_item_id,
+                source_variant_id: modalItem.source_variant_id,
+                target_menu_item_id: selectedTargetId,
+                target_variant_id: selectedTargetVariant === '__new__' ? undefined : selectedTargetVariant,
+                new_variant_name: selectedTargetVariant === '__new__'
+                    ? (newVariantNames[selectedSourceVariant.variant_id] || '').trim()
+                    : undefined,
             });
-            removeResolvedItem(modalItem.menu_item_id);
-            setPopup({ type: 'success', message: res.data.message || 'Items merged successfully.' });
+            removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
+            setPopup({ type: 'success', message: res.data.message || 'Variant resolved successfully.' });
             closeResolutionModal();
             await refreshAll();
         } catch (error) {
@@ -1218,13 +1230,14 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 
         setRenameSubmitting(true);
         try {
-            const res = await endpoints.menu.verify({
-                menu_item_id: modalItem.menu_item_id,
+            const res = await endpoints.menu.resolve({
+                source_menu_item_id: modalItem.menu_item_id,
+                source_variant_id: modalItem.source_variant_id,
                 new_name: trimmedName,
                 new_type: trimmedType,
-                new_variant_id: renameVariantId,
+                target_variant_id: renameVariantId,
             });
-            removeResolvedItem(modalItem.menu_item_id);
+            removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
             setPopup({ type: 'success', message: res.data.message || 'Resolution saved successfully.' });
             closeResolutionModal();
             await refreshAll();
@@ -1281,7 +1294,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-                Resolve each unclustered item by merging it into a canonical match, verifying it as a distinct item, or manually renaming/searching for the right target.
+                Resolve each unclustered menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
             </p>
             {loading ? (
                 <div>Loading...</div>
@@ -1293,10 +1306,17 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                 </div>
             ) : (
                 items.map(item => (
-                    <Card key={item.menu_item_id} title={`${item.name} (${item.type})`}>
+                    <Card key={`${item.menu_item_id}-${item.source_variant_id}`} title={formatResolutionTitle(item)}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 420px)', gap: '20px' }}>
                             <div>
                                 <p>Created: {new Date(item.created_at).toLocaleString()}</p>
+                                <p style={{ color: 'var(--text-secondary)' }}>Type: {item.type}</p>
+                                <p style={{ color: 'var(--text-secondary)' }}>Source variant: {item.source_variant_name}</p>
+                                <p style={{ color: 'var(--text-secondary)' }}>
+                                    Unresolved rows: {item.unresolved_mapping_rows || 0} mappings
+                                    {item.order_item_rows ? `, ${item.order_item_rows} order rows` : ''}
+                                    {item.order_item_qty ? `, ${item.order_item_qty} qty` : ''}
+                                </p>
                                 {item.suggestion_id ? (
                                     <div style={{ padding: '12px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: '10px' }}>
                                         <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#3B82F6', marginBottom: '6px' }}>
@@ -1334,7 +1354,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                     Verify as New Item
                                 </button>
                                 <p style={{ margin: 0, fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                                    Keeps this as a separate menu item.
+                                    Keeps this variant as its own verified menu item + variant pair.
                                 </p>
                                 <button
                                     onClick={() => openResolutionModal(item)}
@@ -1416,11 +1436,11 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                     >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '12px', marginBottom: '20px' }}>
                             <div>
-                                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Resolve {modalItem.name}</h3>
+                                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Resolve {formatResolutionTitle(modalItem)}</h3>
                                 <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)' }}>
                                     {modalEntryPoint === 'rename'
-                                        ? 'Review the Rename / Verify fields first, then save this as a separate verified menu item.'
-                                        : 'Choose an existing verified target to merge into, or rename this item before verifying it.'}
+                                        ? 'Review the name, type, and target variant for this specific unresolved source variant.'
+                                        : 'Choose an existing verified target for this specific unresolved source variant, or rename it before verifying it.'}
                                 </p>
                             </div>
                             <button
@@ -1435,7 +1455,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                             <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
                                 <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Search &amp; Merge</h4>
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    Merge this unverified item into an existing verified menu item. The source item will be deleted after relinking.
+                                    Move only this unresolved source variant into an existing verified menu item and target variant.
                                 </p>
                                 <input
                                     value={targetSearch}
@@ -1486,13 +1506,13 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                                 {mergePreview.source.name} ({mergePreview.source.type}) → {mergePreview.target.name} ({mergePreview.target.type})
                                             </div>
                                             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                                This will relink {mergePreview.stats.order_items_relinked} order items, {mergePreview.stats.addon_items_relinked} addon rows, and {mergePreview.stats.mappings_updated} item mappings.
+                                                This will relink {mergePreview.stats.order_items_relinked} order items, {mergePreview.stats.addon_items_relinked} addon rows, and {mergePreview.stats.mappings_updated} item mappings for the selected source variant.
                                             </div>
                                             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                                Source totals to be absorbed: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
+                                                Selected source-variant totals to be absorbed: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
                                             </div>
                                             <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
-                                                The source item will be deleted. You can undo the merge from Recent Merge History.
+                                                Sibling unresolved variants, if any, will remain separate. You can undo target-changing moves from Recent Merge History.
                                             </div>
                                         </div>
                                     ) : (
@@ -1504,7 +1524,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 {mergePreview && (
                                     <div style={{ marginTop: '12px', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(37, 99, 235, 0.05)' }}>
                                         <div style={{ fontWeight: 700, color: 'var(--text-color)', marginBottom: '10px' }}>
-                                            Variant mapping
+                                            Target variant mapping
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                             {mergePreview.source_variants.map(sourceVariant => (
@@ -1599,7 +1619,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                         opacity: !selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete ? 0.7 : 1,
                                     }}
                                 >
-                                    {mergeSubmitting ? 'Merging...' : 'Confirm Merge With Variant Mapping'}
+                                    {mergeSubmitting ? 'Resolving...' : 'Confirm Variant Move'}
                                 </button>
                             </div>
 
@@ -1614,7 +1634,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                             >
                                 <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Rename / Verify</h4>
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    Use this when the current suggestion is wrong, but the item should stay as its own verified menu item under a cleaner name or type.
+                                    Use this when the selected source variant should stay separate, but under a cleaner menu item name, type, or variant assignment.
                                 </p>
                                 <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Name</label>
                                 <input
@@ -1669,13 +1689,10 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                     ))}
                                 </select>
                                 <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
-                                    The selected variant will be applied to this item&apos;s current rows when you save the resolution.
-                                </div>
-                                <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
-                                    If this item contains multiple source variants, use Search &amp; Merge instead so each variant can be mapped explicitly.
+                                    The selected variant will be applied only to this source variant&apos;s current rows when you save the resolution.
                                 </div>
                                 <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(16, 185, 129, 0.08)', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    If the new name and type exactly match an existing verified item, saving here will merge into that item automatically and keep the selected variant assignment.
+                                    If the new name and type exactly match an existing verified item, saving here will move this source variant into that item and keep the selected variant assignment.
                                 </div>
                                 {renameCollisionTarget && (
                                     <div style={{ marginTop: '12px', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '8px', padding: '12px', background: 'rgba(245, 158, 11, 0.08)', color: '#D97706', fontSize: '0.9em' }}>
@@ -1698,7 +1715,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                         opacity: renameSubmitting ? 0.7 : 1,
                                     }}
                                 >
-                                    {renameSubmitting ? 'Saving...' : 'Save Renamed Item'}
+                                    {renameSubmitting ? 'Saving...' : 'Save Variant Resolution'}
                                 </button>
                             </div>
                         </div>

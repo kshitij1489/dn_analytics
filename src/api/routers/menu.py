@@ -15,6 +15,7 @@ from src.api.models import (
     UndoMergeRequest,
     RemapRequest,
     UpdateVariantMappingRequest,
+    ResolveVariantRequest,
     VerifyRequest,
 )
 from utils.clean_order_item import suggest_variant_for_resolution
@@ -35,7 +36,7 @@ def _parse_merge_history_payload(raw_payload: Any) -> Any:
 
 
 def _extract_variant_assignment_pairs(payload: Any) -> List[Tuple[str, str]]:
-    if not isinstance(payload, dict) or payload.get("kind") != "variant_merge_v1":
+    if not isinstance(payload, dict) or payload.get("kind") not in {"variant_merge_v1", "resolution_variant_v1"}:
         return []
 
     assignments: List[Tuple[str, str]] = []
@@ -238,9 +239,14 @@ def get_merge_history(conn=Depends(get_db)):
 
 
 @router.get("/merge/preview")
-def preview_merge(source_id: str, target_id: str, conn=Depends(get_db)):
+def preview_merge(
+    source_id: str,
+    target_id: str,
+    source_variant_id: Optional[str] = None,
+    conn=Depends(get_db),
+):
     """Preview the impact of merging a source menu item into a target."""
-    res = menu_utils.preview_merge_menu_items(conn, source_id, target_id)
+    res = menu_utils.preview_merge_menu_items(conn, source_id, target_id, source_variant_id)
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
     return res
@@ -328,14 +334,43 @@ def update_variant_mapping(req: UpdateVariantMappingRequest, conn=Depends(get_db
 
 @router.get("/resolutions/unverified")
 def get_unverified(conn=Depends(get_db)):
-    """Get list of unverified menu items"""
+    """Get list of unresolved menu item + variant pairs."""
     df = menu_queries.fetch_unverified_items(conn)
     items = df_to_json(df)
     for item in items:
-        suggested_variant = suggest_variant_for_resolution(item.get("name"), item.get("type"))
-        item["suggested_variant_id"] = suggested_variant["variant_id"] if suggested_variant else None
-        item["suggested_variant_name"] = suggested_variant["variant_name"] if suggested_variant else None
+        suggested_variant = suggest_variant_for_resolution(item.get("sample_order_name") or item.get("name"), item.get("type"))
+        item["suggested_variant_id"] = (
+            item.get("source_variant_id") or
+            (suggested_variant["variant_id"] if suggested_variant else None)
+        )
+        item["suggested_variant_name"] = (
+            item.get("source_variant_name") or
+            (suggested_variant["variant_name"] if suggested_variant else None)
+        )
+        item["display_name"] = (
+            f"{item.get('name')} ({item.get('source_variant_name')})"
+            if item.get("source_variant_name")
+            else item.get("name")
+        )
     return items
+
+
+@router.post("/resolutions/resolve")
+def resolve_variant_endpoint(req: ResolveVariantRequest, conn=Depends(get_db)):
+    """Resolve a single unresolved menu item + variant pair."""
+    res = menu_utils.resolve_menu_item_variant(
+        conn,
+        req.source_menu_item_id,
+        req.source_variant_id,
+        req.target_menu_item_id,
+        req.new_name,
+        req.new_type,
+        req.target_variant_id,
+        req.new_variant_name,
+    )
+    if res['status'] == 'error':
+        raise HTTPException(400, res['message'])
+    return res
 
 
 @router.post("/resolutions/verify")

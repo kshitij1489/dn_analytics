@@ -191,15 +191,58 @@ def fetch_menu_types(conn):
     return [row['type'] for row in rows]
 
 def fetch_unverified_items(conn):
-    """Fetch all unverified menu items with suggestions"""
+    """Fetch unresolved menu item + variant rows for the resolutions workflow."""
     query = """
-        SELECT 
-            m.menu_item_id, m.name, m.type, m.created_at, m.suggestion_id,
-            s.name as suggestion_name, s.type as suggestion_type
-        FROM menu_items m
+        WITH unresolved_variants AS (
+            SELECT
+                mv.menu_item_id,
+                mv.variant_id,
+                COUNT(*) AS unresolved_mapping_rows
+            FROM menu_item_variants mv
+            WHERE mv.is_verified = 0
+            GROUP BY mv.menu_item_id, mv.variant_id
+        ),
+        order_item_usage AS (
+            SELECT
+                oi.menu_item_id,
+                oi.variant_id,
+                MIN(oi.name_raw) AS sample_order_name,
+                COUNT(*) AS order_item_rows,
+                COALESCE(SUM(oi.quantity), 0) AS order_item_qty
+            FROM order_items oi
+            GROUP BY oi.menu_item_id, oi.variant_id
+        ),
+        addon_usage AS (
+            SELECT
+                oa.menu_item_id,
+                oa.variant_id,
+                MIN(oa.name_raw) AS sample_addon_name
+            FROM order_item_addons oa
+            GROUP BY oa.menu_item_id, oa.variant_id
+        )
+        SELECT
+            m.menu_item_id,
+            m.name,
+            m.type,
+            m.created_at,
+            m.suggestion_id,
+            s.name AS suggestion_name,
+            s.type AS suggestion_type,
+            uv.variant_id AS source_variant_id,
+            COALESCE(v.variant_name, 'UNKNOWN') AS source_variant_name,
+            COALESCE(oi.sample_order_name, au.sample_addon_name) AS sample_order_name,
+            uv.unresolved_mapping_rows,
+            COALESCE(oi.order_item_rows, 0) AS order_item_rows,
+            COALESCE(oi.order_item_qty, 0) AS order_item_qty
+        FROM unresolved_variants uv
+        JOIN menu_items m ON uv.menu_item_id = m.menu_item_id
         LEFT JOIN menu_items s ON m.suggestion_id = s.menu_item_id
-        WHERE m.is_verified = 0
-        ORDER BY m.name
+        LEFT JOIN variants v ON uv.variant_id = v.variant_id
+        LEFT JOIN order_item_usage oi
+            ON uv.menu_item_id = oi.menu_item_id AND uv.variant_id = oi.variant_id
+        LEFT JOIN addon_usage au
+            ON uv.menu_item_id = au.menu_item_id AND uv.variant_id = au.variant_id
+        ORDER BY m.name, v.variant_name
     """
     cursor = conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])

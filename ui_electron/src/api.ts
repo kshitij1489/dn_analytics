@@ -89,7 +89,7 @@ export const endpoints = {
         variantsList: () => api.get('/menu/variants/list'),
 
         mergeHistory: () => api.get('/menu/merge/history'),
-        mergePreview: (params: { source_id: string, target_id: string }) => api.get('/menu/merge/preview', { params }),
+        mergePreview: (params: { source_id: string, target_id: string, source_variant_id?: string }) => api.get('/menu/merge/preview', { params }),
         merge: (data: {
             source_id: string,
             target_id: string,
@@ -107,6 +107,15 @@ export const endpoints = {
             api.post('/menu/variant-mapping/update', data),
 
         unverified: () => api.get('/menu/resolutions/unverified'),
+        resolve: (data: {
+            source_menu_item_id: string,
+            source_variant_id: string,
+            target_menu_item_id?: string,
+            new_name?: string,
+            new_type?: string,
+            target_variant_id?: string,
+            new_variant_name?: string,
+        }) => api.post('/menu/resolutions/resolve', data),
         verify: (data: { menu_item_id: string, new_name?: string, new_type?: string, new_variant_id?: string }) => api.post('/menu/resolutions/verify', data),
     },
 

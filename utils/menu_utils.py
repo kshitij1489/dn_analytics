@@ -34,7 +34,18 @@ def _decode_variant_key(variant_key: Any) -> Optional[str]:
     return str(variant_key)
 
 
-def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, Any]]:
+def _build_variant_match_clause(column_name: str, variant_key: Any) -> Tuple[str, List[Any]]:
+    decoded_variant_id = _decode_variant_key(variant_key)
+    if decoded_variant_id is None:
+        return f"{column_name} IS NULL", []
+    return f"{column_name} = ?", [decoded_variant_id]
+
+
+def _fetch_menu_item_variant_summary(
+    conn,
+    menu_item_id: str,
+    variant_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Aggregate variant usage for a menu item across mappings, order items, and addons."""
     summary: Dict[str, Dict[str, Any]] = {}
 
@@ -98,10 +109,113 @@ def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, 
             variant["mapping_rows"]
         )
 
-    return sorted(
+    variants = sorted(
         summary.values(),
         key=lambda variant: (-variant["total_rows"], variant["variant_name"]),
     )
+
+    if variant_key is None:
+        return variants
+
+    normalized_variant_key = _normalize_variant_key(variant_key)
+    return [variant for variant in variants if variant["variant_id"] == normalized_variant_key]
+
+
+def _recalculate_menu_item_stats(cursor, menu_item_id: str) -> None:
+    cursor.execute("""
+        UPDATE menu_items
+        SET total_sold = (
+                (SELECT COALESCE(SUM(oi.quantity), 0)
+                 FROM order_items oi
+                 JOIN orders o ON oi.order_id = o.order_id
+                 WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
+                (SELECT COALESCE(SUM(oia.quantity), 0)
+                 FROM order_item_addons oia
+                 JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                 JOIN orders o ON oi.order_id = o.order_id
+                 WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
+            ),
+            total_revenue = (
+                (SELECT COALESCE(SUM(oi.total_price), 0)
+                 FROM order_items oi
+                 JOIN orders o ON oi.order_id = o.order_id
+                 WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
+                (SELECT COALESCE(SUM(oia.price * oia.quantity), 0)
+                 FROM order_item_addons oia
+                 JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                 JOIN orders o ON oi.order_id = o.order_id
+                 WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
+            ),
+            sold_as_item = (
+                SELECT COALESCE(SUM(oi.quantity), 0)
+                FROM order_items oi
+                JOIN orders o ON oi.order_id = o.order_id
+                WHERE oi.menu_item_id = ? AND o.order_status = 'Success'
+            ),
+            sold_as_addon = (
+                SELECT COALESCE(SUM(oia.quantity), 0)
+                FROM order_item_addons oia
+                JOIN order_items oi ON oia.order_item_id = oi.order_item_id
+                JOIN orders o ON oi.order_id = o.order_id
+                WHERE oia.menu_item_id = ? AND o.order_status = 'Success'
+            ),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE menu_item_id = ?
+    """, (
+        menu_item_id,
+        menu_item_id,
+        menu_item_id,
+        menu_item_id,
+        menu_item_id,
+        menu_item_id,
+        menu_item_id,
+    ))
+
+
+def _sync_menu_item_resolution_state(cursor, menu_item_id: str) -> None:
+    cursor.execute(
+        "SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ?",
+        (menu_item_id,),
+    )
+    total_mappings = int(cursor.fetchone()[0] or 0)
+
+    if total_mappings == 0:
+        cursor.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM order_items WHERE menu_item_id = ?) +
+                (SELECT COUNT(*) FROM order_item_addons WHERE menu_item_id = ?)
+            """,
+            (menu_item_id, menu_item_id),
+        )
+        remaining_usage = int(cursor.fetchone()[0] or 0)
+
+        if remaining_usage == 0:
+            cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (menu_item_id,))
+        else:
+            cursor.execute(
+                """
+                UPDATE menu_items
+                SET is_verified = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ?
+                """,
+                (menu_item_id,),
+            )
+        return
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ? AND is_verified = 0",
+        (menu_item_id,),
+    )
+    unresolved_mappings = int(cursor.fetchone()[0] or 0)
+
+    cursor.execute("""
+        UPDATE menu_items
+        SET is_verified = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE menu_item_id = ?
+    """, (1 if unresolved_mappings == 0 else 0, menu_item_id))
 
 
 def _fetch_menu_item_record(cursor, item_id: str):
@@ -213,7 +327,12 @@ def _update_rows_for_variant_mapping(
         """, (set_menu_item_id, set_variant_id, source_menu_item_id, decoded_variant_id))
 
 
-def preview_merge_menu_items(conn, source_id: str, target_id: str) -> Dict[str, Any]:
+def preview_merge_menu_items(
+    conn,
+    source_id: str,
+    target_id: str,
+    source_variant_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Preview the impact of merging one menu item into another."""
     if source_id == target_id:
         return {"status": "error", "message": "Cannot merge item into itself"}
@@ -226,14 +345,68 @@ def preview_merge_menu_items(conn, source_id: str, target_id: str) -> Dict[str, 
         if not source or not target:
             return {"status": "error", "message": "Source or Target item not found"}
 
-        cursor.execute("SELECT COUNT(*) FROM order_items WHERE menu_item_id = ?", (source_id,))
-        order_items_relinked = int(cursor.fetchone()[0] or 0)
+        source_variants = _fetch_menu_item_variant_summary(conn, source_id, source_variant_id)
+        if source_variant_id is not None and not source_variants:
+            return {"status": "error", "message": "Source variant was not found"}
 
-        cursor.execute("SELECT COUNT(*) FROM order_item_addons WHERE menu_item_id = ?", (source_id,))
-        addon_items_relinked = int(cursor.fetchone()[0] or 0)
+        if source_variant_id is None:
+            cursor.execute("SELECT COUNT(*) FROM order_items WHERE menu_item_id = ?", (source_id,))
+            order_items_relinked = int(cursor.fetchone()[0] or 0)
 
-        cursor.execute("SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ?", (source_id,))
-        mappings_updated = int(cursor.fetchone()[0] or 0)
+            cursor.execute("SELECT COUNT(*) FROM order_item_addons WHERE menu_item_id = ?", (source_id,))
+            addon_items_relinked = int(cursor.fetchone()[0] or 0)
+
+            cursor.execute("SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ?", (source_id,))
+            mappings_updated = int(cursor.fetchone()[0] or 0)
+
+            source_total_sold = int(source[4] or 0)
+            source_total_revenue = float(source[5] or 0)
+        else:
+            variant_clause, variant_params = _build_variant_match_clause("variant_id", source_variant_id)
+
+            cursor.execute(
+                f"SELECT COUNT(*) FROM order_items WHERE menu_item_id = ? AND {variant_clause}",
+                [source_id] + variant_params,
+            )
+            order_items_relinked = int(cursor.fetchone()[0] or 0)
+
+            cursor.execute(
+                f"SELECT COUNT(*) FROM order_item_addons WHERE menu_item_id = ? AND {variant_clause}",
+                [source_id] + variant_params,
+            )
+            addon_items_relinked = int(cursor.fetchone()[0] or 0)
+
+            cursor.execute(
+                f"SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ? AND {variant_clause}",
+                [source_id] + variant_params,
+            )
+            mappings_updated = int(cursor.fetchone()[0] or 0)
+
+            source_total_sold = int(sum(
+                int(variant.get("order_item_qty") or 0) + int(variant.get("addon_qty") or 0)
+                for variant in source_variants
+            ))
+
+            cursor.execute(
+                f"""
+                SELECT COALESCE(SUM(total_price), 0)
+                FROM order_items
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [source_id] + variant_params,
+            )
+            order_revenue = float(cursor.fetchone()[0] or 0)
+
+            cursor.execute(
+                f"""
+                SELECT COALESCE(SUM(price * quantity), 0)
+                FROM order_item_addons
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [source_id] + variant_params,
+            )
+            addon_revenue = float(cursor.fetchone()[0] or 0)
+            source_total_revenue = order_revenue + addon_revenue
 
         preview = {
             "status": "success",
@@ -253,11 +426,11 @@ def preview_merge_menu_items(conn, source_id: str, target_id: str) -> Dict[str, 
                 "order_items_relinked": order_items_relinked,
                 "addon_items_relinked": addon_items_relinked,
                 "mappings_updated": mappings_updated,
-                "source_total_sold": int(source[4] or 0),
-                "source_total_revenue": float(source[5] or 0),
+                "source_total_sold": source_total_sold,
+                "source_total_revenue": source_total_revenue,
             },
         }
-        preview["source_variants"] = _fetch_menu_item_variant_summary(conn, source_id)
+        preview["source_variants"] = source_variants if source_variant_id is not None else _fetch_menu_item_variant_summary(conn, source_id)
         preview["target_variants"] = _fetch_menu_item_variant_summary(conn, target_id)
         return preview
     except Exception as e:
@@ -665,6 +838,284 @@ def update_menu_variant_mapping(
         cursor.close()
 
 
+def resolve_menu_item_variant(
+    conn,
+    source_menu_item_id: str,
+    source_variant_id: str,
+    target_menu_item_id: str = None,
+    new_name: str = None,
+    new_type: str = None,
+    target_variant_id: str = None,
+    new_variant_name: str = None,
+) -> Dict[str, Any]:
+    """Resolve a single unresolved menu item + variant pair."""
+    source_menu_item_id = str(source_menu_item_id or "").strip()
+    source_variant_key = _normalize_variant_key(source_variant_id)
+    target_menu_item_id = str(target_menu_item_id or "").strip() or None
+    normalized_new_name = (new_name or "").strip()
+    normalized_new_type = (new_type or "").strip()
+    normalized_new_variant_name = (new_variant_name or "").strip()
+    target_variant_id = str(target_variant_id or "").strip() or None
+
+    if not source_menu_item_id or not source_variant_key:
+        return {"status": "error", "message": "Source menu item and source variant are required"}
+
+    if not target_menu_item_id and (not normalized_new_name or not normalized_new_type):
+        return {"status": "error", "message": "Choose an existing target item or provide a new name and type"}
+
+    if not target_variant_id and not normalized_new_variant_name:
+        return {"status": "error", "message": "Choose an existing target variant or provide a new variant name"}
+
+    cursor = conn.cursor()
+    try:
+        source_item = _fetch_menu_item_record(cursor, source_menu_item_id)
+        if not source_item:
+            return {"status": "error", "message": "Source item was not found"}
+
+        source_variant_summary = _fetch_menu_item_variant_summary(conn, source_menu_item_id, source_variant_key)
+        if not source_variant_summary:
+            return {"status": "error", "message": "Source variant was not found"}
+
+        source_variant = source_variant_summary[0]
+        source_variant_db_id = _decode_variant_key(source_variant_key)
+
+        if target_menu_item_id:
+            resolved_target_id = target_menu_item_id
+            cursor.execute("""
+                SELECT menu_item_id, name, type, is_verified
+                FROM menu_items
+                WHERE menu_item_id = ?
+            """, (resolved_target_id,))
+            target_item = cursor.fetchone()
+            if not target_item:
+                return {"status": "error", "message": "Selected target item was not found"}
+            target_name = target_item[1]
+            target_type = target_item[2]
+        else:
+            resolved_target_id = generate_deterministic_id(normalized_new_name, normalized_new_type)
+            cursor.execute("""
+                SELECT menu_item_id, name, type, is_verified
+                FROM menu_items
+                WHERE menu_item_id = ?
+            """, (resolved_target_id,))
+            target_item = cursor.fetchone()
+            if not target_item:
+                cursor.execute("""
+                    INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+                    VALUES (?, ?, ?, 1)
+                """, (resolved_target_id, normalized_new_name, normalized_new_type))
+                target_name = normalized_new_name
+                target_type = normalized_new_type
+            else:
+                target_name = target_item[1]
+                target_type = target_item[2]
+
+        if normalized_new_variant_name:
+            resolved_target_variant_id = _ensure_variant(conn, normalized_new_variant_name)
+            target_variant_name = normalized_new_variant_name
+        else:
+            cursor.execute(
+                "SELECT variant_name FROM variants WHERE variant_id = ?",
+                (target_variant_id,),
+            )
+            target_variant_row = cursor.fetchone()
+            if not target_variant_row:
+                return {"status": "error", "message": "Selected target variant was not found"}
+            resolved_target_variant_id = target_variant_id
+            target_variant_name = target_variant_row[0]
+            cursor.execute("""
+                UPDATE variants
+                SET is_verified = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE variant_id = ?
+            """, (resolved_target_variant_id,))
+
+        variant_clause, variant_params = _build_variant_match_clause("variant_id", source_variant_key)
+
+        cursor.execute(
+            f"""
+            SELECT order_item_id, menu_item_id, variant_id, is_verified
+            FROM menu_item_variants
+            WHERE menu_item_id = ? AND {variant_clause}
+            """,
+            [source_menu_item_id] + variant_params,
+        )
+        mapping_rows = [
+            {
+                "order_item_id": row[0],
+                "old_menu_item_id": row[1],
+                "old_variant_id": row[2],
+                "old_is_verified": int(row[3] or 0),
+                "new_menu_item_id": resolved_target_id,
+                "new_variant_id": resolved_target_variant_id,
+                "new_is_verified": 1,
+            }
+            for row in cursor.fetchall()
+        ]
+
+        if not mapping_rows:
+            return {"status": "error", "message": "No unresolved mapping rows were found for this source variant"}
+
+        cursor.execute(
+            f"""
+            SELECT order_item_id, menu_item_id, variant_id
+            FROM order_items
+            WHERE menu_item_id = ? AND {variant_clause}
+            """,
+            [source_menu_item_id] + variant_params,
+        )
+        order_item_rows = [
+            {
+                "order_item_id": row[0],
+                "old_menu_item_id": row[1],
+                "old_variant_id": row[2],
+                "new_menu_item_id": resolved_target_id,
+                "new_variant_id": resolved_target_variant_id,
+            }
+            for row in cursor.fetchall()
+        ]
+
+        cursor.execute(
+            f"""
+            SELECT order_item_addon_id, menu_item_id, variant_id
+            FROM order_item_addons
+            WHERE menu_item_id = ? AND {variant_clause}
+            """,
+            [source_menu_item_id] + variant_params,
+        )
+        addon_rows = [
+            {
+                "order_item_addon_id": row[0],
+                "old_menu_item_id": row[1],
+                "old_variant_id": row[2],
+                "new_menu_item_id": resolved_target_id,
+                "new_variant_id": resolved_target_variant_id,
+            }
+            for row in cursor.fetchall()
+        ]
+
+        should_record_history = (
+            resolved_target_id != source_menu_item_id or
+            resolved_target_variant_id != source_variant_db_id
+        )
+        if should_record_history:
+            history_payload = {
+                "kind": "resolution_variant_v1",
+                "source_variant_id": source_variant_key,
+                "target_variant_id": resolved_target_variant_id,
+                "source_variant_name": source_variant["variant_name"],
+                "target_variant_name": target_variant_name,
+                "mapping_rows": mapping_rows,
+                "order_items": order_item_rows,
+                "order_item_addons": addon_rows,
+            }
+            _insert_merge_history(
+                cursor,
+                source_menu_item_id,
+                resolved_target_id,
+                source_item[1],
+                source_item[2],
+                history_payload,
+            )
+
+        if resolved_target_id == source_menu_item_id and normalized_new_name and normalized_new_type:
+            cursor.execute("""
+                UPDATE menu_items
+                SET name = ?,
+                    type = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ?
+            """, (normalized_new_name, normalized_new_type, source_menu_item_id))
+
+        if resolved_target_id == source_menu_item_id and resolved_target_variant_id == source_variant_db_id:
+            cursor.execute(
+                f"""
+                UPDATE menu_item_variants
+                SET is_verified = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [source_menu_item_id] + variant_params,
+            )
+        else:
+            cursor.execute(
+                f"""
+                UPDATE menu_item_variants
+                SET menu_item_id = ?,
+                    variant_id = ?,
+                    is_verified = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [resolved_target_id, resolved_target_variant_id, source_menu_item_id] + variant_params,
+            )
+
+            cursor.execute(
+                f"""
+                UPDATE order_items
+                SET menu_item_id = ?,
+                    variant_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [resolved_target_id, resolved_target_variant_id, source_menu_item_id] + variant_params,
+            )
+
+            cursor.execute(
+                f"""
+                UPDATE order_item_addons
+                SET menu_item_id = ?,
+                    variant_id = ?
+                WHERE menu_item_id = ? AND {variant_clause}
+                """,
+                [resolved_target_id, resolved_target_variant_id, source_menu_item_id] + variant_params,
+            )
+
+        cursor.execute("""
+            UPDATE variants
+            SET is_verified = 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE variant_id = ?
+        """, (resolved_target_variant_id,))
+        cursor.execute("""
+            UPDATE menu_items
+            SET is_verified = 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE menu_item_id = ?
+        """, (resolved_target_id,))
+
+        for menu_item_id in {source_menu_item_id, resolved_target_id}:
+            _recalculate_menu_item_stats(cursor, menu_item_id)
+        for menu_item_id in {source_menu_item_id, resolved_target_id}:
+            _sync_menu_item_resolution_state(cursor, menu_item_id)
+
+        conn.commit()
+        export_to_backups(conn)
+
+        if resolved_target_id == source_menu_item_id and resolved_target_variant_id == source_variant_db_id:
+            message = f"Verified '{source_item[1]}' ({source_variant['variant_name']}) as a resolved menu item + variant pair"
+        else:
+            message = (
+                f"Resolved '{source_item[1]}' ({source_variant['variant_name']}) "
+                f"into '{target_name}' ({target_variant_name})"
+            )
+
+        return {
+            "status": "success",
+            "message": message,
+            "stats": {
+                "mapping_rows_updated": len(mapping_rows),
+                "order_items_updated": len(order_item_rows),
+                "order_item_addons_updated": len(addon_rows),
+            },
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": f"Variant resolution failed: {e}"}
+    finally:
+        cursor.close()
+
+
 def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> Dict[str, Any]:
     """
     Handle resolution where an item is renamed.
@@ -732,7 +1183,9 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
             VALUES (?, ?, ?, 1)
         """, (source_id, history_dict['source_name'], history_dict['source_type']))
         
-        if isinstance(history_payload, dict) and history_payload.get("kind") == "variant_merge_v1":
+        history_kind = history_payload.get("kind") if isinstance(history_payload, dict) else None
+
+        if history_kind == "variant_merge_v1":
             for mapping_row in history_payload.get("mapping_rows", []):
                 cursor.execute("""
                     UPDATE menu_item_variants
@@ -753,6 +1206,40 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
                     SET menu_item_id = ?, variant_id = ?
                     WHERE order_item_addon_id = ?
                 """, (source_id, addon_row["old_variant_id"], addon_row["order_item_addon_id"]))
+        elif history_kind == "resolution_variant_v1":
+            for mapping_row in history_payload.get("mapping_rows", []):
+                cursor.execute("""
+                    UPDATE menu_item_variants
+                    SET menu_item_id = ?, variant_id = ?, is_verified = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE order_item_id = ?
+                """, (
+                    mapping_row["old_menu_item_id"],
+                    mapping_row["old_variant_id"],
+                    mapping_row.get("old_is_verified", 0),
+                    mapping_row["order_item_id"],
+                ))
+
+            for order_row in history_payload.get("order_items", []):
+                cursor.execute("""
+                    UPDATE order_items
+                    SET menu_item_id = ?, variant_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE order_item_id = ?
+                """, (
+                    order_row["old_menu_item_id"],
+                    order_row["old_variant_id"],
+                    order_row["order_item_id"],
+                ))
+
+            for addon_row in history_payload.get("order_item_addons", []):
+                cursor.execute("""
+                    UPDATE order_item_addons
+                    SET menu_item_id = ?, variant_id = ?
+                    WHERE order_item_addon_id = ?
+                """, (
+                    addon_row["old_menu_item_id"],
+                    addon_row["old_variant_id"],
+                    addon_row["order_item_addon_id"],
+                ))
         else:
             affected_ids = history_payload
             # 3. Relink Mappings (menu_item_variants)
@@ -780,42 +1267,11 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
         
         # 6. Recalculate Stats (Filtered by Success status)
         for mid in [target_id, source_id]:
-            cursor.execute("""
-                UPDATE menu_items 
-                SET total_sold = (
-                        (SELECT COALESCE(SUM(oi.quantity), 0) 
-                         FROM order_items oi 
-                         JOIN orders o ON oi.order_id = o.order_id 
-                         WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
-                        (SELECT COALESCE(SUM(oia.quantity), 0) 
-                         FROM order_item_addons oia 
-                         JOIN order_items oi ON oia.order_item_id = oi.order_item_id
-                         JOIN orders o ON oi.order_id = o.order_id
-                         WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
-                    ),
-                    total_revenue = (
-                        (SELECT COALESCE(SUM(oi.total_price), 0) 
-                         FROM order_items oi 
-                         JOIN orders o ON oi.order_id = o.order_id 
-                         WHERE oi.menu_item_id = ? AND o.order_status = 'Success') +
-                        (SELECT COALESCE(SUM(oia.price * oia.quantity), 0) 
-                         FROM order_item_addons oia 
-                         JOIN order_items oi ON oia.order_item_id = oi.order_item_id
-                         JOIN orders o ON oi.order_id = o.order_id
-                         WHERE oia.menu_item_id = ? AND o.order_status = 'Success')
-                    ),
-                    sold_as_item = (SELECT COALESCE(SUM(oi.quantity), 0) 
-                                   FROM order_items oi 
-                                   JOIN orders o ON oi.order_id = o.order_id 
-                                   WHERE oi.menu_item_id = ? AND o.order_status = 'Success'),
-                    sold_as_addon = (SELECT COALESCE(SUM(oia.quantity), 0) 
-                                    FROM order_item_addons oia 
-                                    JOIN order_items oi ON oia.order_item_id = oi.order_item_id
-                                    JOIN orders o ON oi.order_id = o.order_id
-                                    WHERE oia.menu_item_id = ? AND o.order_status = 'Success'),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE menu_item_id = ?
-            """, (mid, mid, mid, mid, mid, mid, mid))
+            _recalculate_menu_item_stats(cursor, mid)
+
+        if history_kind == "resolution_variant_v1":
+            for mid in [target_id, source_id]:
+                _sync_menu_item_resolution_state(cursor, mid)
 
         
         # 7. Delete History

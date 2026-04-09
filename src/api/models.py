@@ -69,6 +69,17 @@ class VerifyRequest(BaseModel):
     new_variant_id: Optional[str] = None
 
 
+class ResolveVariantRequest(BaseModel):
+    """Resolve a single unresolved menu item + variant pair."""
+    source_menu_item_id: str
+    source_variant_id: str
+    target_menu_item_id: Optional[str] = None
+    new_name: Optional[str] = None
+    new_type: Optional[str] = None
+    target_variant_id: Optional[str] = None
+    new_variant_name: Optional[str] = None
+
+
 # --- Resolutions Models ---
 
 class ResolutionMergeRequest(BaseModel):
