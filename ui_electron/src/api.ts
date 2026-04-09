@@ -89,14 +89,23 @@ export const endpoints = {
         variantsList: () => api.get('/menu/variants/list'),
 
         mergeHistory: () => api.get('/menu/merge/history'),
-        merge: (data: { source_id: string, target_id: string }) => api.post('/menu/merge', data),
+        mergePreview: (params: { source_id: string, target_id: string }) => api.get('/menu/merge/preview', { params }),
+        merge: (data: {
+            source_id: string,
+            target_id: string,
+            variant_mappings?: Array<{
+                source_variant_id: string,
+                target_variant_id?: string,
+                new_variant_name?: string,
+            }>,
+        }) => api.post('/menu/merge', data),
         undoMerge: (data: { merge_id: number }) => api.post('/menu/merge/undo', data),
 
         remapCheck: (oid: string) => api.get(`/menu/remap/check/${oid}`),
         remap: (data: { order_item_id: string, new_menu_item_id: string, new_variant_id: string }) => api.post('/menu/remap', data),
 
         unverified: () => api.get('/menu/resolutions/unverified'),
-        verify: (data: { menu_item_id: string, new_name?: string, new_type?: string }) => api.post('/menu/resolutions/verify', data),
+        verify: (data: { menu_item_id: string, new_name?: string, new_type?: string, new_variant_id?: string }) => api.post('/menu/resolutions/verify', data),
     },
 
     orders: {

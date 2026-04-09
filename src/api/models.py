@@ -5,7 +5,7 @@ This module consolidates all Pydantic models used across routers.
 """
 
 from pydantic import BaseModel
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
 
 # --- Job Management Models ---
@@ -26,12 +26,20 @@ class QueryRequest(BaseModel):
     query: str
 
 
+class VariantMappingRequest(BaseModel):
+    """Variant mapping used when merging a source item into a target item."""
+    source_variant_id: str
+    target_variant_id: Optional[str] = None
+    new_variant_name: Optional[str] = None
+
+
 # --- Menu Management Models ---
 
 class MergeRequest(BaseModel):
     """Request to merge two menu items"""
     source_id: str
     target_id: str
+    variant_mappings: Optional[List[VariantMappingRequest]] = None
 
 
 class UndoMergeRequest(BaseModel):
@@ -51,6 +59,7 @@ class VerifyRequest(BaseModel):
     menu_item_id: str
     new_name: Optional[str] = None
     new_type: Optional[str] = None
+    new_variant_id: Optional[str] = None
 
 
 # --- Resolutions Models ---
@@ -132,4 +141,3 @@ class CustomerProfileResponse(BaseModel):
     """Complete customer profile with order history"""
     customer: CustomerSearchResponse
     orders: list[CustomerProfileOrder]
-

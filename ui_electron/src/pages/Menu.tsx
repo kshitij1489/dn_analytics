@@ -31,6 +31,113 @@ const Card = ({ children, title }: { children: React.ReactNode, title: string })
     </div>
 );
 
+interface MenuLookupItem {
+    menu_item_id: string;
+    name: string;
+    type: string;
+    is_verified: boolean;
+}
+
+interface VariantOption {
+    variant_id: string;
+    name: string;
+}
+
+interface ResolutionItem {
+    menu_item_id: string;
+    name: string;
+    type: string;
+    created_at: string;
+    suggestion_id?: string | null;
+    suggestion_name?: string | null;
+    suggestion_type?: string | null;
+    suggested_variant_id?: string | null;
+    suggested_variant_name?: string | null;
+}
+
+interface MergeHistoryEntry {
+    merge_id: number;
+    source_name: string;
+    target_name?: string | null;
+    merged_at: string;
+    variant_assignments?: MergeHistoryVariantAssignment[];
+}
+
+interface MergeHistoryVariantAssignment {
+    source_variant_id: string;
+    source_variant_name: string;
+    target_variant_id: string;
+    target_variant_name: string;
+}
+
+interface MergePreview {
+    source: {
+        menu_item_id: string;
+        name: string;
+        type: string;
+        is_verified: boolean;
+    };
+    target: {
+        menu_item_id: string;
+        name: string;
+        type: string;
+        is_verified: boolean;
+    };
+    stats: {
+        order_items_relinked: number;
+        addon_items_relinked: number;
+        mappings_updated: number;
+        source_total_sold: number;
+        source_total_revenue: number;
+    };
+    source_variants: MergePreviewVariant[];
+    target_variants: MergePreviewVariant[];
+}
+
+interface MergePreviewVariant {
+    variant_id: string;
+    variant_name: string;
+    order_item_rows: number;
+    order_item_qty: number;
+    addon_rows: number;
+    addon_qty: number;
+    mapping_rows: number;
+    total_rows: number;
+}
+
+const getApiErrorMessage = (error: unknown): string => {
+    const err = error as { response?: { data?: { detail?: string } }; message?: string };
+    return err.response?.data?.detail || err.message || 'Something went wrong';
+};
+
+const renderVariantAssignments = (assignments?: MergeHistoryVariantAssignment[], compact = false) => {
+    if (!assignments || assignments.length === 0) return null;
+
+    return (
+        <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {assignments.map(assignment => (
+                <div
+                    key={`${assignment.source_variant_id}-${assignment.target_variant_id}`}
+                    style={{
+                        fontSize: compact ? '0.75em' : '0.82em',
+                        color: 'var(--text-secondary)',
+                    }}
+                >
+                    Variant: <span style={{ color: '#F59E0B' }}>{assignment.source_variant_name}</span>
+                    {' → '}
+                    <span style={{ color: '#60A5FA' }}>{assignment.target_variant_name}</span>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const getMergeSuggestionLabel = (item: ResolutionItem) => {
+    if (!item.suggestion_name) return 'Merge with Suggested Item';
+    if (!item.suggested_variant_name) return `Merge with ${item.suggestion_name}`;
+    return `Merge with ${item.suggestion_name} (${item.suggested_variant_name})`;
+};
+
 // --- CSV Export Utility ---
 function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
@@ -316,6 +423,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                             <div key={h.merge_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #333' }}>
                                 <div style={{ fontSize: '0.9em' }}>
                                     <span style={{ color: '#ff8888' }}>{h.source_name}</span> → <span style={{ color: '#88ff88' }}>{h.target_name}</span>
+                                    {renderVariantAssignments(h.variant_assignments, true)}
                                     <div style={{ fontSize: '0.8em', color: '#888' }}>{new Date(h.merged_at).toLocaleString()}</div>
                                 </div>
                                 <button onClick={() => handleUndo(h.merge_id)} style={{ fontSize: '0.8em', background: '#444', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }}>Undo</button>
@@ -679,28 +787,339 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Resolutions Tab ---
 
 function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
-    const [items, setItems] = useState<any[]>([]);
+    const [items, setItems] = useState<ResolutionItem[]>([]);
+    const [lookupItems, setLookupItems] = useState<MenuLookupItem[]>([]);
+    const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
+    const [mergeHistory, setMergeHistory] = useState<MergeHistoryEntry[]>([]);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [activeItemId, setActiveItemId] = useState<string | null>(null);
+    const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
+    const [modalItem, setModalItem] = useState<ResolutionItem | null>(null);
+    const [targetSearch, setTargetSearch] = useState('');
+    const [selectedTargetId, setSelectedTargetId] = useState('');
+    const [mergePreview, setMergePreview] = useState<MergePreview | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [renameName, setRenameName] = useState('');
+    const [renameType, setRenameType] = useState('');
+    const [renameVariantId, setRenameVariantId] = useState('');
+    const [mergeSubmitting, setMergeSubmitting] = useState(false);
+    const [renameSubmitting, setRenameSubmitting] = useState(false);
+    const [selectedTargetVariants, setSelectedTargetVariants] = useState<Record<string, string>>({});
+    const [newVariantNames, setNewVariantNames] = useState<Record<string, string>>({});
 
-    const load = async () => {
+    const loadItems = async () => {
         const res = await endpoints.menu.unverified();
         setItems(res.data);
+        return res.data;
     };
 
-    useEffect(() => { load(); }, [lastDbSync]);
+    const loadLookupItems = async () => {
+        const res = await endpoints.menu.list();
+        setLookupItems(res.data);
+        return res.data;
+    };
 
-    const handleVerify = async (id: string, newName?: string, newType?: string) => {
+    const loadVariantOptions = async () => {
+        const res = await endpoints.menu.variantsList();
+        setVariantOptions(res.data);
+        return res.data;
+    };
+
+    const loadHistory = async () => {
+        const res = await endpoints.menu.mergeHistory();
+        setMergeHistory(res.data);
+        return res.data;
+    };
+
+    const removeResolvedItem = (menuItemId: string) => {
+        setItems(prev => prev.filter(item => item.menu_item_id !== menuItemId));
+    };
+
+    const refreshAll = async () => {
+        setLoading(true);
+        const results = await Promise.allSettled([loadItems(), loadLookupItems(), loadVariantOptions(), loadHistory()]);
+        const failedRefreshes = results
+            .map((result, index) => ({ result, label: ['items', 'lookup', 'variants', 'history'][index] }))
+            .filter(({ result }) => result.status === 'rejected')
+            .map(({ label, result }) => `${label}: ${getApiErrorMessage((result as PromiseRejectedResult).reason)}`);
+
+        if (failedRefreshes.length > 0) {
+            setPopup({
+                type: 'error',
+                message: `Some resolution data failed to refresh. ${failedRefreshes.join(' | ')}`,
+            });
+        }
+
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        void refreshAll();
+    }, [lastDbSync]);
+
+    useEffect(() => {
+        if (!modalItem || !selectedTargetId) {
+            setMergePreview(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadPreview = async () => {
+            setPreviewLoading(true);
+            try {
+                const res = await endpoints.menu.mergePreview({
+                    source_id: modalItem.menu_item_id,
+                    target_id: selectedTargetId,
+                });
+                if (!cancelled) {
+                    setMergePreview(res.data);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setMergePreview(null);
+                    setPopup({ type: 'error', message: getApiErrorMessage(error) });
+                }
+            } finally {
+                if (!cancelled) {
+                    setPreviewLoading(false);
+                }
+            }
+        };
+
+        void loadPreview();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [modalItem, selectedTargetId]);
+
+    useEffect(() => {
+        if (!mergePreview) {
+            setSelectedTargetVariants({});
+            setNewVariantNames({});
+            return;
+        }
+
+        const nextSelectedTargetVariants: Record<string, string> = {};
+        const nextNewVariantNames: Record<string, string> = {};
+        const suggestedVariantExists = Boolean(
+            modalItem?.suggested_variant_id &&
+            variantOptions.some(variant => variant.variant_id === modalItem.suggested_variant_id)
+        );
+
+        mergePreview.source_variants.forEach(sourceVariant => {
+            const matchingTargetVariant = mergePreview.target_variants.find(
+                targetVariant => targetVariant.variant_id === sourceVariant.variant_id ||
+                    targetVariant.variant_name === sourceVariant.variant_name
+            );
+
+            const shouldUseSuggestedVariant = mergePreview.source_variants.length === 1 && !matchingTargetVariant;
+            nextSelectedTargetVariants[sourceVariant.variant_id] = matchingTargetVariant?.variant_id ||
+                (shouldUseSuggestedVariant
+                    ? (suggestedVariantExists
+                        ? (modalItem?.suggested_variant_id || '')
+                        : (modalItem?.suggested_variant_name ? '__new__' : ''))
+                    : '');
+            nextNewVariantNames[sourceVariant.variant_id] = shouldUseSuggestedVariant && modalItem?.suggested_variant_name
+                ? modalItem.suggested_variant_name
+                : sourceVariant.variant_name;
+        });
+
+        setSelectedTargetVariants(nextSelectedTargetVariants);
+        setNewVariantNames(nextNewVariantNames);
+
+        if (!renameVariantId && mergePreview.source_variants.length === 1) {
+            setRenameVariantId(
+                suggestedVariantExists
+                    ? (modalItem?.suggested_variant_id || '')
+                    : mergePreview.source_variants[0].variant_id
+            );
+        }
+    }, [mergePreview, modalItem, renameVariantId, variantOptions]);
+
+    const openResolutionModal = (item: ResolutionItem, initialTargetId?: string) => {
+        setModalItem(item);
+        setTargetSearch(initialTargetId && item.suggestion_name ? item.suggestion_name : '');
+        setSelectedTargetId(initialTargetId || '');
+        setMergePreview(null);
+        setRenameName(item.name);
+        setRenameType(item.type);
+        setRenameVariantId('');
+    };
+
+    const closeResolutionModal = () => {
+        setModalItem(null);
+        setTargetSearch('');
+        setSelectedTargetId('');
+        setMergePreview(null);
+        setRenameName('');
+        setRenameType('');
+        setRenameVariantId('');
+        setMergeSubmitting(false);
+        setRenameSubmitting(false);
+        setSelectedTargetVariants({});
+        setNewVariantNames({});
+    };
+
+    const handleVerifyAsNew = async (item: ResolutionItem) => {
+        if (!window.confirm(`Verify "${item.name}" as a separate new menu item?`)) return;
+
+        setActiveItemId(item.menu_item_id);
         try {
-            await endpoints.menu.verify({ menu_item_id: id, new_name: newName, new_type: newType });
-            load();
-        } catch (e: any) { setPopup({ type: 'error', message: e.message }); }
+            await endpoints.menu.verify({ menu_item_id: item.menu_item_id });
+            removeResolvedItem(item.menu_item_id);
+            setPopup({ type: 'success', message: `"${item.name}" verified as a new menu item.` });
+            await refreshAll();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setActiveItemId(null);
+        }
     };
+
+    const handleMerge = async () => {
+        if (!modalItem || !selectedTargetId) {
+            setPopup({ type: 'error', message: 'Select a verified target item first.' });
+            return;
+        }
+
+        const sourceVariants = mergePreview?.source_variants || [];
+        const variantMappings = sourceVariants.map(sourceVariant => {
+            const selectedTargetVariant = selectedTargetVariants[sourceVariant.variant_id];
+            const newVariantName = (newVariantNames[sourceVariant.variant_id] || '').trim();
+
+            if (selectedTargetVariant === '__new__') {
+                return {
+                    source_variant_id: sourceVariant.variant_id,
+                    new_variant_name: newVariantName,
+                };
+            }
+
+            return {
+                source_variant_id: sourceVariant.variant_id,
+                target_variant_id: selectedTargetVariant || undefined,
+            };
+        });
+
+        const missingVariantMapping = sourceVariants.some(sourceVariant => {
+            const selectedTargetVariant = selectedTargetVariants[sourceVariant.variant_id];
+            if (selectedTargetVariant === '__new__') {
+                return !(newVariantNames[sourceVariant.variant_id] || '').trim();
+            }
+            return !selectedTargetVariant;
+        });
+
+        if (missingVariantMapping) {
+            setPopup({ type: 'error', message: 'Choose a target child variant or provide a new variant name for every source variant.' });
+            return;
+        }
+
+        setMergeSubmitting(true);
+        try {
+            const res = await endpoints.menu.merge({
+                source_id: modalItem.menu_item_id,
+                target_id: selectedTargetId,
+                variant_mappings: variantMappings,
+            });
+            removeResolvedItem(modalItem.menu_item_id);
+            setPopup({ type: 'success', message: res.data.message || 'Items merged successfully.' });
+            closeResolutionModal();
+            await refreshAll();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setMergeSubmitting(false);
+        }
+    };
+
+    const handleRenameResolution = async () => {
+        if (!modalItem) return;
+
+        const trimmedName = renameName.trim();
+        const trimmedType = renameType.trim();
+
+        if (!trimmedName || !trimmedType) {
+            setPopup({ type: 'error', message: 'Name and type are both required.' });
+            return;
+        }
+
+        if (!renameVariantId) {
+            setPopup({ type: 'error', message: 'Select a variant type before saving.' });
+            return;
+        }
+
+        setRenameSubmitting(true);
+        try {
+            const res = await endpoints.menu.verify({
+                menu_item_id: modalItem.menu_item_id,
+                new_name: trimmedName,
+                new_type: trimmedType,
+                new_variant_id: renameVariantId,
+            });
+            removeResolvedItem(modalItem.menu_item_id);
+            setPopup({ type: 'success', message: res.data.message || 'Resolution saved successfully.' });
+            closeResolutionModal();
+            await refreshAll();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setRenameSubmitting(false);
+        }
+    };
+
+    const handleUndo = async (mergeId: number) => {
+        if (!window.confirm('Undo this merge?')) return;
+
+        setUndoingMergeId(mergeId);
+        try {
+            await endpoints.menu.undoMerge({ merge_id: mergeId });
+            setPopup({ type: 'success', message: 'Merge undone successfully.' });
+            await refreshAll();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUndoingMergeId(null);
+        }
+    };
+
+    const eligibleTargets = modalItem
+        ? lookupItems.filter(candidate => candidate.is_verified && candidate.menu_item_id !== modalItem.menu_item_id)
+        : [];
+
+    const filteredTargets = eligibleTargets.filter(candidate =>
+        `${candidate.name} ${candidate.type}`.toLowerCase().includes(targetSearch.toLowerCase())
+    );
+
+    const renameCollisionTarget = modalItem
+        ? lookupItems.find(candidate =>
+            candidate.is_verified &&
+            candidate.menu_item_id !== modalItem.menu_item_id &&
+            candidate.name.trim().toLowerCase() === renameName.trim().toLowerCase() &&
+            candidate.type.trim().toLowerCase() === renameType.trim().toLowerCase()
+        )
+        : undefined;
+
+    const variantMappingsComplete = (mergePreview?.source_variants || []).every(sourceVariant => {
+        const selectedTargetVariant = selectedTargetVariants[sourceVariant.variant_id];
+        if (!selectedTargetVariant) return false;
+        if (selectedTargetVariant === '__new__') {
+            return Boolean((newVariantNames[sourceVariant.variant_id] || '').trim());
+        }
+        return true;
+    });
 
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
-            {items.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                Resolve each unclustered item by merging it into a canonical match, verifying it as a distinct item, or manually renaming/searching for the right target.
+            </p>
+            {loading ? (
+                <div>Loading...</div>
+            ) : items.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-color)' }}>
                     <div style={{ fontSize: '3em', marginBottom: '10px' }}>✅</div>
                     <h3>All items verified!</h3>
@@ -709,20 +1128,406 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
             ) : (
                 items.map(item => (
                     <Card key={item.menu_item_id} title={`${item.name} (${item.type})`}>
-                        <div style={{ display: 'flex', gap: '20px' }}>
-                            <div style={{ flex: 1 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 420px)', gap: '20px' }}>
+                            <div>
                                 <p>Created: {new Date(item.created_at).toLocaleString()}</p>
-                                {item.suggestion_id && <p style={{ color: '#a5a5f0' }}>💡 Suggestion: {item.suggestion_name}</p>}
+                                {item.suggestion_id ? (
+                                    <div style={{ padding: '12px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: '10px' }}>
+                                        <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#3B82F6', marginBottom: '6px' }}>
+                                            Suggested verified match
+                                        </div>
+                                        <div style={{ color: '#7C83FD' }}>
+                                            {item.suggestion_name}
+                                            {item.suggestion_type ? ` (${item.suggestion_type})` : ''}
+                                        </div>
+                                        {item.suggested_variant_name && (
+                                            <div style={{ marginTop: '6px', fontSize: '0.85em', color: '#94A3B8' }}>
+                                                Suggested variant: {item.suggested_variant_name}
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p style={{ color: 'var(--text-secondary)' }}>
+                                        No suggestion available. Use Search &amp; Merge or verify this item as a new menu item.
+                                    </p>
+                                )}
                             </div>
-                            <div style={{ flex: 1, display: 'flex', gap: '10px', flexDirection: 'column' }}>
-                                <button onClick={() => handleVerify(item.menu_item_id)} style={{ padding: '10px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer' }}>
-                                    Verify as Is
+                            <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
+                                {item.suggestion_id && item.suggestion_name && (
+                                    <button
+                                        onClick={() => openResolutionModal(item, item.suggestion_id || undefined)}
+                                        disabled={activeItemId === item.menu_item_id}
+                                        style={{ padding: '12px', background: '#2563EB', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                                    >
+                                        {getMergeSuggestionLabel(item)}
+                                    </button>
+                                )}
+                                <button
+                                    onClick={() => handleVerifyAsNew(item)}
+                                    disabled={activeItemId === item.menu_item_id}
+                                    style={{ padding: '12px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                                >
+                                    {activeItemId === item.menu_item_id ? 'Saving...' : 'Verify as New Item'}
                                 </button>
-                                {/* Rename logic would go here, effectively verify with new name */}
+                                <p style={{ margin: 0, fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                                    Keeps this as a separate menu item.
+                                </p>
+                                <button
+                                    onClick={() => openResolutionModal(item)}
+                                    disabled={activeItemId === item.menu_item_id}
+                                    style={{ padding: '12px', background: 'var(--card-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                                >
+                                    Rename / Search
+                                </button>
                             </div>
                         </div>
                     </Card>
                 ))
+            )}
+            <Card title="Recent Merge History">
+                {mergeHistory.length === 0 ? (
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No recent merges to undo.</p>
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {mergeHistory.map(entry => (
+                            <div
+                                key={entry.merge_id}
+                                style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    gap: '12px',
+                                    padding: '10px 0',
+                                    borderBottom: '1px solid var(--border-color)',
+                                }}
+                            >
+                                <div>
+                                    <div style={{ color: 'var(--text-color)' }}>
+                                        <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
+                                        {' → '}
+                                        <span style={{ color: '#10B981' }}>{entry.target_name || 'Deleted target'}</span>
+                                    </div>
+                                    {renderVariantAssignments(entry.variant_assignments)}
+                                    <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                                        {new Date(entry.merged_at).toLocaleString()}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => handleUndo(entry.merge_id)}
+                                    disabled={undoingMergeId === entry.merge_id}
+                                    style={{ padding: '8px 14px', background: '#444', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+                                >
+                                    {undoingMergeId === entry.merge_id ? 'Undoing...' : 'Undo'}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </Card>
+            {modalItem && (
+                <div
+                    onClick={closeResolutionModal}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(15, 23, 42, 0.65)',
+                        zIndex: 2000,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '20px',
+                    }}
+                >
+                    <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{
+                            width: 'min(980px, 100%)',
+                            maxHeight: '90vh',
+                            overflowY: 'auto',
+                            background: 'var(--card-bg)',
+                            borderRadius: '16px',
+                            border: '1px solid var(--border-color)',
+                            boxShadow: 'var(--shadow)',
+                            padding: '24px',
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '12px', marginBottom: '20px' }}>
+                            <div>
+                                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Resolve {modalItem.name}</h3>
+                                <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)' }}>
+                                    Choose an existing verified target to merge into, or rename this item before verifying it.
+                                </p>
+                            </div>
+                            <button
+                                onClick={closeResolutionModal}
+                                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2em' }}
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                            <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Search &amp; Merge</h4>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                    Merge this unverified item into an existing verified menu item. The source item will be deleted after relinking.
+                                </p>
+                                <input
+                                    value={targetSearch}
+                                    onChange={(event) => setTargetSearch(event.target.value)}
+                                    placeholder="Search verified menu items"
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        marginBottom: '12px',
+                                        boxSizing: 'border-box',
+                                    }}
+                                />
+                                <div style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', marginBottom: '12px' }}>
+                                    {filteredTargets.length === 0 ? (
+                                        <div style={{ padding: '12px', color: 'var(--text-secondary)' }}>No verified targets match this search.</div>
+                                    ) : (
+                                        filteredTargets.slice(0, 40).map(candidate => (
+                                            <button
+                                                key={candidate.menu_item_id}
+                                                onClick={() => setSelectedTargetId(candidate.menu_item_id)}
+                                                style={{
+                                                    width: '100%',
+                                                    textAlign: 'left',
+                                                    padding: '12px',
+                                                    border: 'none',
+                                                    borderBottom: '1px solid var(--border-color)',
+                                                    background: selectedTargetId === candidate.menu_item_id ? 'rgba(37, 99, 235, 0.12)' : 'transparent',
+                                                    color: 'var(--text-color)',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                <div style={{ fontWeight: 700 }}>{candidate.name}</div>
+                                                <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>{candidate.type}</div>
+                                            </button>
+                                        ))
+                                    )}
+                                </div>
+                                <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', minHeight: '140px', background: 'rgba(148, 163, 184, 0.08)' }}>
+                                    {previewLoading ? (
+                                        <div style={{ color: 'var(--text-secondary)' }}>Loading merge preview...</div>
+                                    ) : mergePreview ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>
+                                                {mergePreview.source.name} ({mergePreview.source.type}) → {mergePreview.target.name} ({mergePreview.target.type})
+                                            </div>
+                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                                This will relink {mergePreview.stats.order_items_relinked} order items, {mergePreview.stats.addon_items_relinked} addon rows, and {mergePreview.stats.mappings_updated} item mappings.
+                                            </div>
+                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                                Source totals to be absorbed: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
+                                            </div>
+                                            <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
+                                                The source item will be deleted. You can undo the merge from Recent Merge History.
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: 'var(--text-secondary)' }}>
+                                            Select a verified target to preview the merge before confirming it.
+                                        </div>
+                                    )}
+                                </div>
+                                {mergePreview && (
+                                    <div style={{ marginTop: '12px', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(37, 99, 235, 0.05)' }}>
+                                        <div style={{ fontWeight: 700, color: 'var(--text-color)', marginBottom: '10px' }}>
+                                            Variant mapping
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                            {mergePreview.source_variants.map(sourceVariant => (
+                                                <div
+                                                    key={sourceVariant.variant_id}
+                                                    style={{
+                                                        border: '1px solid var(--border-color)',
+                                                        borderRadius: '8px',
+                                                        padding: '12px',
+                                                        background: 'var(--card-bg)',
+                                                    }}
+                                                >
+                                                    <div style={{ fontWeight: 700, color: 'var(--text-color)' }}>
+                                                        {sourceVariant.variant_name}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)', margin: '6px 0 10px' }}>
+                                                        {sourceVariant.order_item_rows} order rows / {sourceVariant.addon_rows} addon rows / {sourceVariant.mapping_rows} cluster mappings
+                                                    </div>
+                                                    <select
+                                                        value={selectedTargetVariants[sourceVariant.variant_id] || ''}
+                                                        onChange={(event) => {
+                                                            const nextValue = event.target.value;
+                                                            setSelectedTargetVariants(current => ({
+                                                                ...current,
+                                                                [sourceVariant.variant_id]: nextValue,
+                                                            }));
+                                                            if (nextValue === '__new__') {
+                                                                setNewVariantNames(current => ({
+                                                                    ...current,
+                                                                    [sourceVariant.variant_id]: current[sourceVariant.variant_id] || sourceVariant.variant_name,
+                                                                }));
+                                                            }
+                                                        }}
+                                                        style={{
+                                                            width: '100%',
+                                                            padding: '10px 12px',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid var(--border-color)',
+                                                            background: 'var(--input-bg)',
+                                                            color: 'var(--text-color)',
+                                                            marginBottom: selectedTargetVariants[sourceVariant.variant_id] === '__new__' ? '10px' : 0,
+                                                        }}
+                                                    >
+                                                        <option value="">Select variant type</option>
+                                                        {variantOptions.map(targetVariant => (
+                                                            <option key={targetVariant.variant_id} value={targetVariant.variant_id}>
+                                                                {targetVariant.name}
+                                                            </option>
+                                                        ))}
+                                                        <option value="__new__">Create new variant type...</option>
+                                                    </select>
+                                                    {selectedTargetVariants[sourceVariant.variant_id] === '__new__' && (
+                                                        <input
+                                                            value={newVariantNames[sourceVariant.variant_id] || ''}
+                                                            onChange={(event) => setNewVariantNames(current => ({
+                                                                ...current,
+                                                                [sourceVariant.variant_id]: event.target.value,
+                                                            }))}
+                                                            placeholder="New child variant name"
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '10px 12px',
+                                                                borderRadius: '8px',
+                                                                border: '1px solid var(--border-color)',
+                                                                background: 'var(--input-bg)',
+                                                                color: 'var(--text-color)',
+                                                                boxSizing: 'border-box',
+                                                            }}
+                                                        />
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div style={{ marginTop: '12px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                                            This dropdown includes every variant type currently available in the database.
+                                        </div>
+                                    </div>
+                                )}
+                                <button
+                                    onClick={() => void handleMerge()}
+                                    disabled={!selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete}
+                                    style={{
+                                        width: '100%',
+                                        marginTop: '12px',
+                                        padding: '12px',
+                                        background: '#2563EB',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: !selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete ? 'not-allowed' : 'pointer',
+                                        fontWeight: 700,
+                                        opacity: !selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete ? 0.7 : 1,
+                                    }}
+                                >
+                                    {mergeSubmitting ? 'Merging...' : 'Confirm Merge With Variant Mapping'}
+                                </button>
+                            </div>
+
+                            <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Rename / Verify</h4>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                    Use this when the current suggestion is wrong, but the item should stay as its own verified menu item under a cleaner name or type.
+                                </p>
+                                <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Name</label>
+                                <input
+                                    value={renameName}
+                                    onChange={(event) => setRenameName(event.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        marginBottom: '12px',
+                                        boxSizing: 'border-box',
+                                    }}
+                                />
+                                <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Type</label>
+                                <input
+                                    value={renameType}
+                                    onChange={(event) => setRenameType(event.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        marginBottom: '12px',
+                                        boxSizing: 'border-box',
+                                    }}
+                                />
+                                <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Variant Type</label>
+                                <select
+                                    value={renameVariantId}
+                                    onChange={(event) => setRenameVariantId(event.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        marginBottom: '12px',
+                                        boxSizing: 'border-box',
+                                    }}
+                                >
+                                    <option value="">Select variant type</option>
+                                    {variantOptions.map(variant => (
+                                        <option key={variant.variant_id} value={variant.variant_id}>
+                                            {variant.name}
+                                        </option>
+                                    ))}
+                                </select>
+                                <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
+                                    The selected variant will be applied to this item&apos;s current rows when you save the resolution.
+                                </div>
+                                <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(16, 185, 129, 0.08)', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                    If the new name and type exactly match an existing verified item, saving here will merge into that item automatically and keep the selected variant assignment.
+                                </div>
+                                {renameCollisionTarget && (
+                                    <div style={{ marginTop: '12px', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '8px', padding: '12px', background: 'rgba(245, 158, 11, 0.08)', color: '#D97706', fontSize: '0.9em' }}>
+                                        Exact match found: {renameCollisionTarget.name} ({renameCollisionTarget.type}). Saving this rename will merge into that verified item.
+                                    </div>
+                                )}
+                                <button
+                                    onClick={() => void handleRenameResolution()}
+                                    disabled={renameSubmitting}
+                                    style={{
+                                        width: '100%',
+                                        marginTop: '12px',
+                                        padding: '12px',
+                                        background: '#10B981',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: renameSubmitting ? 'not-allowed' : 'pointer',
+                                        fontWeight: 700,
+                                        opacity: renameSubmitting ? 0.7 : 1,
+                                    }}
+                                >
+                                    {renameSubmitting ? 'Saving...' : 'Save Renamed Item'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

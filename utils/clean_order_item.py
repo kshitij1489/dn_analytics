@@ -15,7 +15,9 @@ Usage:
 """
 
 import re
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+from utils.id_generator import generate_deterministic_id
 
 # ============================================================
 # CONSTANTS (Ported from rebuild_menu.py)
@@ -442,6 +444,46 @@ def clean_order_item_name(raw_name: str) -> Dict[str, str]:
         'type': item_type,
         'variant': variant,
     }
+
+
+def suggest_variant_for_resolution(item_name: str, item_type: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Infer a useful variant suggestion for the resolutions workflow."""
+    if not item_name:
+        return None
+
+    clean_result = clean_order_item_name(item_name)
+    candidate_variant = (clean_result.get('variant') or '').strip()
+    item_name_lower = item_name.lower()
+    normalized_item_type = (item_type or clean_result.get('type') or '').strip().lower()
+
+    # The generic fallback is not useful as a resolution suggestion for menu clustering.
+    if candidate_variant and candidate_variant != '1_PIECE':
+        return {
+            'variant_id': generate_deterministic_id(candidate_variant),
+            'variant_name': candidate_variant,
+        }
+
+    if normalized_item_type == 'ice cream' or 'ice cream' in item_name_lower:
+        variant_overrides = [
+            (r'(60\s*gms?|60gm|junior scoop|small scoop)', 'JUNIOR_SCOOP_60GMS'),
+            (r'(120\s*gms?|120gm|regular scoop|\(regular\))', 'REGULAR_SCOOP_120GMS'),
+            (r'(160\s*gms?|160gm|mini tub)', 'MINI_TUB_160GMS'),
+            (r'(200\s*ml|mini indulgence)', 'MINI_TUB_200ML'),
+            (r'(220\s*gms?|220gm)', 'REGULAR_TUB_220GMS'),
+            (r'(300\s*ml)', 'REGULAR_TUB_300ML'),
+            (r'(725\s*ml)', 'FAMILY_TUB_725ML'),
+            (r'(700\s*ml)', 'FAMILY_TUB_700ML'),
+            (r'(500\s*gms?|500gm)', 'FAMILY_TUB_500GMS'),
+        ]
+
+        for pattern, variant_name in variant_overrides:
+            if re.search(pattern, item_name_lower):
+                return {
+                    'variant_id': generate_deterministic_id(variant_name),
+                    'variant_name': variant_name,
+                }
+
+    return None
 
 if __name__ == "__main__":
     test_cases = [

@@ -5,15 +5,48 @@ Provides endpoints for menu items, variants, merging, remapping, and verificatio
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
 from src.core.queries import menu_queries, table_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
 from src.api.models import MergeRequest, UndoMergeRequest, RemapRequest, VerifyRequest
+from utils.clean_order_item import suggest_variant_for_resolution
 from utils import menu_utils
 
 router = APIRouter()
+
+
+def _parse_merge_history_payload(raw_payload: Any) -> Any:
+    if raw_payload is None:
+        return None
+    if isinstance(raw_payload, str):
+        try:
+            return json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return None
+    return raw_payload
+
+
+def _extract_variant_assignment_pairs(payload: Any) -> List[Tuple[str, str]]:
+    if not isinstance(payload, dict) or payload.get("kind") != "variant_merge_v1":
+        return []
+
+    assignments: List[Tuple[str, str]] = []
+    seen = set()
+    for section in ("mapping_rows", "order_items", "order_item_addons"):
+        for row in payload.get(section, []):
+            source_variant_id = row.get("old_variant_id")
+            target_variant_id = row.get("new_variant_id")
+            if not source_variant_id or not target_variant_id:
+                continue
+            pair = (str(source_variant_id), str(target_variant_id))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            assignments.append(pair)
+
+    return assignments
 
 
 # --- Basic Menu Endpoints ---
@@ -111,8 +144,20 @@ def get_menu_matrix(conn=Depends(get_db)):
 def get_menu_list(conn=Depends(get_db)):
     """Lightweight list of all items for dropdowns"""
     cursor = conn.cursor()
-    cursor.execute("SELECT menu_item_id, name, type FROM menu_items ORDER BY name")
-    data = [{"menu_item_id": row[0], "name": row[1], "type": row[2]} for row in cursor.fetchall()]
+    cursor.execute("""
+        SELECT menu_item_id, name, type, is_verified
+        FROM menu_items
+        ORDER BY name
+    """)
+    data = [
+        {
+            "menu_item_id": row[0],
+            "name": row[1],
+            "type": row[2],
+            "is_verified": bool(row[3]),
+        }
+        for row in cursor.fetchall()
+    ]
     cursor.close()
     return data
 
@@ -142,14 +187,64 @@ def get_merge_history(conn=Depends(get_db)):
     """)
     cols = [desc[0] for desc in cursor.description]
     results = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    parsed_payloads = []
+    variant_ids = set()
+    for result in results:
+        payload = _parse_merge_history_payload(result.get("affected_order_items"))
+        parsed_payloads.append(payload)
+        for source_variant_id, target_variant_id in _extract_variant_assignment_pairs(payload):
+            variant_ids.add(source_variant_id)
+            variant_ids.add(target_variant_id)
+
+    variant_name_map: Dict[str, str] = {}
+    if variant_ids:
+        placeholders = ",".join("?" for _ in variant_ids)
+        cursor.execute(
+            f"SELECT variant_id, variant_name FROM variants WHERE variant_id IN ({placeholders})",
+            list(variant_ids),
+        )
+        variant_name_map = {str(row[0]): row[1] for row in cursor.fetchall()}
+
+    for result, payload in zip(results, parsed_payloads):
+        result["variant_assignments"] = [
+            {
+                "source_variant_id": source_variant_id,
+                "source_variant_name": variant_name_map.get(source_variant_id, source_variant_id),
+                "target_variant_id": target_variant_id,
+                "target_variant_name": variant_name_map.get(target_variant_id, target_variant_id),
+            }
+            for source_variant_id, target_variant_id in _extract_variant_assignment_pairs(payload)
+        ]
+
     cursor.close()
     return results
+
+
+@router.get("/merge/preview")
+def preview_merge(source_id: str, target_id: str, conn=Depends(get_db)):
+    """Preview the impact of merging a source menu item into a target."""
+    res = menu_utils.preview_merge_menu_items(conn, source_id, target_id)
+    if res['status'] == 'error':
+        raise HTTPException(400, res['message'])
+    return res
 
 
 @router.post("/merge")
 def execute_merge(req: MergeRequest, conn=Depends(get_db)):
     """Merge source menu item into target"""
-    res = menu_utils.merge_menu_items(conn, req.source_id, req.target_id)
+    if req.variant_mappings:
+        res = menu_utils.merge_menu_items_with_variant_mappings(
+            conn,
+            req.source_id,
+            req.target_id,
+            [
+                mapping.model_dump() if hasattr(mapping, "model_dump") else mapping.dict()
+                for mapping in req.variant_mappings
+            ],
+        )
+    else:
+        res = menu_utils.merge_menu_items(conn, req.source_id, req.target_id)
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
     return res
@@ -205,13 +300,18 @@ def execute_remap(req: RemapRequest, conn=Depends(get_db)):
 def get_unverified(conn=Depends(get_db)):
     """Get list of unverified menu items"""
     df = menu_queries.fetch_unverified_items(conn)
-    return df_to_json(df)
+    items = df_to_json(df)
+    for item in items:
+        suggested_variant = suggest_variant_for_resolution(item.get("name"), item.get("type"))
+        item["suggested_variant_id"] = suggested_variant["variant_id"] if suggested_variant else None
+        item["suggested_variant_name"] = suggested_variant["variant_name"] if suggested_variant else None
+    return items
 
 
 @router.post("/resolutions/verify")
 def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_db)):
     """Verify a menu item, optionally renaming it"""
-    res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type)
+    res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type, req.new_variant_id)
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
     return res
