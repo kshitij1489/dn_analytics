@@ -10,6 +10,9 @@ import json
 from scripts.seed_from_backups import export_to_backups
 from utils.id_generator import generate_deterministic_id
 
+NULL_VARIANT_SENTINEL = "__NULL_VARIANT__"
+NULL_VARIANT_LABEL = "UNASSIGNED"
+
 
 def _build_in_clause(items: List[str]) -> Tuple[str, List[str]]:
     """Helper to build IN (?, ?, ...) clause for SQLite."""
@@ -19,22 +22,35 @@ def _build_in_clause(items: List[str]) -> Tuple[str, List[str]]:
     return f"IN ({placeholders})", list(items)
 
 
+def _normalize_variant_key(variant_id: Any) -> str:
+    if variant_id is None:
+        return NULL_VARIANT_SENTINEL
+    return str(variant_id)
+
+
+def _decode_variant_key(variant_key: Any) -> Optional[str]:
+    if variant_key in (None, NULL_VARIANT_SENTINEL, "None"):
+        return None
+    return str(variant_key)
+
+
 def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, Any]]:
     """Aggregate variant usage for a menu item across mappings, order items, and addons."""
     summary: Dict[str, Dict[str, Any]] = {}
 
-    def ensure_variant(variant_id: str, variant_name: str) -> Dict[str, Any]:
-        if variant_id not in summary:
-            summary[variant_id] = {
-                "variant_id": str(variant_id),
-                "variant_name": variant_name or "UNKNOWN",
+    def ensure_variant(variant_id: Any, variant_name: Optional[str]) -> Dict[str, Any]:
+        variant_key = _normalize_variant_key(variant_id)
+        if variant_key not in summary:
+            summary[variant_key] = {
+                "variant_id": variant_key,
+                "variant_name": variant_name or (NULL_VARIANT_LABEL if variant_id is None else "UNKNOWN"),
                 "order_item_rows": 0,
                 "order_item_qty": 0,
                 "addon_rows": 0,
                 "addon_qty": 0,
                 "mapping_rows": 0,
             }
-        return summary[variant_id]
+        return summary[variant_key]
 
     cursor = conn.cursor()
     try:
@@ -46,7 +62,7 @@ def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, 
             GROUP BY oi.variant_id, v.variant_name
         """, (menu_item_id,))
         for row in cursor.fetchall():
-            variant = ensure_variant(str(row[0]), row[1])
+            variant = ensure_variant(row[0], row[1])
             variant["order_item_rows"] = int(row[2] or 0)
             variant["order_item_qty"] = int(row[3] or 0)
 
@@ -58,7 +74,7 @@ def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, 
             GROUP BY oa.variant_id, v.variant_name
         """, (menu_item_id,))
         for row in cursor.fetchall():
-            variant = ensure_variant(str(row[0]), row[1])
+            variant = ensure_variant(row[0], row[1])
             variant["addon_rows"] = int(row[2] or 0)
             variant["addon_qty"] = int(row[3] or 0)
 
@@ -70,7 +86,7 @@ def _fetch_menu_item_variant_summary(conn, menu_item_id: str) -> List[Dict[str, 
             GROUP BY mv.variant_id, v.variant_name
         """, (menu_item_id,))
         for row in cursor.fetchall():
-            variant = ensure_variant(str(row[0]), row[1])
+            variant = ensure_variant(row[0], row[1])
             variant["mapping_rows"] = int(row[2] or 0)
     finally:
         cursor.close()
@@ -159,6 +175,29 @@ def _reassign_menu_item_variant(cursor, menu_item_id: str, variant_id: str) -> N
     """, (variant_id, menu_item_id))
 
 
+def _update_rows_for_variant_mapping(
+    cursor,
+    table_name: str,
+    set_menu_item_id: str,
+    set_variant_id: str,
+    source_menu_item_id: str,
+    source_variant_key: str,
+) -> None:
+    decoded_variant_id = _decode_variant_key(source_variant_key)
+    if decoded_variant_id is None:
+        cursor.execute(f"""
+            UPDATE {table_name}
+            SET menu_item_id = ?, variant_id = ?
+            WHERE menu_item_id = ? AND variant_id IS NULL
+        """, (set_menu_item_id, set_variant_id, source_menu_item_id))
+    else:
+        cursor.execute(f"""
+            UPDATE {table_name}
+            SET menu_item_id = ?, variant_id = ?
+            WHERE menu_item_id = ? AND variant_id = ?
+        """, (set_menu_item_id, set_variant_id, source_menu_item_id, decoded_variant_id))
+
+
 def preview_merge_menu_items(conn, source_id: str, target_id: str) -> Dict[str, Any]:
     """Preview the impact of merging one menu item into another."""
     if source_id == target_id:
@@ -222,9 +261,6 @@ def merge_menu_items_with_variant_mappings(
     if source_id == target_id:
         return {"status": "error", "message": "Cannot merge item into itself"}
 
-    if not variant_mappings:
-        return {"status": "error", "message": "Variant mappings are required"}
-
     preview = preview_merge_menu_items(conn, source_id, target_id)
     if preview["status"] != "success":
         return preview
@@ -232,6 +268,9 @@ def merge_menu_items_with_variant_mappings(
     source_variants = preview["source_variants"]
     if not source_variants:
         return merge_menu_items(conn, source_id, target_id)
+
+    if not variant_mappings:
+        return {"status": "error", "message": "Variant mappings are required"}
 
     source_variant_ids = {variant["variant_id"] for variant in source_variants}
     requested_source_ids = {mapping["source_variant_id"] for mapping in variant_mappings}
@@ -296,7 +335,7 @@ def merge_menu_items_with_variant_mappings(
                 {
                     "order_item_id": row[0],
                     "old_variant_id": row[1],
-                    "new_variant_id": resolved_variant_ids.get(str(row[1]), str(row[1])),
+                    "new_variant_id": resolved_variant_ids.get(_normalize_variant_key(row[1]), row[1]),
                 }
                 for row in mapping_rows
             ],
@@ -304,7 +343,7 @@ def merge_menu_items_with_variant_mappings(
                 {
                     "order_item_id": row[0],
                     "old_variant_id": row[1],
-                    "new_variant_id": resolved_variant_ids.get(str(row[1]), str(row[1])),
+                    "new_variant_id": resolved_variant_ids.get(_normalize_variant_key(row[1]), row[1]),
                 }
                 for row in order_item_rows
             ],
@@ -312,7 +351,7 @@ def merge_menu_items_with_variant_mappings(
                 {
                     "order_item_addon_id": row[0],
                     "old_variant_id": row[1],
-                    "new_variant_id": resolved_variant_ids.get(str(row[1]), str(row[1])),
+                    "new_variant_id": resolved_variant_ids.get(_normalize_variant_key(row[1]), row[1]),
                 }
                 for row in addon_rows
             ],
@@ -322,23 +361,9 @@ def merge_menu_items_with_variant_mappings(
         _update_merge_target_stats(cursor, target_id, source_metrics)
 
         for source_variant_id, resolved_variant_id in resolved_variant_ids.items():
-            cursor.execute("""
-                UPDATE order_items
-                SET menu_item_id = ?, variant_id = ?
-                WHERE menu_item_id = ? AND variant_id = ?
-            """, (target_id, resolved_variant_id, source_id, source_variant_id))
-
-            cursor.execute("""
-                UPDATE order_item_addons
-                SET menu_item_id = ?, variant_id = ?
-                WHERE menu_item_id = ? AND variant_id = ?
-            """, (target_id, resolved_variant_id, source_id, source_variant_id))
-
-            cursor.execute("""
-                UPDATE menu_item_variants
-                SET menu_item_id = ?, variant_id = ?
-                WHERE menu_item_id = ? AND variant_id = ?
-            """, (target_id, resolved_variant_id, source_id, source_variant_id))
+            _update_rows_for_variant_mapping(cursor, "order_items", target_id, resolved_variant_id, source_id, source_variant_id)
+            _update_rows_for_variant_mapping(cursor, "order_item_addons", target_id, resolved_variant_id, source_id, source_variant_id)
+            _update_rows_for_variant_mapping(cursor, "menu_item_variants", target_id, resolved_variant_id, source_id, source_variant_id)
 
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
 
@@ -659,6 +684,15 @@ def verify_item(
             if not variant_exists:
                 return {"status": "error", "message": "Selected variant was not found"}
 
+            source_variants = _fetch_menu_item_variant_summary(conn, item_id)
+            if len(source_variants) > 1:
+                return {
+                    "status": "error",
+                    "message": "This item has multiple source variants. Use Search & Merge to map each variant explicitly.",
+                }
+        else:
+            source_variants = []
+
         if new_name and new_type:
             # Check if this new name+type triggers a collision
             new_id = generate_deterministic_id(new_name, new_type)
@@ -670,9 +704,18 @@ def verify_item(
             exists = cursor.fetchone()
             
             if exists and exists[0] != item_id:
-                # Merge current item into the existing target
                 if new_variant_id:
-                    _reassign_menu_item_variant(cursor, item_id, new_variant_id)
+                    if not source_variants:
+                        return merge_menu_items(conn, item_id, new_id)
+                    return merge_menu_items_with_variant_mappings(
+                        conn,
+                        item_id,
+                        new_id,
+                        [{
+                            "source_variant_id": source_variants[0]["variant_id"],
+                            "target_variant_id": new_variant_id,
+                        }],
+                    )
                 return merge_menu_items(conn, item_id, new_id)
             else:
                  # Just rename and verify

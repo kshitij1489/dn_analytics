@@ -1498,6 +1498,9 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
                                     The selected variant will be applied to this item&apos;s current rows when you save the resolution.
                                 </div>
+                                <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
+                                    If this item contains multiple source variants, use Search &amp; Merge instead so each variant can be mapped explicitly.
+                                </div>
                                 <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(16, 185, 129, 0.08)', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                     If the new name and type exactly match an existing verified item, saving here will merge into that item automatically and keep the selected variant assignment.
                                 </div>

@@ -38,9 +38,14 @@ def _extract_variant_assignment_pairs(payload: Any) -> List[Tuple[str, str]]:
         for row in payload.get(section, []):
             source_variant_id = row.get("old_variant_id")
             target_variant_id = row.get("new_variant_id")
-            if not source_variant_id or not target_variant_id:
+            if not target_variant_id:
                 continue
-            pair = (str(source_variant_id), str(target_variant_id))
+            normalized_source_variant_id = (
+                menu_utils.NULL_VARIANT_SENTINEL
+                if source_variant_id is None
+                else str(source_variant_id)
+            )
+            pair = (normalized_source_variant_id, str(target_variant_id))
             if pair in seen:
                 continue
             seen.add(pair)
@@ -194,7 +199,8 @@ def get_merge_history(conn=Depends(get_db)):
         payload = _parse_merge_history_payload(result.get("affected_order_items"))
         parsed_payloads.append(payload)
         for source_variant_id, target_variant_id in _extract_variant_assignment_pairs(payload):
-            variant_ids.add(source_variant_id)
+            if source_variant_id != menu_utils.NULL_VARIANT_SENTINEL:
+                variant_ids.add(source_variant_id)
             variant_ids.add(target_variant_id)
 
     variant_name_map: Dict[str, str] = {}
@@ -210,7 +216,11 @@ def get_merge_history(conn=Depends(get_db)):
         result["variant_assignments"] = [
             {
                 "source_variant_id": source_variant_id,
-                "source_variant_name": variant_name_map.get(source_variant_id, source_variant_id),
+                "source_variant_name": (
+                    menu_utils.NULL_VARIANT_LABEL
+                    if source_variant_id == menu_utils.NULL_VARIANT_SENTINEL
+                    else variant_name_map.get(source_variant_id, source_variant_id)
+                ),
                 "target_variant_id": target_variant_id,
                 "target_variant_name": variant_name_map.get(target_variant_id, target_variant_id),
             }
@@ -233,7 +243,7 @@ def preview_merge(source_id: str, target_id: str, conn=Depends(get_db)):
 @router.post("/merge")
 def execute_merge(req: MergeRequest, conn=Depends(get_db)):
     """Merge source menu item into target"""
-    if req.variant_mappings:
+    if req.variant_mappings is not None:
         res = menu_utils.merge_menu_items_with_variant_mappings(
             conn,
             req.source_id,
