@@ -639,6 +639,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [pageSize, setPageSize] = useState(50);
     const [sortKey, setSortKey] = useState('name');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+    const [search, setSearch] = useState('');
 
     useEffect(() => {
         void loadMatrix();
@@ -722,10 +723,14 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
     const selectedItem = items.find(item => item.menu_item_id === selectedMenuItemId);
     const selectedCurrentVariant = currentVariantOptions.find(variant => variant.variant_id === currentVariantId);
+    const normalizedSearch = search.trim().toLowerCase();
+    const filteredMatrixData = matrixData.filter(row =>
+        row.name.toLowerCase().includes(normalizedSearch)
+    );
 
     // --- Client Side Sorting & Pagination Logic ---
     const getProcessedData = () => {
-        let sorted = [...matrixData];
+        const sorted = [...filteredMatrixData];
         if (sortKey) {
             sorted.sort((a, b) => {
                 let aVal = a[sortKey as keyof MatrixRow] as string | number | boolean;
@@ -758,7 +763,16 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const displayData = getProcessedData();
-    const total = matrixData.length;
+    const total = filteredMatrixData.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+    const rangeEnd = total === 0 ? 0 : Math.min(page * pageSize, total);
+
+    useEffect(() => {
+        if (page > totalPages) {
+            setPage(totalPages);
+        }
+    }, [page, totalPages]);
 
     return (
         <div>
@@ -849,9 +863,17 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
             {/* Menu Matrix Table Container */}
             <div style={{ marginTop: '20px' }}>
-                <h3 style={{ marginTop: 0, marginBottom: '15px', color: 'var(--accent-color)' }}>Menu Matrix ({matrixData.length} entries)</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '15px', flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Menu Matrix ({matrixData.length} entries)</h3>
+                    <input
+                        placeholder="Search Name..."
+                        value={search}
+                        onChange={e => { setSearch(e.target.value); setPage(1); }}
+                        style={{ padding: '8px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                    />
+                </div>
 
-                <ResizableTableWrapper onExportCSV={() => exportToCSV(matrixData, 'menu_matrix')}>
+                <ResizableTableWrapper onExportCSV={() => exportToCSV(filteredMatrixData, 'menu_matrix')}>
                     <table className="standard-table">
                         <thead>
                             <tr>
@@ -909,13 +931,13 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                             <option value={200}>200 per page</option>
                         </select>
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                            Showing {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} of {total}
+                            Showing {rangeStart} - {rangeEnd} of {total}
                         </span>
                     </div>
                     <div>
                         <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} style={{ marginRight: '5px', padding: '5px 10px', cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>&lt; Prev</button>
-                        <span>Page {page} of {Math.ceil(total / pageSize)}</span>
-                        <button disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(p => p + 1)} style={{ marginLeft: '5px', padding: '5px 10px', cursor: page >= Math.ceil(total / pageSize) ? 'not-allowed' : 'pointer' }}>Next &gt;</button>
+                        <span>Page {page} of {totalPages}</span>
+                        <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ marginLeft: '5px', padding: '5px 10px', cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next &gt;</button>
                     </div>
                 </div>
             </div>
@@ -932,9 +954,9 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [mergeHistory, setMergeHistory] = useState<MergeHistoryEntry[]>([]);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const [loading, setLoading] = useState(true);
-    const [activeItemId, setActiveItemId] = useState<string | null>(null);
     const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
     const [modalItem, setModalItem] = useState<ResolutionItem | null>(null);
+    const [modalEntryPoint, setModalEntryPoint] = useState<'search' | 'rename'>('search');
     const [targetSearch, setTargetSearch] = useState('');
     const [selectedTargetId, setSelectedTargetId] = useState('');
     const [mergePreview, setMergePreview] = useState<MergePreview | null>(null);
@@ -946,6 +968,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [renameSubmitting, setRenameSubmitting] = useState(false);
     const [selectedTargetVariants, setSelectedTargetVariants] = useState<Record<string, string>>({});
     const [newVariantNames, setNewVariantNames] = useState<Record<string, string>>({});
+    const renameSectionRef = useRef<HTMLDivElement>(null);
 
     const loadItems = async () => {
         const res = await endpoints.menu.unverified();
@@ -1078,8 +1101,23 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         }
     }, [mergePreview, modalItem, renameVariantId, variantOptions]);
 
-    const openResolutionModal = (item: ResolutionItem, initialTargetId?: string) => {
+    useEffect(() => {
+        if (!modalItem || modalEntryPoint !== 'rename') return;
+
+        const timeoutId = window.setTimeout(() => {
+            renameSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [modalEntryPoint, modalItem]);
+
+    const openResolutionModal = (
+        item: ResolutionItem,
+        initialTargetId?: string,
+        entryPoint: 'search' | 'rename' = 'search'
+    ) => {
         setModalItem(item);
+        setModalEntryPoint(entryPoint);
         setTargetSearch(initialTargetId && item.suggestion_name ? item.suggestion_name : '');
         setSelectedTargetId(initialTargetId || '');
         setMergePreview(null);
@@ -1090,6 +1128,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 
     const closeResolutionModal = () => {
         setModalItem(null);
+        setModalEntryPoint('search');
         setTargetSearch('');
         setSelectedTargetId('');
         setMergePreview(null);
@@ -1102,20 +1141,8 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         setNewVariantNames({});
     };
 
-    const handleVerifyAsNew = async (item: ResolutionItem) => {
-        if (!window.confirm(`Verify "${item.name}" as a separate new menu item?`)) return;
-
-        setActiveItemId(item.menu_item_id);
-        try {
-            await endpoints.menu.verify({ menu_item_id: item.menu_item_id });
-            removeResolvedItem(item.menu_item_id);
-            setPopup({ type: 'success', message: `"${item.name}" verified as a new menu item.` });
-            await refreshAll();
-        } catch (error) {
-            setPopup({ type: 'error', message: getApiErrorMessage(error) });
-        } finally {
-            setActiveItemId(null);
-        }
+    const handleVerifyAsNew = (item: ResolutionItem) => {
+        openResolutionModal(item, undefined, 'rename');
     };
 
     const handleMerge = async () => {
@@ -1295,7 +1322,6 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 {item.suggestion_id && item.suggestion_name && (
                                     <button
                                         onClick={() => openResolutionModal(item, item.suggestion_id || undefined)}
-                                        disabled={activeItemId === item.menu_item_id}
                                         style={{ padding: '12px', background: '#2563EB', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
                                     >
                                         {getMergeSuggestionLabel(item)}
@@ -1303,17 +1329,15 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 )}
                                 <button
                                     onClick={() => handleVerifyAsNew(item)}
-                                    disabled={activeItemId === item.menu_item_id}
                                     style={{ padding: '12px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
                                 >
-                                    {activeItemId === item.menu_item_id ? 'Saving...' : 'Verify as New Item'}
+                                    Verify as New Item
                                 </button>
                                 <p style={{ margin: 0, fontSize: '0.85em', color: 'var(--text-secondary)' }}>
                                     Keeps this as a separate menu item.
                                 </p>
                                 <button
                                     onClick={() => openResolutionModal(item)}
-                                    disabled={activeItemId === item.menu_item_id}
                                     style={{ padding: '12px', background: 'var(--card-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
                                 >
                                     Rename / Search
@@ -1394,7 +1418,9 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                             <div>
                                 <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Resolve {modalItem.name}</h3>
                                 <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)' }}>
-                                    Choose an existing verified target to merge into, or rename this item before verifying it.
+                                    {modalEntryPoint === 'rename'
+                                        ? 'Review the Rename / Verify fields first, then save this as a separate verified menu item.'
+                                        : 'Choose an existing verified target to merge into, or rename this item before verifying it.'}
                                 </p>
                             </div>
                             <button
@@ -1577,7 +1603,15 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 </button>
                             </div>
 
-                            <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                            <div
+                                ref={renameSectionRef}
+                                style={{
+                                    border: modalEntryPoint === 'rename' ? '2px solid #10B981' : '1px solid var(--border-color)',
+                                    borderRadius: '12px',
+                                    padding: '16px',
+                                    boxShadow: modalEntryPoint === 'rename' ? '0 0 0 4px rgba(16, 185, 129, 0.12)' : 'none',
+                                }}
+                            >
                                 <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Rename / Verify</h4>
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                     Use this when the current suggestion is wrong, but the item should stay as its own verified menu item under a cleaner name or type.
