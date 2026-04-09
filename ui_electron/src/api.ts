@@ -103,6 +103,8 @@ export const endpoints = {
 
         remapCheck: (oid: string) => api.get(`/menu/remap/check/${oid}`),
         remap: (data: { order_item_id: string, new_menu_item_id: string, new_variant_id: string }) => api.post('/menu/remap', data),
+        updateVariantMapping: (data: { menu_item_id: string, current_variant_id: string, new_variant_id: string }) =>
+            api.post('/menu/variant-mapping/update', data),
 
         unverified: () => api.get('/menu/resolutions/unverified'),
         verify: (data: { menu_item_id: string, new_name?: string, new_type?: string, new_variant_id?: string }) => api.post('/menu/resolutions/verify', data),

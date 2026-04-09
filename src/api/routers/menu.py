@@ -10,7 +10,13 @@ import json
 from src.core.queries import menu_queries, table_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
-from src.api.models import MergeRequest, UndoMergeRequest, RemapRequest, VerifyRequest
+from src.api.models import (
+    MergeRequest,
+    UndoMergeRequest,
+    RemapRequest,
+    UpdateVariantMappingRequest,
+    VerifyRequest,
+)
 from utils.clean_order_item import suggest_variant_for_resolution
 from utils import menu_utils
 
@@ -299,6 +305,20 @@ def check_remap_target(order_item_id: str, conn=Depends(get_db)):
 def execute_remap(req: RemapRequest, conn=Depends(get_db)):
     """Remap an order item to a different menu item/variant"""
     res = menu_utils.remap_order_item_cluster(conn, req.order_item_id, req.new_menu_item_id, req.new_variant_id)
+    if res['status'] == 'error':
+        raise HTTPException(400, res['message'])
+    return res
+
+
+@router.post("/variant-mapping/update")
+def update_variant_mapping(req: UpdateVariantMappingRequest, conn=Depends(get_db)):
+    """Update an existing menu item + variant mapping to a different variant everywhere it is used."""
+    res = menu_utils.update_menu_variant_mapping(
+        conn,
+        req.menu_item_id,
+        req.current_variant_id,
+        req.new_variant_id,
+    )
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
     return res

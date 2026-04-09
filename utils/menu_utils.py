@@ -158,7 +158,7 @@ def _reassign_menu_item_variant(cursor, menu_item_id: str, variant_id: str) -> N
     """Apply a single variant assignment across all rows currently linked to a menu item."""
     cursor.execute("""
         UPDATE order_items
-        SET variant_id = ?
+        SET variant_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE menu_item_id = ?
     """, (variant_id, menu_item_id))
 
@@ -170,9 +170,24 @@ def _reassign_menu_item_variant(cursor, menu_item_id: str, variant_id: str) -> N
 
     cursor.execute("""
         UPDATE menu_item_variants
-        SET variant_id = ?
+        SET variant_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE menu_item_id = ?
     """, (variant_id, menu_item_id))
+
+
+def _clear_volume_forecast_cache(cursor) -> Dict[str, int]:
+    """Clear cached volume forecasts because variant/unit assignments changed."""
+    cleared = {"volume_forecast_cache": 0, "volume_backtest_cache": 0}
+    for table_name in cleared:
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table_name,),
+        )
+        if cursor.fetchone():
+            cursor.execute(f"DELETE FROM {table_name}")
+            cleared[table_name] = cursor.rowcount
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table_name,))
+    return cleared
 
 
 def _update_rows_for_variant_mapping(
@@ -498,6 +513,157 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
         return {"status": "error", "message": str(e)}
     finally:
         cursor.close()
+
+
+def update_menu_variant_mapping(
+    conn,
+    menu_item_id: str,
+    current_variant_id: str,
+    new_variant_id: str,
+) -> Dict[str, Any]:
+    """Move an existing menu-item/variant mapping to a different variant everywhere it is used."""
+    menu_item_id = str(menu_item_id).strip()
+    current_variant_id = str(current_variant_id).strip()
+    new_variant_id = str(new_variant_id).strip()
+
+    if not menu_item_id or not current_variant_id or not new_variant_id:
+        return {"status": "error", "message": "Menu item, current variant, and new variant are required"}
+
+    if current_variant_id == new_variant_id:
+        return {"status": "error", "message": "Current and new variant cannot be the same"}
+
+    cursor = conn.cursor()
+    model_cleanup_error = None
+    try:
+        cursor.execute(
+            "SELECT name FROM menu_items WHERE menu_item_id = ?",
+            (menu_item_id,),
+        )
+        menu_item_row = cursor.fetchone()
+        if not menu_item_row:
+            return {"status": "error", "message": "Selected menu item was not found"}
+        menu_item_name = menu_item_row[0]
+
+        cursor.execute(
+            "SELECT variant_name FROM variants WHERE variant_id = ?",
+            (current_variant_id,),
+        )
+        current_variant_row = cursor.fetchone()
+        if not current_variant_row:
+            return {"status": "error", "message": "Current variant was not found"}
+        current_variant_name = current_variant_row[0]
+
+        cursor.execute(
+            "SELECT variant_name FROM variants WHERE variant_id = ?",
+            (new_variant_id,),
+        )
+        new_variant_row = cursor.fetchone()
+        if not new_variant_row:
+            return {"status": "error", "message": "New variant was not found"}
+        new_variant_name = new_variant_row[0]
+
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM menu_item_variants
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (menu_item_id, current_variant_id),
+        )
+        mapping_rows = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM order_items
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (menu_item_id, current_variant_id),
+        )
+        order_item_rows = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM order_item_addons
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (menu_item_id, current_variant_id),
+        )
+        addon_rows = int(cursor.fetchone()[0] or 0)
+
+        if mapping_rows == 0 and order_item_rows == 0 and addon_rows == 0:
+            return {
+                "status": "error",
+                "message": "No existing rows were found for the selected menu item and current variant",
+            }
+
+        cursor.execute(
+            """
+            UPDATE menu_item_variants
+            SET variant_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (new_variant_id, menu_item_id, current_variant_id),
+        )
+        updated_mapping_rows = cursor.rowcount
+
+        cursor.execute(
+            """
+            UPDATE order_items
+            SET variant_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (new_variant_id, menu_item_id, current_variant_id),
+        )
+        updated_order_item_rows = cursor.rowcount
+
+        cursor.execute(
+            """
+            UPDATE order_item_addons
+            SET variant_id = ?
+            WHERE menu_item_id = ? AND variant_id = ?
+            """,
+            (new_variant_id, menu_item_id, current_variant_id),
+        )
+        updated_addon_rows = cursor.rowcount
+
+        cleared_caches = _clear_volume_forecast_cache(cursor)
+
+        conn.commit()
+        export_to_backups(conn)
+
+        try:
+            from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models
+
+            delete_models()
+        except Exception as e:
+            model_cleanup_error = str(e)
+
+        message = (
+            f"Updated '{menu_item_name}' from variant '{current_variant_name}' "
+            f"to '{new_variant_name}' across mappings and historical rows"
+        )
+        if model_cleanup_error:
+            message = f"{message}. Volume models could not be cleared automatically: {model_cleanup_error}"
+
+        return {
+            "status": "success",
+            "message": message,
+            "stats": {
+                "menu_item_variants_updated": updated_mapping_rows,
+                "order_items_updated": updated_order_item_rows,
+                "order_item_addons_updated": updated_addon_rows,
+                "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
+                "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
+            },
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+
 
 def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> Dict[str, Any]:
     """

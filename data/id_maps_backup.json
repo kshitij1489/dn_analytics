@@ -108,8 +108,6 @@
     "26515b03-bc83-5bb5-89d0-47d9e1563f2e": "Deconstructed Coffee Tres Leches",
     "b83b89ed-172a-59ca-8b76-5f8b2905baeb": "Old Fashion Vanilla (60gm)",
     "17fcf174-95f4-5390-b1fe-969195a9eb65": "Custom Cake 800gm",
-    "fef2c1f1-8e3f-5efb-97b2-a2acd37b0488": "Orange With Orange Jam Ice Cream",
-    "f55f2f72-75af-5543-95a3-def67e806b76": "Orange And Orange Jam (60gm)",
     "e9b15c3a-2a1c-55d9-87ef-352cd4ea8c2a": "Veg Sample(sg)",
     "3c9959f5-e989-50bb-80be-037e28cf7a8b": "Cherry Chocolate Sample",
     "4c54c588-6b18-5eb4-b903-ad2cec55c7bf": "Strawberry Sample",
@@ -118,7 +116,9 @@
     "8c35b1f1-91d0-57af-89fb-c96c30bdb38e": "Chocolate Overload Sample",
     "db98e456-569d-55d5-be17-f24c73499d6a": "Request",
     "40ad4449-a346-58aa-b244-0e948b030f27": "Orange With Orange Jam",
-    "ea9d0277-75f6-50a9-a267-a9c574d67c77": "Banoffee (60gm)"
+    "ea9d0277-75f6-50a9-a267-a9c574d67c77": "Banoffee (60gm)",
+    "27a712d1-6c32-5f79-b0bb-80722458a5a8": "Cherry & Chocolate (60gm)",
+    "133c4ce6-68b7-564a-b8b4-4b1c34aec328": "Cakes & Cookies"
   },
   "variant_id_to_str": {
     "c6438ece-1c0e-5db1-860f-27f45090a616": "PERFECT_PLENTY_300ML",

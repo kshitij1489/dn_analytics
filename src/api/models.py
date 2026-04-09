@@ -54,6 +54,13 @@ class RemapRequest(BaseModel):
     new_variant_id: str
 
 
+class UpdateVariantMappingRequest(BaseModel):
+    """Request to update an existing menu item + variant mapping to a new variant."""
+    menu_item_id: str
+    current_variant_id: str
+    new_variant_id: str
+
+
 class VerifyRequest(BaseModel):
     """Request to verify a menu item, optionally renaming it"""
     menu_item_id: str

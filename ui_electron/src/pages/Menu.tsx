@@ -105,6 +105,18 @@ interface MergePreviewVariant {
     total_rows: number;
 }
 
+interface MatrixRow {
+    name: string;
+    type: string;
+    variant_name: string;
+    price: number;
+    is_active: boolean;
+    addon_eligible: boolean;
+    delivery_eligible: boolean;
+    menu_item_id: string;
+    variant_id: string;
+}
+
 const getApiErrorMessage = (error: unknown): string => {
     const err = error as { response?: { data?: { detail?: string } }; message?: string };
     return err.response?.data?.detail || err.message || 'Something went wrong';
@@ -613,14 +625,14 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Matrix Tab ---
 
 function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
-    const [oid, setOid] = useState('');
-    const [checkResult, setCheckResult] = useState<any>(null);
-    const [items, setItems] = useState<any[]>([]);
-    const [variants, setVariants] = useState<any[]>([]);
-    const [targetItem, setTargetItem] = useState('');
-    const [targetVariant, setTargetVariant] = useState('');
-    const [matrixData, setMatrixData] = useState<any[]>([]);
+    const [items, setItems] = useState<MenuLookupItem[]>([]);
+    const [variants, setVariants] = useState<VariantOption[]>([]);
+    const [matrixData, setMatrixData] = useState<MatrixRow[]>([]);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
+    const [selectedMenuItemId, setSelectedMenuItemId] = useState('');
+    const [currentVariantId, setCurrentVariantId] = useState('');
+    const [newVariantId, setNewVariantId] = useState('');
+    const [updating, setUpdating] = useState(false);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -629,43 +641,95 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
     useEffect(() => {
-        loadMatrix();
-        loadLists();
+        void loadMatrix();
+        void loadLists();
     }, [lastDbSync]);
 
     const loadLists = async () => {
-        const i = await endpoints.menu.list();
-        const v = await endpoints.menu.variantsList();
-        setItems(i.data);
-        setVariants(v.data);
+        try {
+            const [itemsRes, variantsRes] = await Promise.all([
+                endpoints.menu.list(),
+                endpoints.menu.variantsList(),
+            ]);
+            setItems(itemsRes.data);
+            setVariants(variantsRes.data);
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        }
     };
 
     const loadMatrix = async () => {
-        const res = await endpoints.menu.matrix();
-        setMatrixData(res.data);
-    };
-
-    const checkOid = async () => {
-        if (!oid) return;
-        const res = await endpoints.menu.remapCheck(oid);
-        setCheckResult(res.data);
-    };
-
-    const handleRemap = async () => {
         try {
-            await endpoints.menu.remap({ order_item_id: oid, new_menu_item_id: targetItem, new_variant_id: targetVariant });
-            setPopup({ type: 'success', message: "Remapped successfully!" });
-            setOid(''); setCheckResult(null); loadMatrix();
-        } catch (e: any) { setPopup({ type: 'error', message: e.response?.data?.detail || e.message }); }
+            const res = await endpoints.menu.matrix();
+            setMatrixData(res.data);
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        }
     };
+
+    const handlePrefill = (row: MatrixRow) => {
+        setSelectedMenuItemId(row.menu_item_id);
+        setCurrentVariantId(row.variant_id);
+        setNewVariantId('');
+    };
+
+    const handleUpdateVariantMapping = async () => {
+        if (!selectedMenuItemId || !currentVariantId || !newVariantId) {
+            setPopup({ type: 'error', message: 'Select a menu item, current variant, and new variant before saving.' });
+            return;
+        }
+        if (currentVariantId === newVariantId) {
+            setPopup({ type: 'error', message: 'Current and new variant cannot be the same.' });
+            return;
+        }
+
+        try {
+            setUpdating(true);
+            const res = await endpoints.menu.updateVariantMapping({
+                menu_item_id: selectedMenuItemId,
+                current_variant_id: currentVariantId,
+                new_variant_id: newVariantId,
+            });
+            setPopup({ type: 'success', message: res.data.message || 'Variant mapping updated successfully.' });
+            setCurrentVariantId('');
+            setNewVariantId('');
+            await loadMatrix();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const currentVariantOptions = selectedMenuItemId
+        ? Object.values(
+            matrixData.reduce((acc, row) => {
+                if (row.menu_item_id !== selectedMenuItemId) return acc;
+                const existing = acc[row.variant_id];
+                if (existing) {
+                    existing.count += 1;
+                    return acc;
+                }
+                acc[row.variant_id] = {
+                    variant_id: row.variant_id,
+                    variant_name: row.variant_name,
+                    count: 1,
+                };
+                return acc;
+            }, {} as Record<string, { variant_id: string; variant_name: string; count: number }>)
+        ).sort((a, b) => a.variant_name.localeCompare(b.variant_name))
+        : [];
+
+    const selectedItem = items.find(item => item.menu_item_id === selectedMenuItemId);
+    const selectedCurrentVariant = currentVariantOptions.find(variant => variant.variant_id === currentVariantId);
 
     // --- Client Side Sorting & Pagination Logic ---
     const getProcessedData = () => {
         let sorted = [...matrixData];
         if (sortKey) {
             sorted.sort((a, b) => {
-                let aVal = a[sortKey];
-                let bVal = b[sortKey];
+                let aVal = a[sortKey as keyof MatrixRow] as string | number | boolean;
+                let bVal = b[sortKey as keyof MatrixRow] as string | number | boolean;
                 if (typeof aVal === 'string') aVal = aVal.toLowerCase();
                 if (typeof bVal === 'string') bVal = bVal.toLowerCase();
 
@@ -699,29 +763,88 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
-            {/* Remap Order Item Card - Keep this as Card or change to flat? Keeping as Card for now as it's a form */}
-            <Card title="🔄 Remap Order Item">
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <input value={oid} onChange={e => setOid(e.target.value)} placeholder="Order Item ID" style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }} />
-                    <button onClick={checkOid}>Check</button>
+            <Card title="Update Menu Variant Mapping">
+                <p style={{ marginTop: 0, marginBottom: '15px', color: 'var(--text-secondary)' }}>
+                    Updates cluster mappings, historical order rows, addon rows, local backup files, and clears volume forecast cache because variant units can change downstream calculations.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Menu Item</span>
+                        <select
+                            value={selectedMenuItemId}
+                            onChange={e => {
+                                setSelectedMenuItemId(e.target.value);
+                                setCurrentVariantId('');
+                                setNewVariantId('');
+                            }}
+                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                        >
+                            <option value="">Select menu item</option>
+                            {items.map(item => (
+                                <option key={item.menu_item_id} value={item.menu_item_id}>
+                                    {item.name} ({item.type})
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Current Variant</span>
+                        <select
+                            value={currentVariantId}
+                            onChange={e => setCurrentVariantId(e.target.value)}
+                            disabled={!selectedMenuItemId}
+                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                        >
+                            <option value="">Select current variant</option>
+                            {currentVariantOptions.map(variant => (
+                                <option key={variant.variant_id} value={variant.variant_id}>
+                                    {variant.variant_name} ({variant.count} cluster mappings)
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>New Variant</span>
+                        <select
+                            value={newVariantId}
+                            onChange={e => setNewVariantId(e.target.value)}
+                            disabled={!currentVariantId}
+                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                        >
+                            <option value="">Select new variant</option>
+                            {variants
+                                .filter(variant => variant.variant_id !== currentVariantId)
+                                .map(variant => (
+                                    <option key={variant.variant_id} value={variant.variant_id}>
+                                        {variant.name}
+                                    </option>
+                                ))}
+                        </select>
+                    </label>
                 </div>
-                {checkResult && checkResult.found && (
-                    <div style={{ marginTop: '10px', background: 'var(--input-bg)', padding: '10px' }}>
-                        <p>Currently: <b>{checkResult.current_item}</b> ({checkResult.current_variant})</p>
-                        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                            <select value={targetItem} onChange={e => setTargetItem(e.target.value)} style={{ padding: '5px' }}>
-                                <option>Select Item</option>
-                                {items.map(i => <option key={i.menu_item_id} value={i.menu_item_id}>{i.name}</option>)}
-                            </select>
-                            <select value={targetVariant} onChange={e => setTargetVariant(e.target.value)} style={{ padding: '5px' }}>
-                                <option>Select Variant</option>
-                                {variants.map(v => <option key={v.variant_id} value={v.variant_id}>{v.name}</option>)}
-                            </select>
-                            <button onClick={handleRemap} style={{ background: 'var(--accent-color)', color: 'white', border: 'none', padding: '5px 10px' }}>Remap</button>
-                        </div>
+                {selectedItem && selectedCurrentVariant && (
+                    <div style={{ marginTop: '15px', padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
+                        Updating <b style={{ color: 'var(--text-color)' }}>{selectedItem.name}</b> from{' '}
+                        <b style={{ color: 'var(--text-color)' }}>{selectedCurrentVariant.variant_name}</b> across{' '}
+                        <b style={{ color: 'var(--text-color)' }}>{selectedCurrentVariant.count}</b> cluster mappings that currently match this pair.
                     </div>
                 )}
-                {checkResult && !checkResult.found && <p style={{ color: 'orange' }}>Order ID not found in cluster map.</p>}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
+                    <button
+                        onClick={handleUpdateVariantMapping}
+                        disabled={updating || !selectedMenuItemId || !currentVariantId || !newVariantId}
+                        style={{
+                            background: 'var(--accent-color)',
+                            color: 'white',
+                            border: 'none',
+                            padding: '8px 14px',
+                            cursor: updating ? 'not-allowed' : 'pointer',
+                            opacity: updating ? 0.7 : 1,
+                        }}
+                    >
+                        {updating ? 'Updating...' : 'Update Mapping'}
+                    </button>
+                </div>
             </Card>
 
             {/* Menu Matrix Table Container */}
@@ -732,6 +855,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     <table className="standard-table">
                         <thead>
                             <tr>
+                                <th>Action</th>
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
@@ -744,6 +868,21 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                         <tbody>
                             {displayData.map((r, i) => (
                                 <tr key={i}>
+                                    <td>
+                                        <button
+                                            onClick={() => handlePrefill(r)}
+                                            style={{
+                                                background: 'transparent',
+                                                color: 'var(--accent-color)',
+                                                border: '1px solid var(--accent-color)',
+                                                padding: '4px 8px',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer',
+                                            }}
+                                        >
+                                            Use
+                                        </button>
+                                    </td>
                                     <td>{r.name}</td>
                                     <td>{r.type}</td>
                                     <td>{r.variant_name}</td>
