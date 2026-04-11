@@ -1,5 +1,48 @@
+import json
+import math
+import re
+from difflib import SequenceMatcher
+from typing import List, Optional
+
 import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
 from src.core.utils.business_date import BUSINESS_DATE_SQL
+
+
+def _active_customer_filter(alias: str = "c") -> str:
+    return f"""
+        NOT EXISTS (
+            SELECT 1
+            FROM customer_merge_history cmh
+            WHERE cmh.source_customer_id = {alias}.customer_id
+              AND cmh.undone_at IS NULL
+        )
+    """
+
+
+def _normalize_phone(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    digits = re.sub(r"\D", "", value)
+    return digits[-10:] if len(digits) > 10 else digits
+
+
+def _normalize_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return " ".join(value.lower().strip().split())
+
+
+def _json_loads_maybe(raw_value, fallback):
+    if not raw_value:
+        return fallback
+    if isinstance(raw_value, (dict, list)):
+        return raw_value
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return fallback
 
 def fetch_customer_reorder_rate(conn):
     """Fetch trailing 3-month repeat customer KPI aligned with monthly retention."""
@@ -426,12 +469,15 @@ def search_customers(conn, query_str: str, limit: int = 20):
             last_order_date
         FROM customers
         WHERE 
-            name LIKE ? 
-            OR CAST(phone AS TEXT) LIKE ?
-            OR CAST(customer_id AS TEXT) LIKE ?
+            {active_filter}
+            AND (
+                name LIKE ? 
+                OR CAST(phone AS TEXT) LIKE ?
+                OR CAST(customer_id AS TEXT) LIKE ?
+            )
         ORDER BY last_order_date DESC
         LIMIT ?
-    """
+    """.format(active_filter=_active_customer_filter("customers"))
     search_term = f"%{query_str}%"
     cursor = conn.execute(sql, (search_term, search_term, search_term, limit))
     results = [dict(row) for row in cursor.fetchall()]
@@ -452,6 +498,764 @@ def format_customer_address(address: dict) -> str:
         address.get("country"),
     ]
     return ", ".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+
+
+def _active_merge_target(conn, customer_id: str) -> str:
+    """Resolve a customer through any active merge chain."""
+    current_customer_id = str(customer_id)
+    visited = set()
+
+    while current_customer_id not in visited:
+        visited.add(current_customer_id)
+        row = conn.execute(
+            """
+            SELECT target_customer_id
+            FROM customer_merge_history
+            WHERE source_customer_id = ?
+              AND undone_at IS NULL
+            ORDER BY merge_id DESC
+            LIMIT 1
+            """,
+            (current_customer_id,),
+        ).fetchone()
+        if not row:
+            break
+        current_customer_id = str(row[0])
+
+    return current_customer_id
+
+
+def _fetch_customer_summary(conn, customer_id: str):
+    cursor = conn.execute(
+        """
+        WITH primary_address AS (
+            SELECT
+                ca.customer_id,
+                ca.address_line_1,
+                ca.address_line_2,
+                ca.city,
+                ca.state,
+                ca.postal_code,
+                ca.country,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ca.customer_id
+                    ORDER BY ca.is_default DESC, ca.address_id ASC
+                ) as rn
+            FROM customer_addresses ca
+        )
+        SELECT
+            c.customer_id,
+            c.name,
+            c.phone,
+            c.address as legacy_address,
+            c.total_orders,
+            c.total_spent,
+            c.last_order_date,
+            c.is_verified,
+            (
+                SELECT COUNT(*)
+                FROM customer_addresses ca
+                WHERE ca.customer_id = c.customer_id
+            ) as address_count,
+            CASE WHEN EXISTS (
+                SELECT 1
+                FROM customer_merge_history cmh
+                WHERE cmh.source_customer_id = c.customer_id
+                  AND cmh.undone_at IS NULL
+            ) THEN 1 ELSE 0 END as is_merged_source,
+            pa.address_line_1,
+            pa.address_line_2,
+            pa.city,
+            pa.state,
+            pa.postal_code,
+            pa.country
+        FROM customers c
+        LEFT JOIN primary_address pa
+            ON pa.customer_id = c.customer_id
+           AND pa.rn = 1
+        WHERE c.customer_id = ?
+        """,
+        (customer_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    summary = dict(row)
+    address_summary = format_customer_address(summary) or summary.get("legacy_address") or None
+    return {
+        "customer_id": str(summary["customer_id"]),
+        "name": summary.get("name") or f"Customer {summary['customer_id']}",
+        "phone": summary.get("phone"),
+        "address": address_summary,
+        "total_orders": int(summary.get("total_orders") or 0),
+        "total_spent": float(summary.get("total_spent") or 0.0),
+        "last_order_date": summary.get("last_order_date"),
+        "is_verified": bool(summary.get("is_verified")),
+        "address_count": int(summary.get("address_count") or 0),
+        "is_merged_source": bool(summary.get("is_merged_source")),
+        "name_norm": _normalize_text(summary.get("name")),
+        "phone_norm": _normalize_phone(summary.get("phone")),
+        "address_norm": _normalize_text(address_summary),
+        "feature_text": " | ".join(
+            part for part in [
+                _normalize_text(summary.get("name")),
+                _normalize_phone(summary.get("phone")),
+                _normalize_text(address_summary),
+            ]
+            if part
+        ) or f"customer_{summary['customer_id']}",
+    }
+
+
+def _fetch_active_similarity_population(conn):
+    cursor = conn.execute(
+        f"""
+        WITH primary_address AS (
+            SELECT
+                ca.customer_id,
+                ca.address_line_1,
+                ca.address_line_2,
+                ca.city,
+                ca.state,
+                ca.postal_code,
+                ca.country,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ca.customer_id
+                    ORDER BY ca.is_default DESC, ca.address_id ASC
+                ) as rn
+            FROM customer_addresses ca
+        )
+        SELECT
+            c.customer_id,
+            c.name,
+            c.phone,
+            c.address as legacy_address,
+            c.total_orders,
+            c.total_spent,
+            c.last_order_date,
+            c.is_verified,
+            pa.address_line_1,
+            pa.address_line_2,
+            pa.city,
+            pa.state,
+            pa.postal_code,
+            pa.country
+        FROM customers c
+        LEFT JOIN primary_address pa
+            ON pa.customer_id = c.customer_id
+           AND pa.rn = 1
+        WHERE {_active_customer_filter("c")}
+        """
+    )
+    rows = []
+    for row in cursor.fetchall():
+        record = dict(row)
+        address_summary = format_customer_address(record) or record.get("legacy_address") or None
+        rows.append({
+            "customer_id": str(record["customer_id"]),
+            "name": record.get("name") or f"Customer {record['customer_id']}",
+            "phone": record.get("phone"),
+            "address": address_summary,
+            "total_orders": int(record.get("total_orders") or 0),
+            "total_spent": float(record.get("total_spent") or 0.0),
+            "last_order_date": record.get("last_order_date"),
+            "is_verified": bool(record.get("is_verified")),
+            "name_norm": _normalize_text(record.get("name")),
+            "phone_norm": _normalize_phone(record.get("phone")),
+            "address_norm": _normalize_text(address_summary),
+            "feature_text": " | ".join(
+                part for part in [
+                    _normalize_text(record.get("name")),
+                    _normalize_phone(record.get("phone")),
+                    _normalize_text(address_summary),
+                ]
+                if part
+            ) or f"customer_{record['customer_id']}",
+        })
+    return rows
+
+
+def _similarity_ratio(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _numeric_closeness(left_value, right_value) -> float:
+    left_float = float(left_value or 0.0)
+    right_float = float(right_value or 0.0)
+    denominator = max(abs(left_float), abs(right_float), 1.0)
+    return max(0.0, 1.0 - abs(left_float - right_float) / denominator)
+
+
+def _customer_rank(record: dict):
+    try:
+        customer_id_rank = -int(record["customer_id"])
+    except (TypeError, ValueError):
+        customer_id_rank = 0
+    return (
+        1 if record.get("is_verified") else 0,
+        int(record.get("total_orders") or 0),
+        float(record.get("total_spent") or 0.0),
+        1 if record.get("phone_norm") else 0,
+        customer_id_rank,
+    )
+
+
+def _build_similarity_candidate(left_record: dict, right_record: dict, text_similarity: float, model_name: str):
+    name_similarity = _similarity_ratio(left_record["name_norm"], right_record["name_norm"])
+    address_similarity = _similarity_ratio(left_record["address_norm"], right_record["address_norm"])
+    phone_exact = bool(left_record["phone_norm"] and left_record["phone_norm"] == right_record["phone_norm"])
+    orders_similarity = _numeric_closeness(left_record["total_orders"], right_record["total_orders"])
+    spend_similarity = _numeric_closeness(left_record["total_spent"], right_record["total_spent"])
+    behavior_similarity = (orders_similarity + spend_similarity) / 2.0
+
+    score = (
+        text_similarity * 0.45
+        + name_similarity * 0.25
+        + address_similarity * 0.15
+        + behavior_similarity * 0.15
+        + (0.20 if phone_exact else 0.0)
+    )
+    if phone_exact:
+        score = max(score, 0.88)
+    score = min(score, 0.99)
+
+    reasons = []
+    if phone_exact:
+        reasons.append("Exact phone match")
+    if name_similarity >= 0.85:
+        reasons.append("Very similar customer names")
+    if address_similarity >= 0.80:
+        reasons.append("Very similar saved addresses")
+    if behavior_similarity >= 0.75:
+        reasons.append("Similar order count / spend profile")
+    if text_similarity >= 0.80:
+        reasons.append("Strong text similarity across name, phone, and address")
+    if not reasons:
+        reasons.append("High overall similarity score")
+
+    source_record, target_record = (left_record, right_record)
+    if _customer_rank(left_record) > _customer_rank(right_record):
+        source_record, target_record = right_record, left_record
+    elif _customer_rank(left_record) == _customer_rank(right_record):
+        try:
+            if int(left_record["customer_id"]) < int(right_record["customer_id"]):
+                source_record, target_record = right_record, left_record
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "source_customer": {
+            key: source_record[key]
+            for key in ("customer_id", "name", "phone", "address", "total_orders", "total_spent", "last_order_date", "is_verified")
+        },
+        "target_customer": {
+            key: target_record[key]
+            for key in ("customer_id", "name", "phone", "address", "total_orders", "total_spent", "last_order_date", "is_verified")
+        },
+        "score": round(score, 4),
+        "model_name": model_name,
+        "reasons": reasons,
+        "metrics": {
+            "text_similarity": round(text_similarity, 4),
+            "name_similarity": round(name_similarity, 4),
+            "address_similarity": round(address_similarity, 4),
+            "behavior_similarity": round(behavior_similarity, 4),
+            "phone_exact_match": 1.0 if phone_exact else 0.0,
+        },
+    }
+
+
+def fetch_customer_similarity_candidates(conn, limit: int = 20, min_score: float = 0.72):
+    model_name = "basic_duplicate_knn_v1"
+    population = _fetch_active_similarity_population(conn)
+    if len(population) < 2:
+        return []
+
+    documents = [record["feature_text"] for record in population]
+    vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), min_df=1)
+    tfidf_matrix = vectorizer.fit_transform(documents)
+
+    neighbor_count = min(6, len(population))
+    neighbor_model = NearestNeighbors(metric="cosine", algorithm="brute", n_neighbors=neighbor_count)
+    neighbor_model.fit(tfidf_matrix)
+    distances, indices = neighbor_model.kneighbors(tfidf_matrix)
+
+    best_pairs = {}
+
+    def register_pair(left_record, right_record, text_similarity):
+        candidate = _build_similarity_candidate(left_record, right_record, text_similarity, model_name)
+        metrics = candidate["metrics"]
+        should_keep = (
+            candidate["score"] >= min_score
+            or metrics["phone_exact_match"] == 1.0
+            or (metrics["name_similarity"] >= 0.80 and metrics["address_similarity"] >= 0.70)
+        )
+        if not should_keep:
+            return
+
+        pair_key = tuple(sorted([left_record["customer_id"], right_record["customer_id"]]))
+        previous = best_pairs.get(pair_key)
+        if previous is None or candidate["score"] > previous["score"]:
+            best_pairs[pair_key] = candidate
+
+    for row_index, neighbor_indexes in enumerate(indices):
+        for distance, neighbor_index in zip(distances[row_index], neighbor_indexes):
+            if neighbor_index == row_index:
+                continue
+            register_pair(
+                population[row_index],
+                population[neighbor_index],
+                max(0.0, 1.0 - float(distance)),
+            )
+
+    phone_groups = {}
+    for record in population:
+        if record["phone_norm"]:
+            phone_groups.setdefault(record["phone_norm"], []).append(record)
+
+    for group in phone_groups.values():
+        if len(group) < 2:
+            continue
+        for left_index in range(len(group)):
+            for right_index in range(left_index + 1, len(group)):
+                left_record = group[left_index]
+                right_record = group[right_index]
+                register_pair(
+                    left_record,
+                    right_record,
+                    _similarity_ratio(left_record["feature_text"], right_record["feature_text"]),
+                )
+
+    suggestions = sorted(
+        best_pairs.values(),
+        key=lambda item: (item["score"], item["target_customer"]["total_orders"], item["target_customer"]["total_spent"]),
+        reverse=True,
+    )
+    return suggestions[:limit]
+
+
+def fetch_customer_merge_preview(
+    conn,
+    source_customer_id: str,
+    target_customer_id: str,
+    similarity_score: Optional[float] = None,
+    model_name: Optional[str] = None,
+    reasons: Optional[List[str]] = None,
+):
+    source_summary = _fetch_customer_summary(conn, source_customer_id)
+    target_summary = _fetch_customer_summary(conn, target_customer_id)
+    if not source_summary or not target_summary:
+        return {"status": "error", "message": "One or both customers were not found."}
+    if source_summary["customer_id"] == target_summary["customer_id"]:
+        return {"status": "error", "message": "Source and target customers must be different."}
+    if source_summary["is_merged_source"]:
+        return {"status": "error", "message": "The selected source customer has already been merged."}
+    if target_summary["is_merged_source"]:
+        return {"status": "error", "message": "The selected target customer is not active."}
+
+    moved_orders = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE customer_id = ?",
+        (source_summary["customer_id"],),
+    ).fetchone()[0]
+
+    if not reasons:
+        candidate = _build_similarity_candidate(
+            source_summary,
+            target_summary,
+            _similarity_ratio(source_summary["feature_text"], target_summary["feature_text"]),
+            model_name or "basic_duplicate_knn_v1",
+        )
+        reasons = candidate["reasons"]
+        similarity_score = similarity_score if similarity_score is not None else candidate["score"]
+        model_name = model_name or candidate["model_name"]
+
+    return {
+        "source_customer": {
+            key: source_summary[key]
+            for key in ("customer_id", "name", "phone", "address", "total_orders", "total_spent", "last_order_date", "is_verified")
+        },
+        "target_customer": {
+            key: target_summary[key]
+            for key in ("customer_id", "name", "phone", "address", "total_orders", "total_spent", "last_order_date", "is_verified")
+        },
+        "orders_to_move": int(moved_orders),
+        "source_address_count": int(source_summary["address_count"]),
+        "target_address_count": int(target_summary["address_count"]),
+        "reasons": reasons or [],
+        "score": similarity_score,
+        "model_name": model_name or "basic_duplicate_knn_v1",
+    }
+
+
+def _copy_customer_addresses_to_target(conn, source_customer_id: str, target_customer_id: str):
+    source_rows = conn.execute(
+        """
+        SELECT label, address_line_1, address_line_2, city, state, postal_code, country, is_default
+        FROM customer_addresses
+        WHERE customer_id = ?
+        ORDER BY is_default DESC, address_id ASC
+        """,
+        (source_customer_id,),
+    ).fetchall()
+    if not source_rows:
+        return {"copied_count": 0, "inserted_address_ids": []}
+
+    target_has_default = conn.execute(
+        """
+        SELECT 1
+        FROM customer_addresses
+        WHERE customer_id = ?
+          AND is_default = 1
+        LIMIT 1
+        """,
+        (target_customer_id,),
+    ).fetchone() is not None
+
+    copied_count = 0
+    inserted_address_ids = []
+    for row in source_rows:
+        row_dict = dict(row)
+        default_flag = 0 if target_has_default else (1 if row_dict.get("is_default") else 0)
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO customer_addresses (
+                customer_id,
+                label,
+                address_line_1,
+                address_line_2,
+                city,
+                state,
+                postal_code,
+                country,
+                is_default
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_customer_id,
+                row_dict.get("label"),
+                row_dict.get("address_line_1"),
+                row_dict.get("address_line_2"),
+                row_dict.get("city"),
+                row_dict.get("state"),
+                row_dict.get("postal_code"),
+                row_dict.get("country"),
+                default_flag,
+            ),
+        )
+        if cursor.rowcount:
+            copied_count += 1
+            inserted_address_ids.append(int(cursor.lastrowid))
+            if default_flag:
+                target_has_default = True
+
+    return {
+        "copied_count": copied_count,
+        "inserted_address_ids": inserted_address_ids,
+    }
+
+
+def _fetch_customer_mergeable_fields(conn, customer_id: str):
+    row = conn.execute(
+        """
+        SELECT phone, address, gstin
+        FROM customers
+        WHERE customer_id = ?
+        """,
+        (customer_id,),
+    ).fetchone()
+    return dict(row) if row else {"phone": None, "address": None, "gstin": None}
+
+
+def _recompute_customer_aggregates(conn, customer_id: str) -> None:
+    aggregate_row = conn.execute(
+        """
+        SELECT
+            COUNT(*) as total_orders,
+            COALESCE(SUM(total), 0) as total_spent,
+            MIN(created_on) as first_order_date,
+            MAX(created_on) as last_order_date
+        FROM orders
+        WHERE customer_id = ?
+        """,
+        (customer_id,),
+    ).fetchone()
+
+    conn.execute(
+        """
+        UPDATE customers
+        SET total_orders = ?,
+            total_spent = ?,
+            first_order_date = ?,
+            last_order_date = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE customer_id = ?
+        """,
+        (
+            int(aggregate_row["total_orders"] or 0),
+            float(aggregate_row["total_spent"] or 0.0),
+            aggregate_row["first_order_date"],
+            aggregate_row["last_order_date"],
+            customer_id,
+        ),
+    )
+
+
+def merge_customers(
+    conn,
+    source_customer_id: str,
+    target_customer_id: str,
+    similarity_score: Optional[float] = None,
+    model_name: Optional[str] = None,
+    reasons: Optional[List[str]] = None,
+):
+    preview = fetch_customer_merge_preview(
+        conn,
+        source_customer_id,
+        target_customer_id,
+        similarity_score=similarity_score,
+        model_name=model_name,
+        reasons=reasons,
+    )
+    if preview.get("status") == "error":
+        return preview
+
+    source_customer_id = preview["source_customer"]["customer_id"]
+    target_customer_id = preview["target_customer"]["customer_id"]
+
+    try:
+        order_rows = conn.execute(
+            "SELECT order_id FROM orders WHERE customer_id = ? ORDER BY order_id ASC",
+            (source_customer_id,),
+        ).fetchall()
+        moved_order_ids = [int(row[0]) for row in order_rows]
+        address_copy_result = _copy_customer_addresses_to_target(conn, source_customer_id, target_customer_id)
+        target_before_fields = _fetch_customer_mergeable_fields(conn, target_customer_id)
+
+        conn.execute(
+            """
+            UPDATE customers
+            SET phone = COALESCE(phone, (SELECT phone FROM customers WHERE customer_id = ?)),
+                address = COALESCE(address, (SELECT address FROM customers WHERE customer_id = ?)),
+                gstin = COALESCE(gstin, (SELECT gstin FROM customers WHERE customer_id = ?)),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE customer_id = ?
+            """,
+            (source_customer_id, source_customer_id, source_customer_id, target_customer_id),
+        )
+
+        conn.execute(
+            """
+            UPDATE orders
+            SET customer_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE customer_id = ?
+            """,
+            (target_customer_id, source_customer_id),
+        )
+
+        merge_cursor = conn.execute(
+            """
+            INSERT INTO customer_merge_history (
+                source_customer_id,
+                target_customer_id,
+                similarity_score,
+                model_name,
+                suggestion_context,
+                source_snapshot,
+                target_snapshot,
+                moved_order_ids,
+                copied_address_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING merge_id
+            """,
+            (
+                source_customer_id,
+                target_customer_id,
+                similarity_score if similarity_score is not None else preview.get("score"),
+                model_name or preview.get("model_name"),
+                json.dumps({
+                    "reasons": reasons or preview.get("reasons", []),
+                    "target_before_fields": target_before_fields,
+                    "inserted_target_address_ids": address_copy_result["inserted_address_ids"],
+                }),
+                json.dumps(preview["source_customer"]),
+                json.dumps(preview["target_customer"]),
+                json.dumps(moved_order_ids),
+                address_copy_result["copied_count"],
+            ),
+        )
+        merge_id = merge_cursor.fetchone()[0]
+
+        _recompute_customer_aggregates(conn, source_customer_id)
+        _recompute_customer_aggregates(conn, target_customer_id)
+        conn.commit()
+
+        return {
+            "status": "success",
+            "message": f"Merged customer {source_customer_id} into {target_customer_id}.",
+            "merge_id": int(merge_id),
+            "source_customer_id": str(source_customer_id),
+            "target_customer_id": str(target_customer_id),
+            "orders_moved": len(moved_order_ids),
+        }
+    except Exception as exc:
+        conn.rollback()
+        return {"status": "error", "message": str(exc)}
+
+
+def fetch_customer_merge_history(conn, limit: int = 20):
+    cursor = conn.execute(
+        """
+        SELECT
+            h.merge_id,
+            h.source_customer_id,
+            h.target_customer_id,
+            h.similarity_score,
+            h.model_name,
+            h.moved_order_ids,
+            h.copied_address_count,
+            h.merged_at,
+            h.undone_at,
+            h.source_snapshot,
+            h.target_snapshot,
+            source.name as current_source_name,
+            target.name as current_target_name
+        FROM customer_merge_history h
+        LEFT JOIN customers source ON source.customer_id = h.source_customer_id
+        LEFT JOIN customers target ON target.customer_id = h.target_customer_id
+        ORDER BY h.merged_at DESC, h.merge_id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+
+    history = []
+    for row in cursor.fetchall():
+        entry = dict(row)
+        source_snapshot = _json_loads_maybe(entry.get("source_snapshot"), {})
+        target_snapshot = _json_loads_maybe(entry.get("target_snapshot"), {})
+        moved_order_ids = _json_loads_maybe(entry.get("moved_order_ids"), [])
+        history.append({
+            "merge_id": int(entry["merge_id"]),
+            "source_customer_id": str(entry["source_customer_id"]),
+            "source_name": source_snapshot.get("name") or entry.get("current_source_name"),
+            "target_customer_id": str(entry["target_customer_id"]),
+            "target_name": target_snapshot.get("name") or entry.get("current_target_name"),
+            "similarity_score": entry.get("similarity_score"),
+            "model_name": entry.get("model_name"),
+            "orders_moved": len(moved_order_ids),
+            "copied_address_count": int(entry.get("copied_address_count") or 0),
+            "merged_at": entry["merged_at"],
+            "undone_at": entry.get("undone_at"),
+        })
+    return history
+
+
+def undo_customer_merge(conn, merge_id: int):
+    row = conn.execute(
+        """
+        SELECT *
+        FROM customer_merge_history
+        WHERE merge_id = ?
+        """,
+        (merge_id,),
+    ).fetchone()
+    if not row:
+        return {"status": "error", "message": "Merge history entry not found."}
+    if row["undone_at"] is not None:
+        return {"status": "error", "message": "This merge has already been undone."}
+
+    moved_order_ids = _json_loads_maybe(row["moved_order_ids"], [])
+    if not isinstance(moved_order_ids, list):
+        moved_order_ids = []
+    suggestion_context = _json_loads_maybe(row["suggestion_context"], {})
+    inserted_target_address_ids = suggestion_context.get("inserted_target_address_ids", [])
+    if not isinstance(inserted_target_address_ids, list):
+        inserted_target_address_ids = []
+    target_before_fields = suggestion_context.get("target_before_fields", {})
+    if not isinstance(target_before_fields, dict):
+        target_before_fields = {}
+
+    try:
+        if moved_order_ids:
+            placeholders = ",".join("?" for _ in moved_order_ids)
+            conn.execute(
+                f"""
+                UPDATE orders
+                SET customer_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE customer_id = ?
+                  AND order_id IN ({placeholders})
+                """,
+                [row["source_customer_id"], row["target_customer_id"], *moved_order_ids],
+            )
+
+        if inserted_target_address_ids:
+            placeholders = ",".join("?" for _ in inserted_target_address_ids)
+            conn.execute(
+                f"""
+                DELETE FROM customer_addresses
+                WHERE customer_id = ?
+                  AND address_id IN ({placeholders})
+                """,
+                [row["target_customer_id"], *inserted_target_address_ids],
+            )
+
+        if target_before_fields:
+            conn.execute(
+                """
+                UPDATE customers
+                SET phone = ?,
+                    address = ?,
+                    gstin = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE customer_id = ?
+                """,
+                (
+                    target_before_fields.get("phone"),
+                    target_before_fields.get("address"),
+                    target_before_fields.get("gstin"),
+                    row["target_customer_id"],
+                ),
+            )
+
+        conn.execute(
+            """
+            UPDATE customer_merge_history
+            SET undone_at = CURRENT_TIMESTAMP,
+                undo_context = ?
+            WHERE merge_id = ?
+            """,
+            (
+                json.dumps({
+                    "restored_order_count": len(moved_order_ids),
+                    "removed_target_address_ids": inserted_target_address_ids,
+                    "restored_target_fields": sorted(target_before_fields.keys()),
+                }),
+                merge_id,
+            ),
+        )
+
+        _recompute_customer_aggregates(conn, str(row["source_customer_id"]))
+        _recompute_customer_aggregates(conn, str(row["target_customer_id"]))
+        conn.commit()
+
+        return {
+            "status": "success",
+            "message": f"Undo complete for merge {merge_id}.",
+            "merge_id": int(merge_id),
+            "source_customer_id": str(row["source_customer_id"]),
+            "target_customer_id": str(row["target_customer_id"]),
+            "orders_moved": len(moved_order_ids),
+        }
+    except Exception as exc:
+        conn.rollback()
+        return {"status": "error", "message": str(exc)}
 
 
 def fetch_customer_profile_data(conn, customer_id: str):

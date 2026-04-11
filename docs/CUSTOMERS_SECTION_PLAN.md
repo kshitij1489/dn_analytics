@@ -15,7 +15,7 @@ Add a new `Customers` button in the left navigation above `Orders` as a placehol
 - `Phase 1`: Completed
 - `Phase 2`: Completed
 - `Phase 3`: Completed
-- `Phase 4`: Not started
+- `Phase 4`: Completed
 - `Phase 5`: Completed
 - `Phase 6`: Completed
 
@@ -28,8 +28,8 @@ Customer functionality is now primarily available from the `Customers` page:
 - `Overview`: customer table
 - `Profiles`: customer profile search and detail view
 - `Analytics`: customer retention and top-customer analytics
-- `Similar Users`: placeholder
-- `Merge History`: placeholder
+- `Similar Users`: basic ML suggestion queue plus manual pair review
+- `Merge History`: merge audit trail with undo
 
 Customer functionality is no longer duplicated inside `Orders` or `Insights`.
 
@@ -41,10 +41,10 @@ There is already useful backend support in place:
 - Customer search endpoint: `GET /api/orders/customers/search`
 - Customer profile endpoint: `GET /api/orders/customers/{customer_id}/profile`
 - Customer data query logic: `src/core/queries/customer_queries.py`
-
-The database already has a `customers.address` column, but the current customer profile response does not expose address data yet.
-
-There is no dedicated user-merge or undo-merge workflow yet. The future customer section should become the place where this identity-resolution workflow lives.
+- Customer similarity suggestions endpoint: `GET /api/orders/customers/similar`
+- Customer merge preview endpoint: `GET /api/orders/customers/merge/preview`
+- Customer merge history endpoint: `GET /api/orders/customers/merge/history`
+- Customer merge / undo endpoints: `POST /api/orders/customers/merge`, `POST /api/orders/customers/merge/undo`
 
 ## Recommendation
 
@@ -152,7 +152,7 @@ Delivered:
 
 ## Phase 4: Similar User Suggestions and Merge Workflow
 
-Status: Not started
+Status: Completed
 
 This section should eventually support identity resolution for customers who are likely duplicates or who should belong to an already verified customer profile.
 
@@ -169,11 +169,6 @@ Planned UI capabilities:
 - Show a side-by-side comparison before merge
 - Allow merge action from the UI
 - Allow undo merge if the merge was done by mistake
-
-Current note:
-
-- Basic UI placeholders for `Similar Users` and `Merge History` now exist in the `Customers` page
-- No similarity model, merge action, or undo-merge functionality has been implemented yet
 
 Planned backend behavior:
 
@@ -202,6 +197,16 @@ Model note:
 - The exact ML or matching approach is intentionally open for now
 - In the plan, keep this as a placeholder for a future model
 - Possible future approaches could include rule-based matching, clustering, embedding similarity, or supervised duplicate-detection, but no final choice is required yet
+
+Delivered:
+
+- Replaced the `Similar Users` placeholder with a basic duplicate-suggestion queue
+- Added a basic ML similarity model using text vectorization plus nearest-neighbor scoring
+- Added side-by-side merge preview in the `Customers` page
+- Added operator-driven manual pair selection for merge review beyond the suggestion queue
+- Implemented customer merge and undo-merge backend workflows
+- Added customer merge audit history with undo from the UI
+- Kept merged source customers hidden from active customer search/overview while allowing undo to restore them
 
 ## Phase 5: Navigation and Deep Linking
 
@@ -243,9 +248,9 @@ Delivered:
 2. Completed: Move profile search and customer overview into `Customers`
 3. Completed: Move customer analytics into `Customers`
 4. Completed: Add backward-compatible address support plus structured address-book storage
-5. Partially done: UI placeholders for `Similar Users` and `Merge History` exist, but no backend logic exists yet
-6. Pending: Design and implement customer merge plus undo-merge backend workflow
-7. Pending: Connect a future similarity model or rule engine to drive suggestions
+5. Completed: Replace `Similar Users` placeholder content with a real review queue
+6. Completed: Design and implement customer merge plus undo-merge backend workflow
+7. Completed (basic): Connect a first-pass ML similarity model to drive suggestions
 
 ## Initial Files Likely To Change
 
@@ -263,8 +268,7 @@ Delivered:
 
 ## Immediate Next Step
 
-Implement Phase 4:
+Refine Phase 4:
 
-- Replace `Similar Users` placeholder content with a real review queue
-- Design merge and undo-merge data model, API, and audit history
-- Decide whether similarity suggestions should start rule-based or model-based
+- Improve suggestion precision and false-positive handling for anonymous customers
+- Decide whether to evolve the basic model into rule-tuned scoring, clustering, or a stronger supervised duplicate detector

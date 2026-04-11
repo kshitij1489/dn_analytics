@@ -131,6 +131,18 @@ export const endpoints = {
     customers: {
         search: (q: string) => api.get('/orders/customers/search', { params: { q } }),
         profile: (customerId: string) => api.get(`/orders/customers/${customerId}/profile`),
+        similar: (params?: { limit?: number; min_score?: number }) => api.get('/orders/customers/similar', { params }),
+        mergePreview: (params: { source_customer_id: string; target_customer_id: string }) =>
+            api.get('/orders/customers/merge/preview', { params }),
+        mergeHistory: (params?: { limit?: number }) => api.get('/orders/customers/merge/history', { params }),
+        merge: (data: {
+            source_customer_id: string;
+            target_customer_id: string;
+            similarity_score?: number;
+            model_name?: string;
+            reasons?: string[];
+        }) => api.post('/orders/customers/merge', data),
+        undoMerge: (data: { merge_id: number }) => api.post('/orders/customers/merge/undo', data),
     },
 
 

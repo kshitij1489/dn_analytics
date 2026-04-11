@@ -179,3 +179,76 @@ class CustomerProfileResponse(BaseModel):
     customer: CustomerProfileCustomer
     orders: list[CustomerProfileOrder]
     addresses: list[CustomerAddressResponse] = []
+
+
+class CustomerSimilarityCandidatePerson(BaseModel):
+    """Compact customer summary for similarity review and merge preview."""
+    customer_id: str
+    name: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    total_orders: int = 0
+    total_spent: float = 0.0
+    last_order_date: Optional[str] = None
+    is_verified: bool = False
+
+
+class CustomerSimilarityCandidate(BaseModel):
+    """One suggested duplicate/related customer pair."""
+    source_customer: CustomerSimilarityCandidatePerson
+    target_customer: CustomerSimilarityCandidatePerson
+    score: float
+    model_name: str
+    reasons: List[str] = []
+    metrics: Dict[str, float] = {}
+
+
+class CustomerMergePreviewResponse(BaseModel):
+    """Preview payload for a customer merge."""
+    source_customer: CustomerSimilarityCandidatePerson
+    target_customer: CustomerSimilarityCandidatePerson
+    orders_to_move: int
+    source_address_count: int
+    target_address_count: int
+    reasons: List[str] = []
+    score: Optional[float] = None
+    model_name: Optional[str] = None
+
+
+class CustomerMergeRequest(BaseModel):
+    """Request to merge a source customer into a target customer."""
+    source_customer_id: str
+    target_customer_id: str
+    similarity_score: Optional[float] = None
+    model_name: Optional[str] = None
+    reasons: Optional[List[str]] = None
+
+
+class CustomerMergeHistoryEntry(BaseModel):
+    """One customer merge history row."""
+    merge_id: int
+    source_customer_id: str
+    source_name: Optional[str] = None
+    target_customer_id: str
+    target_name: Optional[str] = None
+    similarity_score: Optional[float] = None
+    model_name: Optional[str] = None
+    orders_moved: int = 0
+    copied_address_count: int = 0
+    merged_at: str
+    undone_at: Optional[str] = None
+
+
+class CustomerMergeResult(BaseModel):
+    """Response returned after merge or undo."""
+    status: str
+    message: str
+    merge_id: Optional[int] = None
+    source_customer_id: Optional[str] = None
+    target_customer_id: Optional[str] = None
+    orders_moved: Optional[int] = None
+
+
+class CustomerUndoMergeRequest(BaseModel):
+    """Request to undo a previous customer merge."""
+    merge_id: int

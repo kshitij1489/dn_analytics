@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS customer_addresses (
 );
 
 -- ============================================================================
+-- 2B. CUSTOMER MERGE HISTORY
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS customer_merge_history (
+    merge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+    target_customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+    similarity_score DECIMAL(6,4),
+    model_name TEXT,
+    suggestion_context TEXT,
+    source_snapshot TEXT,
+    target_snapshot TEXT,
+    moved_order_ids TEXT,
+    copied_address_count INTEGER DEFAULT 0,
+    merged_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    undone_at TEXT,
+    undo_context TEXT,
+    CHECK (source_customer_id <> target_customer_id)
+);
+
+-- ============================================================================
 -- 3. MENU ITEMS
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS menu_items (
@@ -425,6 +445,13 @@ ON customer_addresses(
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_addresses_one_default
 ON customer_addresses(customer_id)
 WHERE is_default = 1;
+
+CREATE INDEX IF NOT EXISTS idx_customer_merge_history_source ON customer_merge_history(source_customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_merge_history_target ON customer_merge_history(target_customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_merge_history_merged_at ON customer_merge_history(merged_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_merge_history_active_source
+ON customer_merge_history(source_customer_id)
+WHERE undone_at IS NULL;
 
 -- Backfill structured addresses from the legacy customers.address field.
 INSERT OR IGNORE INTO customer_addresses (

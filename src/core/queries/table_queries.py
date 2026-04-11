@@ -159,7 +159,18 @@ TABLE_QUERY_CONFIG = {
     },
     "customers": {
         "select_sql": "SELECT t.*",
-        "from_sql": "FROM customers t",
+        "from_sql": """
+            FROM (
+                SELECT c.*
+                FROM customers c
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM customer_merge_history cmh
+                    WHERE cmh.source_customer_id = c.customer_id
+                      AND cmh.undone_at IS NULL
+                )
+            ) t
+        """,
         "default_sort": "last_order_date",
         "default_direction": "DESC",
         "sort_columns": {

@@ -45,9 +45,9 @@ def create_schema_if_needed(conn):
         SELECT COUNT(*) as table_count
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN ('orders', 'customer_addresses')
+          AND name IN ('orders', 'customer_addresses', 'customer_merge_history')
     """)
-    if cursor.fetchone()[0] == 2:
+    if cursor.fetchone()[0] == 3:
         return
         
     print("  Initialize database schema...")
@@ -174,6 +174,28 @@ def upsert_customer_address(conn, customer_id: int, address: Optional[str], labe
         VALUES (?, ?, ?, ?)
     """, (customer_id, label, address_line_1, 0 if has_default else 1))
 
+
+def resolve_active_customer_target(conn, customer_id: int) -> int:
+    """Follow active customer merge history so new orders land on the surviving customer."""
+    current_customer_id = int(customer_id)
+    visited = set()
+
+    while current_customer_id not in visited:
+        visited.add(current_customer_id)
+        row = conn.execute("""
+            SELECT target_customer_id
+            FROM customer_merge_history
+            WHERE source_customer_id = ?
+              AND undone_at IS NULL
+            ORDER BY merge_id DESC
+            LIMIT 1
+        """, (current_customer_id,)).fetchone()
+        if not row:
+            break
+        current_customer_id = int(row[0])
+
+    return current_customer_id
+
 def compute_customer_identity_key(customer: dict) -> str:
     """
     Priority:
@@ -247,7 +269,7 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     order_date_str = order_date.strftime('%Y-%m-%d %H:%M:%S') if order_date else None
     
     if result:
-        customer_id = result[0]
+        customer_id = resolve_active_customer_target(conn, result[0])
         
         # Determine update logic
         update_fields = []
@@ -360,7 +382,7 @@ def process_order(conn, order_payload: Dict, item_cluster: OrderItemCluster) -> 
             cursor.execute("SELECT customer_id FROM customers WHERE customer_identity_key = ?", (identity_key,))
             res = cursor.fetchone()
             if res:
-                customer_id = res[0]
+                customer_id = resolve_active_customer_target(conn, res[0])
             else:
                  # Should not happen for existing order, but if so, create without incrementing stats?
                  # Ignoring stat increment logic for overwrite for simplicity, 
