@@ -152,7 +152,7 @@ function ResizableTableWrapper({
 }
 
 // --- Generic Table Component ---
-function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, leftContent }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string, lastDbSync?: number, leftContent?: React.ReactNode }) {
+function GenericTable({ title, apiCall, defaultSort = 'created_at', lastDbSync, leftContent }: { title: string, apiCall: (params: any) => Promise<any>, defaultSort?: string, lastDbSync?: number, leftContent?: React.ReactNode }) {
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -160,6 +160,17 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
+    const [searchInput, setSearchInput] = useState('');
+    const [appliedSearch, setAppliedSearch] = useState('');
+
+    useEffect(() => {
+        const timeoutId = window.setTimeout(() => {
+            setAppliedSearch(searchInput.trim());
+            setPage(1);
+        }, 300);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [searchInput]);
 
     const load = async () => {
         setLoading(true);
@@ -168,7 +179,8 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
                 page,
                 page_size: pageSize,
                 sort_by: sortKey,
-                sort_desc: sortDirection === 'desc'
+                sort_desc: sortDirection === 'desc',
+                search: appliedSearch || undefined,
             });
             setData(res.data.data);
             setTotal(res.data.total);
@@ -179,7 +191,7 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
         }
     };
 
-    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection, lastDbSync]);
+    useEffect(() => { load(); }, [page, pageSize, sortKey, sortDirection, appliedSearch, lastDbSync]);
 
     const handleSort = (key: string) => {
         if (sortKey === key) {
@@ -237,15 +249,46 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
 
     // Filter columns to only those that exist in data to avoid crashes, or show empty cells
     const finalColumns = displayColumns.filter(col => data.length === 0 || data[0].hasOwnProperty(col));
+    const searchPlaceholderByTitle: Record<string, string> = {
+        'Orders': 'Search orders...',
+        'Order Items': 'Search order items...',
+        'Taxes': 'Search taxes...',
+        'Discounts': 'Search discounts...',
+    };
+    const searchPlaceholder = searchPlaceholderByTitle[title];
+    const headerLeftContent = (searchPlaceholder || leftContent) ? (
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {searchPlaceholder && (
+                <input
+                    placeholder={searchPlaceholder}
+                    value={searchInput}
+                    onChange={e => setSearchInput(e.target.value)}
+                    style={{
+                        padding: '8px',
+                        width: '300px',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-color)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '4px'
+                    }}
+                />
+            )}
+            {leftContent}
+        </div>
+    ) : undefined;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const startRow = total > 0 ? (page - 1) * pageSize + 1 : 0;
+    const endRow = total > 0 ? Math.min(page * pageSize, total) : 0;
 
     return (
         <div style={{ marginTop: '0' }}>
-
-            {loading ? <div>Loading...</div> : (
-                <ResizableTableWrapper
-                    onExportCSV={() => exportToCSV(data, title.toLowerCase().replace(' ', '_'), finalColumns)}
-                    leftContent={leftContent}
-                >
+            <ResizableTableWrapper
+                onExportCSV={() => exportToCSV(data, title.toLowerCase().replace(' ', '_'), finalColumns)}
+                leftContent={headerLeftContent}
+            >
+                {loading ? (
+                    <div style={{ padding: '16px' }}>Loading...</div>
+                ) : (
                     <table className="standard-table">
                         <thead>
                             <tr>
@@ -270,8 +313,8 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
                             ))}
                         </tbody>
                     </table>
-                </ResizableTableWrapper>
-            )}
+                )}
+            </ResizableTableWrapper>
             <div style={{ marginTop: '10px', display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <select
@@ -286,13 +329,13 @@ function GenericTable({ title, apiCall, defaultSort = 'created.at', lastDbSync, 
                         <option value={200}>200 per page</option>
                     </select>
                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                        Showing {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} of {total}
+                        Showing {startRow} - {endRow} of {total}
                     </span>
                 </div>
                 <div>
                     <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} style={{ marginRight: '5px', padding: '5px 10px', cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>&lt; Prev</button>
-                    <span>Page {page} of {Math.ceil(total / pageSize)}</span>
-                    <button disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(p => p + 1)} style={{ marginLeft: '5px', padding: '5px 10px', cursor: page >= Math.ceil(total / pageSize) ? 'not-allowed' : 'pointer' }}>Next &gt;</button>
+                    <span>Page {page} of {totalPages}</span>
+                    <button disabled={total === 0 || page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ marginLeft: '5px', padding: '5px 10px', cursor: total === 0 || page >= totalPages ? 'not-allowed' : 'pointer' }}>Next &gt;</button>
                 </div>
             </div>
         </div>

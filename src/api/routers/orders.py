@@ -29,6 +29,7 @@ def create_table_endpoint(router: APIRouter, path: str, table_name: str, default
         sort_by: str = default_sort_col, 
         sort_desc: bool = True,
         filters: Optional[str] = None,
+        search: Optional[str] = None,
         conn=Depends(get_db)
     ):
         filter_dict = json.loads(filters) if filters else {}
@@ -39,7 +40,8 @@ def create_table_endpoint(router: APIRouter, path: str, table_name: str, default
             page_size, 
             sort_by, 
             "DESC" if sort_desc else "ASC", 
-            filter_dict
+            filter_dict,
+            search=search,
         )
         if err: 
             raise HTTPException(500, err)
