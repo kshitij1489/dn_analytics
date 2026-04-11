@@ -1,33 +1,35 @@
-import { Card } from '../components';
+import { useEffect, useState } from 'react';
+import { endpoints } from '../api';
+import { Card, CustomerAnalyticsSection, PaginatedDataTable, TabButton } from '../components';
+import { CustomerProfile } from '../components/CustomerProfile';
+import { useNavigation } from '../contexts/NavigationContext';
 
-const plannedSections = [
-    {
-        title: 'Customer Profiles',
-        description: 'Search customers, open a detailed profile, and review verified identity details in one place.'
-    },
-    {
-        title: 'Address Book',
-        description: 'Expose customer address data now and leave room for a richer multi-address model later.'
-    },
-    {
-        title: 'Order History',
-        description: 'Bring customer-linked orders, spend history, and order-level drill-down into the same section.'
-    },
-    {
-        title: 'Customer Analytics',
-        description: 'Move retention, top-customer, and loyalty insights into a dedicated customer analytics surface.'
-    },
-    {
-        title: 'Similar Users',
-        description: 'Placeholder for future ML or rule-based suggestions that identify likely duplicate or related users.'
-    },
-    {
-        title: 'Merge History',
-        description: 'Reserve space for merge review, undo merge, and audit history for customer identity fixes.'
-    }
-];
+type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge';
 
-export default function Customers() {
+export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
+    const [activeSection, setActiveSection] = useState<CustomerSection>('overview');
+    const [linkedCustomerId, setLinkedCustomerId] = useState<string | number | undefined>(undefined);
+    const { pageParams, clearParams } = useNavigation();
+
+    useEffect(() => {
+        if (pageParams?.mode === 'profile' && pageParams?.customerId != null) {
+            setActiveSection('profiles');
+            setLinkedCustomerId(pageParams.customerId);
+            clearParams();
+        } else if (pageParams?.section && ['overview', 'profiles', 'analytics', 'similar', 'merge'].includes(pageParams.section)) {
+            setActiveSection(pageParams.section as CustomerSection);
+            clearParams();
+        }
+    }, [clearParams, pageParams]);
+
+    const renderPlaceholder = (title: string, description: string) => (
+        <Card title={title} style={{ marginBottom: 0 }}>
+            <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {description}
+            </p>
+        </Card>
+    );
+
     return (
         <div
             className="page-container"
@@ -61,75 +63,94 @@ export default function Customers() {
                         marginBottom: '14px'
                     }}
                 >
-                    Phase 1 Placeholder
+                    Phase 2 Active
                 </div>
                 <h1 style={{ marginBottom: '10px' }}>Customers</h1>
                 <p
                     style={{
                         margin: 0,
-                        maxWidth: '820px',
+                        maxWidth: '860px',
                         color: 'var(--text-secondary)',
                         fontSize: '15px',
                         lineHeight: 1.6
                     }}
                 >
-                    This page is the future home for customer profiles, address data, customer order history,
-                    analytics, similar-user suggestions, and merge workflows. Phase 1 only establishes the
-                    top-level navigation and a dedicated placeholder surface.
+                    This section now consolidates customer overview, profile search, and customer analytics into one
+                    top-level workspace. Similar-user suggestions, merge review, and undo-merge remain placeholders
+                    for later phases.
                 </p>
             </div>
 
-            <div
-                style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                    gap: '20px'
-                }}
-            >
-                {plannedSections.map((section) => (
-                    <Card key={section.title} title={section.title} style={{ marginBottom: 0, height: '100%' }}>
-                        <p
-                            style={{
-                                margin: 0,
-                                color: 'var(--text-secondary)',
-                                lineHeight: 1.6
-                            }}
-                        >
-                            {section.description}
-                        </p>
-                    </Card>
-                ))}
+            <div className="segmented-control" style={{ width: 'fit-content', flexWrap: 'wrap' }}>
+                <TabButton active={activeSection === 'overview'} onClick={() => setActiveSection('overview')} variant="segmented" size="large">
+                    Overview
+                </TabButton>
+                <TabButton active={activeSection === 'profiles'} onClick={() => setActiveSection('profiles')} variant="segmented" size="large">
+                    Profiles
+                </TabButton>
+                <TabButton active={activeSection === 'analytics'} onClick={() => setActiveSection('analytics')} variant="segmented" size="large">
+                    Analytics
+                </TabButton>
+                <TabButton active={activeSection === 'similar'} onClick={() => setActiveSection('similar')} variant="segmented" size="large">
+                    Similar Users
+                </TabButton>
+                <TabButton active={activeSection === 'merge'} onClick={() => setActiveSection('merge')} variant="segmented" size="large">
+                    Merge History
+                </TabButton>
             </div>
 
-            <Card title="Planned Merge Workflow" style={{ marginBottom: 0 }}>
-                <div
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                        gap: '16px'
-                    }}
-                >
-                    <div>
-                        <div style={{ fontWeight: 600, marginBottom: '6px' }}>Suggestion Engine</div>
-                        <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                            Placeholder for a future model that proposes customers who may belong to an existing
-                            verified user.
+            {activeSection === 'overview' && (
+                <PaginatedDataTable
+                    title="Customers"
+                    apiCall={endpoints.orders.customers}
+                    defaultSort="last_order_date"
+                    lastDbSync={lastDbSync}
+                    leftContent={
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                            Click a customer name to open their profile.
+                        </span>
+                    }
+                />
+            )}
+
+            {activeSection === 'profiles' && (
+                <CustomerProfile
+                    initialCustomerId={linkedCustomerId}
+                    headerActions={
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                            Search by name, phone, or customer ID.
                         </div>
-                    </div>
-                    <div>
-                        <div style={{ fontWeight: 600, marginBottom: '6px' }}>Merge Action</div>
-                        <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                            The UI will eventually support merging duplicate users into one surviving customer ID.
-                        </div>
-                    </div>
-                    <div>
-                        <div style={{ fontWeight: 600, marginBottom: '6px' }}>Undo Merge</div>
-                        <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                            Merge history and reversal controls will be added so mistaken merges can be undone.
-                        </div>
-                    </div>
+                    }
+                />
+            )}
+
+            {activeSection === 'analytics' && <CustomerAnalyticsSection lastDbSync={lastDbSync} />}
+
+            {activeSection === 'similar' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                    {renderPlaceholder(
+                        'Similarity Queue',
+                        'This will become the review queue for likely duplicate or related users suggested by a future model or rules engine.'
+                    )}
+                    {renderPlaceholder(
+                        'Comparison View',
+                        'Operators will eventually compare a suggested source customer against an existing verified customer before merging.'
+                    )}
                 </div>
-            </Card>
+            )}
+
+            {activeSection === 'merge' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                    {renderPlaceholder(
+                        'Merge Audit Trail',
+                        'Future merge history will list which customer IDs were merged, who performed the action, and when it happened.'
+                    )}
+                    {renderPlaceholder(
+                        'Undo Merge',
+                        'This placeholder reserves space for reversing incorrect merges once merge logging and restore flows are implemented.'
+                    )}
+                </div>
+            )}
         </div>
     );
 }

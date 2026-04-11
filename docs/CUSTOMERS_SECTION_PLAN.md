@@ -10,13 +10,30 @@ Add a new `Customers` button in the left navigation above `Orders` as a placehol
 - Similar user suggestions
 - Customer merge and undo-merge workflows
 
+## Status Summary
+
+- `Phase 1`: Completed
+- `Phase 2`: Completed
+- `Phase 3`: Not started
+- `Phase 4`: Not started
+- `Phase 5`: Completed
+- `Phase 6`: Completed
+
 ## Current State
 
-The current customer-related functionality is split across multiple places:
+There is now a top-level `Customers` section in the left navigation.
+
+Customer functionality is now primarily available from the `Customers` page:
+
+- `Overview`: customer table
+- `Profiles`: customer profile search and detail view
+- `Analytics`: customer retention and top-customer analytics
+- `Similar Users`: placeholder
+- `Merge History`: placeholder
+
+Customer functionality is no longer duplicated inside `Orders` or `Insights`.
 
 - Left navigation is defined in `ui_electron/src/App.tsx`
-- Customer overview and profile search live inside the `Orders` page
-- Customer analytics live inside the `Insights` page
 - Reusable customer profile UI already exists in `ui_electron/src/components/CustomerProfile.tsx`
 
 There is already useful backend support in place:
@@ -34,6 +51,8 @@ There is no dedicated user-merge or undo-merge workflow yet. The future customer
 Create one top-level `Customers` section in the left nav and make it the single home for all customer-related workflows over time. This is cleaner than keeping customer functionality split between `Insights` and `Orders`.
 
 ## Phase 1: Placeholder Nav Button
+
+Status: Completed
 
 Scope:
 
@@ -53,9 +72,17 @@ Notes:
 
 - This phase is UI-only
 - No backend changes are required
-- Existing `Orders` and `Insights` behavior can remain unchanged for now
+- At the time of Phase 1, existing `Orders` and `Insights` behavior remained unchanged until later cleanup phases
+
+Delivered:
+
+- Added `Customers` to the left navigation above `Orders`
+- Added top-level `customers` page routing
+- Added dedicated `Customers` page scaffolding and placeholders
 
 ## Phase 2: Consolidate Existing Customer Features
+
+Status: Completed
 
 Move existing customer functionality into the new `Customers` page.
 
@@ -81,7 +108,18 @@ Result:
 - `Orders` focuses on orders and order-related entities
 - `Insights` focuses on business-wide insights
 
+Delivered:
+
+- Added top-level `Customers` sub-sections for `Overview`, `Profiles`, and `Analytics`
+- Moved customer overview into the new `Customers` page
+- Moved customer profile search/detail flow into the new `Customers` page
+- Moved customer analytics into the new `Customers` page
+- Updated customer links to deep-link into `Customers` profiles
+- Added placeholder sections for `Similar Users` and `Merge History`
+
 ## Phase 3: Address Book Expansion
+
+Status: Not started
 
 Short term:
 
@@ -106,6 +144,8 @@ Recommended future address model:
 
 ## Phase 4: Similar User Suggestions and Merge Workflow
 
+Status: Not started
+
 This section should eventually support identity resolution for customers who are likely duplicates or who should belong to an already verified customer profile.
 
 Primary use cases:
@@ -121,6 +161,11 @@ Planned UI capabilities:
 - Show a side-by-side comparison before merge
 - Allow merge action from the UI
 - Allow undo merge if the merge was done by mistake
+
+Current note:
+
+- Basic UI placeholders for `Similar Users` and `Merge History` now exist in the `Customers` page
+- No similarity model, merge action, or undo-merge functionality has been implemented yet
 
 Planned backend behavior:
 
@@ -152,6 +197,8 @@ Model note:
 
 ## Phase 5: Navigation and Deep Linking
 
+Status: Completed
+
 The app already supports navigation params through `ui_electron/src/contexts/NavigationContext.tsx`.
 
 After the new `Customers` page is introduced:
@@ -160,7 +207,15 @@ After the new `Customers` page is introduced:
 - Preserve deep-linking into a specific customer profile using `customerId`
 - Keep direct navigation from analytics tables and order/customer rows
 
+Delivered so far:
+
+- Customer links now navigate into the top-level `Customers` page
+- Profile deep-linking is active for customer profile navigation
+- The old `Orders`-specific customer deep-link shape is no longer used by in-repo navigation
+
 ## Phase 6: Cleanup After Migration
+
+Status: Completed
 
 Once the `Customers` page is fully functional:
 
@@ -168,16 +223,21 @@ Once the `Customers` page is fully functional:
 - Remove or reduce the customer tab inside `Insights`
 - Keep a single canonical customer experience in the left nav
 
+Delivered:
+
+- Removed the customer tab from `Orders`
+- Removed the customer tab from `Insights`
+- Kept `Customers` as the single canonical customer workspace in the left navigation
+
 ## Suggested Delivery Order
 
-1. Add the new left-nav `Customers` button and placeholder page
-2. Move profile search and customer overview into `Customers`
-3. Move customer analytics into `Customers`
-4. Add address field support to profile API and UI
-5. Add placeholder `Similar Users` and `Merge History` sections
-6. Design and implement customer merge plus undo-merge backend workflow
-7. Connect a future similarity model or rule engine to drive suggestions
-8. Clean up duplicated customer entry points in `Orders` and `Insights`
+1. Completed: Add the new left-nav `Customers` button and placeholder page
+2. Completed: Move profile search and customer overview into `Customers`
+3. Completed: Move customer analytics into `Customers`
+4. Next: Add address field support to profile API and UI
+5. Partially done: UI placeholders for `Similar Users` and `Merge History` exist, but no backend logic exists yet
+6. Pending: Design and implement customer merge plus undo-merge backend workflow
+7. Pending: Connect a future similarity model or rule engine to drive suggestions
 
 ## Initial Files Likely To Change
 
@@ -195,9 +255,8 @@ Once the `Customers` page is fully functional:
 
 ## Immediate Next Step
 
-Implement Phase 1 only:
+Implement Phase 3:
 
-- Add the `Customers` nav button above `Orders`
-- Create the placeholder `Customers` page
-- Include simple placeholders for future `Similar Users` and merge functionality
-- Leave deeper customer consolidation for the next pass
+- Expose `customers.address` in the customer profile API response
+- Render address data inside the `Profiles` view
+- Decide whether the current single-address field is enough for the short term or whether a separate address-book model is needed immediately

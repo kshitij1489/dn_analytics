@@ -7,7 +7,9 @@
 export { ResizableTableWrapper } from './ResizableTableWrapper';
 export { ClientSideDataTable, type ColumnRenderFn } from './ClientSideDataTable';
 export { Card, CollapsibleCard } from './Card';
+export { CustomerAnalyticsSection } from './CustomerAnalyticsSection';
 export { KPICard } from './KPICard';
+export { PaginatedDataTable } from './PaginatedDataTable';
 export { TabButton } from './TabButton';
 export { Pagination } from './Pagination';
 export { LoadingSpinner, LoadingText } from './LoadingSpinner';
@@ -18,4 +20,3 @@ export { default as TrainingOverlay } from './TrainingOverlay';
 export type { TrainingStatus } from './TrainingOverlay';
 export { default as ErrorPopup } from './ErrorPopup';
 export type { PopupMessage } from './ErrorPopup';
-

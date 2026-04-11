@@ -14,8 +14,8 @@ export function CustomerLink({ customerId, name, className, style }: CustomerLin
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        navigate('orders', {
-            view: 'customers',
+        navigate('customers', {
+            section: 'profiles',
             mode: 'profile',
             customerId: customerId
         });
@@ -24,8 +24,8 @@ export function CustomerLink({ customerId, name, className, style }: CustomerLin
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            navigate('orders', {
-                view: 'customers',
+            navigate('customers', {
+                section: 'profiles',
                 mode: 'profile',
                 customerId: customerId
             });

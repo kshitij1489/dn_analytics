@@ -12,12 +12,14 @@ import 'react-resizable/css/styles.css';
 interface ResizableTableWrapperProps {
     children: React.ReactNode;
     onExportCSV?: () => void;
+    leftContent?: React.ReactNode;
     defaultHeight?: number;
 }
 
 export function ResizableTableWrapper({
     children,
     onExportCSV,
+    leftContent,
     defaultHeight = 600
 }: ResizableTableWrapperProps) {
     const [width, setWidth] = useState(1000);
@@ -48,9 +50,13 @@ export function ResizableTableWrapper({
         <div ref={containerRef} style={{ width: '100%', marginBottom: '20px' }}>
             <div style={{
                 display: 'flex',
-                justifyContent: 'flex-end',
+                justifyContent: leftContent ? 'space-between' : 'flex-end',
+                alignItems: 'center',
+                gap: '12px',
+                flexWrap: 'wrap',
                 marginBottom: '10px',
             }}>
+                <div>{leftContent}</div>
                 {onExportCSV && (
                     <button
                         onClick={onExportCSV}

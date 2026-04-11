@@ -368,7 +368,7 @@ function AppContent() {
         {activeTab === 'forecast' && <ForecastPage lastDbSync={lastDbSync} />}
         {activeTab === 'chart' && <ChartPage lastDbSync={lastDbSync} />}
         {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
-        {activeTab === 'customers' && <Customers />}
+        {activeTab === 'customers' && <Customers lastDbSync={lastDbSync} />}
         {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
         {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
         {activeTab === 'sql' && <SQLConsole />}
