@@ -14,6 +14,15 @@ import { CHART_TOOLTIP_STYLE } from './chartStyles';
 import { ResizableChart } from '../ResizableChart';
 import { FullscreenModal } from './FullscreenModal';
 
+const dateRangeControlStyle = {
+    padding: '6px 8px',
+    borderRadius: '4px',
+    border: '1px solid var(--border-color)',
+    background: 'var(--input-bg)',
+    color: 'var(--text-color)',
+    fontSize: '12px',
+} as const;
+
 export function AverageRevenueByDayChart() {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
@@ -81,23 +90,21 @@ export function AverageRevenueByDayChart() {
                     {/* Filter Controls */}
                     <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                         <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                            <label style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Begin:</label>
+                            <label style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Begin:</label>
                             <input
                                 type="date"
                                 value={startDate}
                                 onChange={e => setStartDate(e.target.value)}
-                                className="styled-select"
-                                style={{ minWidth: 'auto' }}
+                                style={dateRangeControlStyle}
                             />
                         </div>
                         <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                            <label style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>End:</label>
+                            <label style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>End:</label>
                             <input
                                 type="date"
                                 value={endDate}
                                 onChange={e => setEndDate(e.target.value)}
-                                className="styled-select"
-                                style={{ minWidth: 'auto' }}
+                                style={dateRangeControlStyle}
                             />
                         </div>
                     </div>

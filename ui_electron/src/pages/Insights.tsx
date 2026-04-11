@@ -331,7 +331,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                 </div>
 
                 <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                    <span style={{ marginRight: '5px' }}>Days:</span>
+                    <span style={{ marginRight: '5px', minWidth: '44px', textAlign: 'right', display: 'inline-block' }}>Days:</span>
                     {ALL_DAYS.map(day => (
                         <button
                             key={day}
@@ -602,11 +602,3 @@ function CustomerTab({ lastDbSync }: { lastDbSync?: number }) {
         </div>
     );
 }
-
-
-
-
-
-
-
-

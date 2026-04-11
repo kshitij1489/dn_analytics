@@ -11,6 +11,23 @@ import { ResizableChart } from '../ResizableChart';
 import { FullscreenModal } from './FullscreenModal';
 import { CHART_TOOLTIP_STYLE } from './chartStyles';
 
+const dateRangeLabelStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+} as const;
+
+const dateRangeInputStyle = {
+    padding: '6px 8px',
+    borderRadius: '4px',
+    border: '1px solid var(--border-color)',
+    background: 'var(--input-bg)',
+    color: 'var(--text-color)',
+    fontSize: '12px',
+} as const;
+
 export function RevenueByCategoryChart() {
     const [data, setData] = useState<any[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -18,33 +35,33 @@ export function RevenueByCategoryChart() {
     const [endDate, setEndDate] = useState('');
 
     useEffect(() => {
-        loadData();
-    }, [beginDate, endDate]);
+        const loadData = async () => {
+            try {
+                const params: { start_date?: string; end_date?: string } = {};
+                if (beginDate && endDate && beginDate <= endDate) {
+                    params.start_date = beginDate;
+                    params.end_date = endDate;
+                }
+                const res = await endpoints.insights.revenueByCategory(params);
+                const categories = res.data.categories || res.data;  // Handle both old and new format
+                const totalSystemRevenue = res.data.total_system_revenue || (Array.isArray(categories) ? categories.reduce((sum: number, cat: any) => sum + (cat.revenue || 0), 0) : 0);
 
-    const loadData = async () => {
-        try {
-            const params: { start_date?: string; end_date?: string } = {};
-            if (beginDate && endDate && beginDate <= endDate) {
-                params.start_date = beginDate;
-                params.end_date = endDate;
+                // Calculate revenue percentage for each category
+                const dataWithPct = (Array.isArray(categories) ? categories : []).map((cat: any) => ({
+                    ...cat,
+                    rev_pct: totalSystemRevenue > 0 ? (cat.revenue / totalSystemRevenue) * 100 : 0,
+                    pct_label: totalSystemRevenue > 0 ? `${((cat.revenue / totalSystemRevenue) * 100).toFixed(1)}%` : '0%',
+                    total_system_revenue: totalSystemRevenue  // Store for caption
+                }));
+
+                setData(dataWithPct);
+            } catch (e) {
+                console.error(e);
             }
-            const res = await endpoints.insights.revenueByCategory(params);
-            const categories = res.data.categories || res.data;  // Handle both old and new format
-            const totalSystemRevenue = res.data.total_system_revenue || (Array.isArray(categories) ? categories.reduce((sum: number, cat: any) => sum + (cat.revenue || 0), 0) : 0);
+        };
 
-            // Calculate revenue percentage for each category
-            const dataWithPct = (Array.isArray(categories) ? categories : []).map((cat: any) => ({
-                ...cat,
-                rev_pct: totalSystemRevenue > 0 ? (cat.revenue / totalSystemRevenue) * 100 : 0,
-                pct_label: totalSystemRevenue > 0 ? `${((cat.revenue / totalSystemRevenue) * 100).toFixed(1)}%` : '0%',
-                total_system_revenue: totalSystemRevenue  // Store for caption
-            }));
-
-            setData(dataWithPct);
-        } catch (e) {
-            console.error(e);
-        }
-    };
+        void loadData();
+    }, [beginDate, endDate]);
 
     // Get total system revenue from first item (they all have the same value)
     const totalRevenue = data.length > 0 ? data[0].total_system_revenue : 0;
@@ -55,22 +72,22 @@ export function RevenueByCategoryChart() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: 'wrap', gap: '15px' }}>
                     <h3 style={{ margin: 0 }}>Revenue by Category</h3>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        <label style={dateRangeLabelStyle}>
                             Begin:
                             <input
                                 type="date"
                                 value={beginDate}
                                 onChange={(e) => setBeginDate(e.target.value)}
-                                style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                                style={dateRangeInputStyle}
                             />
                         </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        <label style={dateRangeLabelStyle}>
                             End:
                             <input
                                 type="date"
                                 value={endDate}
                                 onChange={(e) => setEndDate(e.target.value)}
-                                style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                                style={dateRangeInputStyle}
                             />
                         </label>
                         {(beginDate || endDate) && (
@@ -116,22 +133,22 @@ export function RevenueByCategoryChart() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: 'wrap', gap: '15px' }}>
                         <h3 style={{ margin: 0 }}>Revenue by Category (Fullscreen)</h3>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            <label style={dateRangeLabelStyle}>
                                 Begin:
                                 <input
                                     type="date"
                                     value={beginDate}
                                     onChange={(e) => setBeginDate(e.target.value)}
-                                    style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                                    style={dateRangeInputStyle}
                                 />
                             </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            <label style={dateRangeLabelStyle}>
                                 End:
                                 <input
                                     type="date"
                                     value={endDate}
                                     onChange={(e) => setEndDate(e.target.value)}
-                                    style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-color)', fontSize: '12px' }}
+                                    style={dateRangeInputStyle}
                                 />
                             </label>
                             {(beginDate || endDate) && (

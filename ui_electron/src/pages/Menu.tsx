@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { endpoints } from '../api';
-import { DateSelector, ErrorPopup } from '../components';
+import { ErrorPopup } from '../components';
 import type { PopupMessage } from '../components';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
@@ -170,6 +170,25 @@ const formatDateInputValue = (date: Date) => {
     return localDate.toISOString().slice(0, 10);
 };
 
+const dateRangeLabelStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+};
+
+const dateRangeInputStyle: CSSProperties = {
+    padding: '8px',
+    height: '38px',
+    boxSizing: 'border-box',
+    borderRadius: '4px',
+    border: '1px solid var(--border-color)',
+    background: 'var(--input-bg)',
+    color: 'var(--text-color)',
+    fontSize: '12px',
+};
+
 // --- CSV Export Utility ---
 function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
@@ -207,10 +226,12 @@ function exportToCSV(data: any[], filename: string, headers?: string[]): boolean
 // Resizable Table Wrapper
 function ResizableTableWrapper({
     children,
+    headerContent,
     onExportCSV,
     defaultHeight = 600
 }: {
     children: React.ReactNode;
+    headerContent?: React.ReactNode;
     onExportCSV?: () => void;
     defaultHeight?: number;
 }) {
@@ -233,9 +254,12 @@ function ResizableTableWrapper({
         <div ref={containerRef} style={{ width: '100%', marginBottom: '20px' }}>
             <div style={{
                 display: 'flex',
-                justifyContent: 'flex-end',
+                flexDirection: 'column',
+                alignItems: 'flex-end',
+                gap: '8px',
                 marginBottom: '10px',
             }}>
+                {headerContent}
                 {onExportCSV && (
                     <button
                         onClick={onExportCSV}
@@ -489,39 +513,44 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 
             {/* Menu Items Table Container */}
             <div style={{ marginTop: '20px' }}>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
-                    <input
-                        placeholder="Search Name..."
-                        value={search}
-                        onChange={e => { setSearch(e.target.value); setPage(1); }}
-                        style={{ padding: '8px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Begin Date</span>
-                        <DateSelector
-                            value={startDate}
-                            displayValue={startDate}
-                            onChange={handleStartDateChange}
-                            minDate={defaultStartDate}
-                            maxDate={endDate || today}
-                            suffix=""
-                        />
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>End Date</span>
-                        <DateSelector
-                            value={endDate}
-                            displayValue={endDate}
-                            onChange={handleEndDateChange}
-                            minDate={startDate}
-                            maxDate={today}
-                            suffix=""
-                        />
-                    </div>
-                </div>
-
                 {loadingTable ? <div>Loading...</div> : (
-                    <ResizableTableWrapper onExportCSV={() => exportToCSV(tableData, 'menu_items')}>
+                    <ResizableTableWrapper
+                        headerContent={(
+                            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                <input
+                                    placeholder="Search Name..."
+                                    value={search}
+                                    onChange={e => { setSearch(e.target.value); setPage(1); }}
+                                    style={{ padding: '8px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                                />
+                                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                    <label style={dateRangeLabelStyle}>
+                                        Begin:
+                                        <input
+                                            type="date"
+                                            value={startDate}
+                                            min={defaultStartDate}
+                                            max={endDate || today}
+                                            onChange={(e) => handleStartDateChange(e.target.value)}
+                                            style={dateRangeInputStyle}
+                                        />
+                                    </label>
+                                    <label style={dateRangeLabelStyle}>
+                                        End:
+                                        <input
+                                            type="date"
+                                            value={endDate}
+                                            min={startDate}
+                                            max={today}
+                                            onChange={(e) => handleEndDateChange(e.target.value)}
+                                            style={dateRangeInputStyle}
+                                        />
+                                    </label>
+                                </div>
+                            </div>
+                        )}
+                        onExportCSV={() => exportToCSV(tableData, 'menu_items')}
+                    >
                         <table className="standard-table">
                             <thead>
                                 <tr>
