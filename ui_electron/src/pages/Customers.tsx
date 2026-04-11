@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { endpoints } from '../api';
 import {
     CustomerAnalyticsSection,
     ErrorPopup,
+    KPICard,
     PaginatedDataTable,
     TabButton,
     type PopupMessage,
@@ -19,9 +20,28 @@ import {
     getApiErrorMessage,
 } from '../components/customers/customerIdentity';
 import { useNavigation } from '../contexts/NavigationContext';
+import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 import './Customers.css';
 
 type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge';
+
+function isSameMergeRequest(
+    left: CustomerMergeRequestPayload | null,
+    right: CustomerMergeRequestPayload | null,
+): boolean {
+    if (left === right) return true;
+    if (!left || !right) return false;
+
+    const leftReasons = left.reasons || [];
+    const rightReasons = right.reasons || [];
+
+    return left.source_customer_id === right.source_customer_id &&
+        left.target_customer_id === right.target_customer_id &&
+        left.similarity_score === right.similarity_score &&
+        left.model_name === right.model_name &&
+        leftReasons.length === rightReasons.length &&
+        leftReasons.every((reason, index) => reason === rightReasons[index]);
+}
 
 export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
     const [activeSection, setActiveSection] = useState<CustomerSection>('overview');
@@ -38,8 +58,10 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [executingMerge, setExecutingMerge] = useState(false);
     const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
+    const [kpis, setKpis] = useState<any>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const { pageParams, clearParams } = useNavigation();
+    const activeMergeRequestRef = useRef<CustomerMergeRequestPayload | null>(null);
 
     useEffect(() => {
         if (pageParams?.mode === 'profile' && pageParams?.customerId != null) {
@@ -55,6 +77,23 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
         }
     }, [clearParams, pageParams]);
 
+    useEffect(() => {
+        activeMergeRequestRef.current = activeMergeRequest;
+    }, [activeMergeRequest]);
+
+    useEffect(() => {
+        const loadKPIs = async () => {
+            try {
+                const res = await endpoints.insights.kpis({ _t: lastDbSync });
+                setKpis(res.data);
+            } catch (error: any) {
+                setPopup({ type: 'error', message: getApiErrorMessage(error) });
+            }
+        };
+
+        void loadKPIs();
+    }, [lastDbSync]);
+
     const loadSimilarSuggestions = useCallback(async () => {
         setLoadingSimilar(true);
         try {
@@ -63,7 +102,7 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
             setSimilarSuggestions(suggestions);
             setSelectedSuggestion((current) => {
                 if (!suggestions.length) return null;
-                if (activeMergeRequest && !current) return null;
+                if (activeMergeRequestRef.current && !current) return null;
                 if (!current) return suggestions[0];
                 return suggestions.find((item) =>
                     item.source_customer.customer_id === current.source_customer.customer_id &&
@@ -75,7 +114,7 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
         } finally {
             setLoadingSimilar(false);
         }
-    }, [activeMergeRequest]);
+    }, []);
 
     const loadMergeHistory = useCallback(async () => {
         setLoadingHistory(true);
@@ -96,7 +135,7 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
             return;
         }
 
-        setActiveMergeRequest(request);
+        setActiveMergeRequest((current) => (isSameMergeRequest(current, request) ? current : request));
         setLoadingPreview(true);
         try {
             const res = await endpoints.customers.mergePreview({
@@ -122,24 +161,20 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
 
     useEffect(() => {
         if (activeSection === 'similar') {
-            loadSimilarSuggestions();
+            void loadSimilarSuggestions();
         }
         if (activeSection === 'merge') {
-            loadMergeHistory();
+            void loadMergeHistory();
         }
     }, [activeSection, lastDbSync, loadMergeHistory, loadSimilarSuggestions]);
 
     useEffect(() => {
-        if (activeSection !== 'similar') {
-            return;
-        }
-        if (selectedSuggestion) {
-            loadMergePreview(buildSuggestionMergeRequest(selectedSuggestion));
-            return;
-        }
-        if (!activeMergeRequest) {
-            loadMergePreview(null);
-        }
+        if (activeSection !== 'similar' || !selectedSuggestion) return;
+
+        const request = buildSuggestionMergeRequest(selectedSuggestion);
+        if (isSameMergeRequest(activeMergeRequest, request)) return;
+
+        void loadMergePreview(request);
     }, [activeMergeRequest, activeSection, loadMergePreview, selectedSuggestion]);
 
     const handleManualPreview = useCallback(async () => {
@@ -213,14 +248,19 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
         <div className="page-container customers-page">
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
 
-            <div className="customers-hero">
-                <div className="customers-hero-badge">Phase 4 Live</div>
-                <h1 className="customers-hero-title">Customers</h1>
-                <p className="customers-hero-copy">
-                    This section now consolidates customer overview, profile search, customer analytics, address-book
-                    visibility, basic duplicate suggestions, and merge audit history into one top-level workspace.
-                </p>
+            <div className="customers-kpis">
+                <KPICard title="Total Revenue" value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`} />
+                <KPICard title="Today's Revenue" value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`} />
+                <KPICard title="Orders" value={kpis?.total_orders?.toLocaleString() || 0} />
+                <KPICard title="Avg Order" value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`} />
+                <KPICard
+                    title="Total Customers (est.)"
+                    value={formatCustomerEstimateRange(kpis)}
+                    hint={CUSTOMERS_ESTIMATE_HINT}
+                />
             </div>
+
+            <hr className="customers-divider" />
 
             <div className="segmented-control customers-tabs">
                 <TabButton active={activeSection === 'overview'} onClick={() => setActiveSection('overview')} variant="segmented" size="large">

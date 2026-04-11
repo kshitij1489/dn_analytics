@@ -5,42 +5,27 @@
     gap: 20px;
 }
 
-.customers-hero {
-    background: linear-gradient(135deg, rgba(0, 122, 255, 0.12), rgba(0, 122, 255, 0.03));
-    border: 1px solid rgba(0, 122, 255, 0.18);
-    border-radius: 18px;
-    padding: 24px;
+.customers-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
 }
 
-.customers-hero-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(0, 122, 255, 0.12);
-    color: var(--accent-color);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-}
-
-.customers-hero-title {
-    margin-bottom: 10px;
-}
-
-.customers-hero-copy {
+.customers-divider {
     margin: 0;
-    max-width: 860px;
-    color: var(--text-secondary);
-    font-size: 15px;
-    line-height: 1.6;
+    border: none;
+    border-top: 1px solid var(--border-color);
 }
 
 .customers-tabs {
-    width: fit-content;
+    width: 100%;
     flex-wrap: wrap;
+}
+
+.customers-tabs > button {
+    flex: 1 1 140px;
+    text-align: center;
+    min-height: 44px;
 }
 
 .customers-overview-hint,
