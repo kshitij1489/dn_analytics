@@ -17,6 +17,7 @@ import ChartPage from './pages/ChartPage';
 import Configuration from './pages/Configuration';
 import AIMode from './pages/AIMode';
 import ForecastPage from './pages/ForecastPage';
+import Customers from './pages/Customers';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
@@ -180,6 +181,7 @@ function AppContent() {
           <button className={activeTab === 'forecast' ? 'active' : ''} onClick={() => setActiveTab('forecast')}>Forecast</button>
           <button className={activeTab === 'chart' ? 'active' : ''} onClick={() => setActiveTab('chart')}>Chart</button>
           <button className={activeTab === 'menu' ? 'active' : ''} onClick={() => setActiveTab('menu')}>Menu</button>
+          <button className={activeTab === 'customers' ? 'active' : ''} onClick={() => setActiveTab('customers')}>Customers</button>
           <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>Orders</button>
           <button className={activeTab === 'inventory' ? 'active' : ''} onClick={() => setActiveTab('inventory')}>Inventory & COGS</button>
           <button className={activeTab === 'sql' ? 'active' : ''} onClick={() => setActiveTab('sql')}>SQL Console</button>
@@ -366,6 +368,7 @@ function AppContent() {
         {activeTab === 'forecast' && <ForecastPage lastDbSync={lastDbSync} />}
         {activeTab === 'chart' && <ChartPage lastDbSync={lastDbSync} />}
         {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
+        {activeTab === 'customers' && <Customers />}
         {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
         {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
         {activeTab === 'sql' && <SQLConsole />}
