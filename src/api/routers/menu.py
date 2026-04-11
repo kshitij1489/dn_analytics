@@ -100,19 +100,33 @@ def get_menu_items_view(
     sort_by: str = "total_revenue", 
     sort_desc: bool = True,
     filters: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     conn=Depends(get_db)
 ):
     """Paginated view of menu_items_summary_view"""
     filter_dict = json.loads(filters) if filters else {}
-    df, count, err = table_queries.fetch_paginated_table(
-        conn, 
-        "menu_items_summary_view", 
-        page, 
-        page_size, 
-        sort_by, 
-        "DESC" if sort_desc else "ASC", 
-        filter_dict
-    )
+    if start_date or end_date:
+        df, count, err = menu_queries.fetch_menu_items_summary(
+            conn,
+            page=page,
+            page_size=page_size,
+            sort_column=sort_by,
+            sort_direction="DESC" if sort_desc else "ASC",
+            filters=filter_dict,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        df, count, err = table_queries.fetch_paginated_table(
+            conn, 
+            "menu_items_summary_view", 
+            page, 
+            page_size, 
+            sort_by, 
+            "DESC" if sort_desc else "ASC", 
+            filter_dict
+        )
     if err: 
         raise HTTPException(500, err)
     return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size}

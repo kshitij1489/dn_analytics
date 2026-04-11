@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime, timedelta
+from src.core.utils.business_date import get_business_date_range
 
 # SQLite strftime('%w') = 0 Sunday, 1 Monday, ..., 6 Saturday
 DAY_NAME_TO_SQLITE_DOW = {
@@ -181,6 +182,157 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
     
     cursor = conn.execute(menu_query, all_params)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+
+
+def fetch_menu_items_summary(
+    conn,
+    page=1,
+    page_size=50,
+    sort_column="total_revenue",
+    sort_direction="DESC",
+    filters=None,
+    start_date=None,
+    end_date=None,
+):
+    """Fetch paginated menu item stats with optional business-date filtering."""
+    try:
+        sort_map = {
+            "menu_item_id": "menu_item_id",
+            "name": "name",
+            "type": "type",
+            "total_revenue": "total_revenue",
+            "total_sold": "total_sold",
+            "sold_as_item": "sold_as_item",
+            "sold_as_addon": "sold_as_addon",
+            "is_active": "is_active",
+        }
+        safe_sort_column = sort_map.get(sort_column, "total_revenue")
+        safe_sort_direction = "ASC" if str(sort_direction).upper() == "ASC" else "DESC"
+
+        date_conditions = []
+        date_params = []
+        if start_date:
+            start_dt, _ = get_business_date_range(start_date)
+            date_conditions.append("o.created_on >= ?")
+            date_params.append(start_dt)
+        if end_date:
+            _, end_dt = get_business_date_range(end_date)
+            date_conditions.append("o.created_on <= ?")
+            date_params.append(end_dt)
+        date_filter_sql = f" AND {' AND '.join(date_conditions)}" if date_conditions else ""
+
+        filter_map = {
+            "menu_item_id": "mi.menu_item_id",
+            "name": "mi.name",
+            "type": "mi.type",
+        }
+        where_conditions = []
+        filter_params = []
+        for key, value in (filters or {}).items():
+            mapped_column = filter_map.get(key)
+            if not mapped_column or value in (None, ""):
+                continue
+            where_conditions.append(f"UPPER(CAST({mapped_column} AS TEXT)) LIKE ?")
+            filter_params.append(f"%{str(value).upper()}%")
+
+        where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
+
+        count_query = f"""
+            SELECT COUNT(*) AS count
+            FROM menu_items mi
+            {where_clause}
+        """
+        total_count = conn.execute(count_query, filter_params).fetchone()[0]
+
+        offset = (page - 1) * page_size
+        data_query = f"""
+            WITH filtered_orders AS (
+                SELECT o.order_id
+                FROM orders o
+                WHERE o.order_status = 'Success'
+                {date_filter_sql}
+            ),
+            dedup_items AS (
+                SELECT order_item_id, menu_item_id, total_price, quantity
+                FROM (
+                    SELECT
+                        oi.order_item_id,
+                        oi.menu_item_id,
+                        oi.total_price,
+                        oi.quantity,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oi.order_id, oi.name_raw, oi.quantity, oi.unit_price
+                            ORDER BY oi.order_item_id
+                        ) AS rn
+                    FROM order_items oi
+                    JOIN filtered_orders fo ON fo.order_id = oi.order_id
+                )
+                WHERE rn = 1
+            ),
+            dedup_addons AS (
+                SELECT menu_item_id, price, quantity
+                FROM (
+                    SELECT
+                        oia.menu_item_id,
+                        oia.price,
+                        oia.quantity,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oia.order_item_id, oia.name_raw, oia.quantity, oia.price
+                            ORDER BY oia.order_item_addon_id
+                        ) AS rn
+                    FROM order_item_addons oia
+                    JOIN dedup_items di ON di.order_item_id = oia.order_item_id
+                )
+                WHERE rn = 1
+            ),
+            item_stats AS (
+                SELECT
+                    combined.menu_item_id,
+                    SUM(combined.total_revenue) AS total_revenue,
+                    SUM(combined.sold_as_item) AS sold_as_item,
+                    SUM(combined.sold_as_addon) AS sold_as_addon,
+                    SUM(combined.total_sold) AS total_sold
+                FROM (
+                    SELECT
+                        di.menu_item_id,
+                        COALESCE(di.total_price, 0) AS total_revenue,
+                        COALESCE(di.quantity, 0) AS sold_as_item,
+                        0 AS sold_as_addon,
+                        COALESCE(di.quantity, 0) AS total_sold
+                    FROM dedup_items di
+
+                    UNION ALL
+
+                    SELECT
+                        da.menu_item_id,
+                        COALESCE(da.price, 0) * COALESCE(da.quantity, 0) AS total_revenue,
+                        0 AS sold_as_item,
+                        COALESCE(da.quantity, 0) AS sold_as_addon,
+                        COALESCE(da.quantity, 0) AS total_sold
+                    FROM dedup_addons da
+                ) combined
+                GROUP BY combined.menu_item_id
+            )
+            SELECT
+                mi.menu_item_id,
+                mi.name,
+                mi.type,
+                COALESCE(ist.total_revenue, 0) AS total_revenue,
+                COALESCE(ist.total_sold, 0) AS total_sold,
+                COALESCE(ist.sold_as_item, 0) AS sold_as_item,
+                COALESCE(ist.sold_as_addon, 0) AS sold_as_addon,
+                mi.is_active
+            FROM menu_items mi
+            LEFT JOIN item_stats ist ON ist.menu_item_id = mi.menu_item_id
+            {where_clause}
+            ORDER BY {safe_sort_column} {safe_sort_direction}
+            LIMIT {page_size} OFFSET {offset}
+        """
+        params = date_params + filter_params
+        cursor = conn.execute(data_query, params)
+        return pd.DataFrame([dict(row) for row in cursor.fetchall()]), total_count, None
+    except Exception as e:
+        return None, 0, str(e)
 
 def fetch_menu_types(conn):
     """Fetch distinct menu item types"""

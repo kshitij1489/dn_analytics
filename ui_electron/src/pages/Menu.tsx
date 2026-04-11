@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { endpoints } from '../api';
-import { ErrorPopup } from '../components';
+import { DateSelector, ErrorPopup } from '../components';
 import type { PopupMessage } from '../components';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
@@ -165,6 +165,11 @@ const formatResolutionTitle = (item: ResolutionItem) => (
     `${item.name} (${formatVariantDisplayName(item.source_variant_name)})`
 );
 
+const formatDateInputValue = (date: Date) => {
+    const localDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60 * 1000));
+    return localDate.toISOString().slice(0, 10);
+};
+
 // --- CSV Export Utility ---
 function exportToCSV(data: any[], filename: string, headers?: string[]): boolean {
     if (!data || data.length === 0) {
@@ -307,6 +312,9 @@ function ResizableTableWrapper({
 // --- Menu Items Tab ---
 
 function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
+    const defaultStartDate = '2025-01-01';
+    const today = formatDateInputValue(new Date());
+
     // State for Merge Tool
     const [itemsList, setItemsList] = useState<any[]>([]);
     const [sourceId, setSourceId] = useState('');
@@ -324,16 +332,17 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [total, setTotal] = useState(0);
     const [loadingTable, setLoadingTable] = useState(false);
     const [search, setSearch] = useState('');
+    const [startDate, setStartDate] = useState(defaultStartDate);
+    const [endDate, setEndDate] = useState(today);
 
     useEffect(() => {
         loadDropdowns();
         loadHistory();
-        loadTable();
     }, []);
 
     useEffect(() => {
         loadTable();
-    }, [page, search, pageSize, sortKey, sortDirection, lastDbSync]);
+    }, [page, search, pageSize, sortKey, sortDirection, startDate, endDate, lastDbSync]);
 
     const loadDropdowns = async () => {
         try {
@@ -358,7 +367,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                 page_size: pageSize,
                 sort_by: sortKey,
                 sort_desc: sortDirection === 'desc',
-                filters
+                filters,
+                start_date: startDate || undefined,
+                end_date: endDate || undefined,
             });
             setTableData(res.data.data);
             setTotal(res.data.total);
@@ -408,6 +419,22 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const renderSortIcon = (key: string) => {
         if (sortKey !== key) return <span style={{ opacity: 0.3 }}> ⇅</span>;
         return <span>{sortDirection === 'asc' ? ' ↑' : ' ↓'}</span>;
+    };
+
+    const handleStartDateChange = (nextStartDate: string) => {
+        setStartDate(nextStartDate);
+        if (endDate && nextStartDate > endDate) {
+            setEndDate(nextStartDate);
+        }
+        setPage(1);
+    };
+
+    const handleEndDateChange = (nextEndDate: string) => {
+        setEndDate(nextEndDate);
+        if (startDate && nextEndDate < startDate) {
+            setStartDate(nextEndDate);
+        }
+        setPage(1);
     };
 
     return (
@@ -462,12 +489,36 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 
             {/* Menu Items Table Container */}
             <div style={{ marginTop: '20px' }}>
-                <input
-                    placeholder="Search Name..."
-                    value={search}
-                    onChange={e => { setSearch(e.target.value); setPage(1); }}
-                    style={{ padding: '8px', marginBottom: '10px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                />
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <input
+                        placeholder="Search Name..."
+                        value={search}
+                        onChange={e => { setSearch(e.target.value); setPage(1); }}
+                        style={{ padding: '8px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Begin Date</span>
+                        <DateSelector
+                            value={startDate}
+                            displayValue={startDate}
+                            onChange={handleStartDateChange}
+                            minDate={defaultStartDate}
+                            maxDate={endDate || today}
+                            suffix=""
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>End Date</span>
+                        <DateSelector
+                            value={endDate}
+                            displayValue={endDate}
+                            onChange={handleEndDateChange}
+                            minDate={startDate}
+                            maxDate={today}
+                            suffix=""
+                        />
+                    </div>
+                </div>
 
                 {loadingTable ? <div>Loading...</div> : (
                     <ResizableTableWrapper onExportCSV={() => exportToCSV(tableData, 'menu_items')}>
