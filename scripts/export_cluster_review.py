@@ -29,6 +29,15 @@ def _sorted_join(values: Iterable[str]) -> str:
     return LIST_SEPARATOR.join(cleaned)
 
 
+def _empty_source_context() -> Dict[str, Any]:
+    return {
+        "item_rows": 0,
+        "addon_rows": 0,
+        "item_raw_names": set(),
+        "addon_raw_names": set(),
+    }
+
+
 def _normalize_variant_name(variant_id: Optional[str], variant_lookup: Dict[str, str]) -> str:
     if variant_id in (None, "", "None"):
         return NULL_VARIANT_LABEL
@@ -126,14 +135,7 @@ def _load_variant_lookup(conn) -> Dict[str, str]:
 
 
 def _load_source_contexts(conn) -> Dict[str, Dict[str, Any]]:
-    contexts: Dict[str, Dict[str, Any]] = defaultdict(
-        lambda: {
-            "item_rows": 0,
-            "addon_rows": 0,
-            "item_raw_names": set(),
-            "addon_raw_names": set(),
-        }
-    )
+    contexts: Dict[str, Dict[str, Any]] = defaultdict(_empty_source_context)
 
     cursor = conn.cursor()
     try:
@@ -142,6 +144,20 @@ def _load_source_contexts(conn) -> Dict[str, Dict[str, Any]]:
             SELECT CAST(petpooja_itemid AS TEXT) AS source_item_id, name_raw
             FROM order_items
             WHERE petpooja_itemid IS NOT NULL
+            """
+        )
+        for row in cursor.fetchall():
+            source_item_id = row["source_item_id"]
+            if not source_item_id:
+                continue
+            contexts[source_item_id]["item_rows"] += 1
+            if row["name_raw"]:
+                contexts[source_item_id]["item_raw_names"].add(row["name_raw"])
+
+        cursor.execute(
+            """
+            SELECT CAST(order_item_id AS TEXT) AS source_item_id, name_raw
+            FROM order_items
             """
         )
         for row in cursor.fetchall():
@@ -166,6 +182,7 @@ def _load_source_contexts(conn) -> Dict[str, Dict[str, Any]]:
             contexts[source_item_id]["addon_rows"] += 1
             if row["name_raw"]:
                 contexts[source_item_id]["addon_raw_names"].add(row["name_raw"])
+
     finally:
         cursor.close()
 
@@ -182,6 +199,79 @@ def _source_kind(context: Dict[str, Any]) -> str:
     if has_addons:
         return "addon"
     return "unknown"
+
+
+def _load_current_mapping_context(
+    conn,
+    source_item_id: str,
+    menu_item_id: str,
+    variant_id: Optional[str],
+    fallback_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Resolve context for a current mapping row using the current assignment first.
+
+    This allows the review export to represent row-level overrides accurately when a
+    shared source key has been split across variants or when a manual override uses an
+    internal row id instead of the original PetPooja source id.
+    """
+    context = _empty_source_context()
+    cursor = conn.cursor()
+    try:
+        if variant_id in (None, "", "None"):
+            order_item_variant_clause = "oi.variant_id IS NULL"
+            addon_variant_clause = "oa.variant_id IS NULL"
+            order_item_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            addon_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+        else:
+            order_item_variant_clause = "oi.variant_id = ?"
+            addon_variant_clause = "oa.variant_id = ?"
+            order_item_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            addon_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+
+        cursor.execute(
+            f"""
+            SELECT oi.name_raw
+            FROM order_items oi
+            WHERE (
+                CAST(oi.petpooja_itemid AS TEXT) = ?
+                OR CAST(oi.order_item_id AS TEXT) = ?
+            )
+              AND oi.menu_item_id = ?
+              AND {order_item_variant_clause}
+            """
+            ,
+            order_item_params,
+        )
+        for row in cursor.fetchall():
+            context["item_rows"] += 1
+            if row["name_raw"]:
+                context["item_raw_names"].add(row["name_raw"])
+
+        cursor.execute(
+            f"""
+            SELECT oa.name_raw
+            FROM order_item_addons oa
+            WHERE (
+                CAST(oa.petpooja_addonid AS TEXT) = ?
+                OR CAST(oa.order_item_addon_id AS TEXT) = ?
+            )
+              AND oa.menu_item_id = ?
+              AND {addon_variant_clause}
+            """
+            ,
+            addon_params,
+        )
+        for row in cursor.fetchall():
+            context["addon_rows"] += 1
+            if row["name_raw"]:
+                context["addon_raw_names"].add(row["name_raw"])
+    finally:
+        cursor.close()
+
+    if context["item_rows"] or context["addon_rows"]:
+        return context
+    return fallback_context
 
 
 def _load_merge_history_rows(
@@ -306,14 +396,13 @@ def _load_current_cluster_rows(
         variant_id = None if row["variant_id"] in (None, "", "None") else str(row["variant_id"])
         menu_info = menu_lookup.get(menu_item_id, {})
         variant_name = _normalize_variant_name(variant_id, variant_lookup)
-        context = source_contexts.get(
+        fallback_context = source_contexts.get(source_item_id, _empty_source_context())
+        context = _load_current_mapping_context(
+            conn,
             source_item_id,
-            {
-                "item_rows": 0,
-                "addon_rows": 0,
-                "item_raw_names": set(),
-                "addon_raw_names": set(),
-            },
+            menu_item_id,
+            variant_id,
+            fallback_context,
         )
         raw_names = set(context["item_raw_names"]) | set(context["addon_raw_names"])
         merged_sources = {
