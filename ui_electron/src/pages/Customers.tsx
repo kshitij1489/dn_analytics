@@ -63,7 +63,7 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
                         marginBottom: '14px'
                     }}
                 >
-                    Phase 2 Active
+                    Phase 3 Active
                 </div>
                 <h1 style={{ marginBottom: '10px' }}>Customers</h1>
                 <p
@@ -75,9 +75,9 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
                         lineHeight: 1.6
                     }}
                 >
-                    This section now consolidates customer overview, profile search, and customer analytics into one
-                    top-level workspace. Similar-user suggestions, merge review, and undo-merge remain placeholders
-                    for later phases.
+                    This section now consolidates customer overview, profile search, customer analytics, and saved
+                    address-book visibility into one top-level workspace. Similar-user suggestions, merge review, and
+                    undo-merge remain placeholders for later phases.
                 </p>
             </div>
 

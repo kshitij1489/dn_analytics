@@ -441,6 +441,19 @@ def search_customers(conn, query_str: str, limit: int = 20):
     return results
 
 
+def format_customer_address(address: dict) -> str:
+    """Create a single-line address summary from structured address fields."""
+    parts = [
+        address.get("address_line_1"),
+        address.get("address_line_2"),
+        address.get("city"),
+        address.get("state"),
+        address.get("postal_code"),
+        address.get("country"),
+    ]
+    return ", ".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+
+
 def fetch_customer_profile_data(conn, customer_id: str):
     """
     Fetch customer details and their order history with item summaries.
@@ -451,6 +464,7 @@ def fetch_customer_profile_data(conn, customer_id: str):
             customer_id,
             name,
             phone,
+            address,
             total_spent,
             last_order_date,
             is_verified
@@ -460,11 +474,38 @@ def fetch_customer_profile_data(conn, customer_id: str):
     cursor = conn.execute(cust_sql, (customer_id,))
     row = cursor.fetchone()
     if not row:
-        return None, None
+        return None, [], []
         
     customer = dict(row)
     customer['customer_id'] = str(customer['customer_id'])
     customer['is_verified'] = bool(customer['is_verified'])
+
+    addresses_sql = """
+        SELECT
+            address_id,
+            customer_id,
+            label,
+            address_line_1,
+            address_line_2,
+            city,
+            state,
+            postal_code,
+            country,
+            is_default
+        FROM customer_addresses
+        WHERE customer_id = ?
+        ORDER BY is_default DESC, address_id ASC
+    """
+    cursor = conn.execute(addresses_sql, (customer_id,))
+    addresses = [dict(row) for row in cursor.fetchall()]
+
+    for address in addresses:
+        address['customer_id'] = str(address['customer_id'])
+        address['is_default'] = bool(address['is_default'])
+
+    primary_address = next((address for address in addresses if address['is_default']), None) or (addresses[0] if addresses else None)
+    if primary_address:
+        customer['address'] = format_customer_address(primary_address)
 
     # 2. Get Orders with Item Summary
     # We need to aggregate items per order. 
@@ -506,4 +547,4 @@ def fetch_customer_profile_data(conn, customer_id: str):
         o['order_number'] = str(o['order_number'])
         o['is_verified'] = bool(o['is_verified'])
 
-    return customer, orders
+    return customer, orders, addresses

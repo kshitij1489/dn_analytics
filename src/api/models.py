@@ -143,6 +143,25 @@ class CustomerSearchResponse(BaseModel):
     is_verified: bool = False
 
 
+class CustomerProfileCustomer(CustomerSearchResponse):
+    """Customer details shown in the profile view."""
+    address: Optional[str] = None
+
+
+class CustomerAddressResponse(BaseModel):
+    """Structured address row for a customer."""
+    address_id: int
+    customer_id: str
+    label: Optional[str] = None
+    address_line_1: Optional[str] = None
+    address_line_2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    is_default: bool = False
+
+
 class CustomerProfileOrder(BaseModel):
     """Order summary for customer profile view"""
     order_id: str
@@ -157,5 +176,6 @@ class CustomerProfileOrder(BaseModel):
 
 class CustomerProfileResponse(BaseModel):
     """Complete customer profile with order history"""
-    customer: CustomerSearchResponse
+    customer: CustomerProfileCustomer
     orders: list[CustomerProfileOrder]
+    addresses: list[CustomerAddressResponse] = []

@@ -67,12 +67,13 @@ def search_customers(q: str, conn=Depends(get_db)):
 @router.get("/customers/{customer_id}/profile", response_model=CustomerProfileResponse)
 def get_customer_profile(customer_id: str, conn=Depends(get_db)):
     """Get complete customer profile and order history"""
-    customer, orders = customer_queries.fetch_customer_profile_data(conn, customer_id)
+    customer, orders, addresses = customer_queries.fetch_customer_profile_data(conn, customer_id)
     
     if not customer:
         raise HTTPException(404, "Customer not found")
         
     return {
         "customer": customer,
-        "orders": orders
+        "orders": orders,
+        "addresses": addresses,
     }

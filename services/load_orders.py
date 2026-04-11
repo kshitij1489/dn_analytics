@@ -38,13 +38,17 @@ from services.clustering_service import OrderItemCluster
 from src.core.db.connection import get_db_connection
 
 def create_schema_if_needed(conn):
-    """Ensure tables exist by checking for 'orders' table. If not, run schema."""
+    """Ensure required tables exist; apply the idempotent schema if anything is missing."""
     cursor = conn.cursor()
     
-    # Check if orders table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
-    if cursor.fetchone():
-        return # Schema exists
+    cursor.execute("""
+        SELECT COUNT(*) as table_count
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN ('orders', 'customer_addresses')
+    """)
+    if cursor.fetchone()[0] == 2:
+        return
         
     print("  Initialize database schema...")
     schema_path = Path(__file__).parent.parent / "database" / "schema_sqlite.sql"
@@ -106,6 +110,70 @@ def make_hash(value: str) -> str:
     """Stable SHA-256 hash"""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+
+def normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    """Trim a value and collapse empty strings to None."""
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def upsert_customer_address(conn, customer_id: int, address: Optional[str], label: str = "Primary") -> None:
+    """
+    Persist a structured address row for a customer.
+
+    Current ingestion only receives a single free-form address string, so it is
+    stored in address_line_1 until richer source fields are available.
+    """
+    address_line_1 = normalize_optional_text(address)
+    if not address_line_1:
+        return
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT address_id
+        FROM customer_addresses
+        WHERE customer_id = ?
+          AND lower(trim(COALESCE(address_line_1, ''))) = lower(trim(?))
+          AND trim(COALESCE(address_line_2, '')) = ''
+          AND trim(COALESCE(city, '')) = ''
+          AND trim(COALESCE(state, '')) = ''
+          AND trim(COALESCE(postal_code, '')) = ''
+          AND trim(COALESCE(country, '')) = ''
+        ORDER BY is_default DESC, address_id ASC
+        LIMIT 1
+    """, (customer_id, address_line_1))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute("""
+            UPDATE customer_addresses
+            SET label = COALESCE(label, ?),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE address_id = ?
+        """, (label, existing[0]))
+        return
+
+    cursor.execute("""
+        SELECT 1
+        FROM customer_addresses
+        WHERE customer_id = ?
+          AND is_default = 1
+        LIMIT 1
+    """, (customer_id,))
+    has_default = cursor.fetchone() is not None
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO customer_addresses (
+            customer_id,
+            label,
+            address_line_1,
+            is_default
+        )
+        VALUES (?, ?, ?, ?)
+    """, (customer_id, label, address_line_1, 0 if has_default else 1))
+
 def compute_customer_identity_key(customer: dict) -> str:
     """
     Priority:
@@ -161,10 +229,10 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
     """Get or create customer, return customer_id"""
     cursor = conn.cursor()
     
-    phone = customer_data.get('phone', '').strip() if customer_data.get('phone') else None
-    name = customer_data.get('name', '').strip() if customer_data.get('name') else 'Anonymous'
-    address = customer_data.get('address', '').strip() if customer_data.get('address') else None
-    gstin = customer_data.get('gstin', '').strip() if customer_data.get('gstin') else None
+    phone = normalize_optional_text(customer_data.get('phone'))
+    name = normalize_optional_text(customer_data.get('name')) or 'Anonymous'
+    address = normalize_optional_text(customer_data.get('address'))
+    gstin = normalize_optional_text(customer_data.get('gstin'))
     
     # Normalize name for deduplication (lowercase, trimmed)
     name_normalized = name.lower().strip()
@@ -202,6 +270,12 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
         if phone:
             update_fields.append("phone = COALESCE(phone, ?)")
             update_values.append(phone)
+
+        # Preserve the first legacy address for compatibility, while the structured
+        # address book stores additional addresses separately.
+        if address:
+            update_fields.append("address = COALESCE(address, ?)")
+            update_values.append(address)
         
         update_fields.append("updated_at = CURRENT_TIMESTAMP")
         
@@ -209,6 +283,7 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
         
         sql = f"UPDATE customers SET {', '.join(update_fields)} WHERE customer_id = ?"
         cursor.execute(sql, update_values)
+        upsert_customer_address(conn, customer_id, address)
         conn.commit()
     else:
         # Insert new customer
@@ -229,6 +304,7 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
             float(order_total), 1 if is_verified else 0
         ))
         customer_id = cursor.fetchone()[0]
+        upsert_customer_address(conn, customer_id, address)
         conn.commit()
     
     return customer_id

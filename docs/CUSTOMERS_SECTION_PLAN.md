@@ -14,7 +14,7 @@ Add a new `Customers` button in the left navigation above `Orders` as a placehol
 
 - `Phase 1`: Completed
 - `Phase 2`: Completed
-- `Phase 3`: Not started
+- `Phase 3`: Completed
 - `Phase 4`: Not started
 - `Phase 5`: Completed
 - `Phase 6`: Completed
@@ -119,7 +119,7 @@ Delivered:
 
 ## Phase 3: Address Book Expansion
 
-Status: Not started
+Status: Completed
 
 Short term:
 
@@ -141,6 +141,14 @@ Recommended future address model:
 - `postal_code`
 - `country`
 - `is_default`
+
+Delivered:
+
+- Exposed `customers.address` in the customer profile API/UI for backward compatibility
+- Added a dedicated `customer_addresses` table for future multi-address support
+- Added migration-safe backfill from legacy `customers.address` into `customer_addresses`
+- Updated customer profile responses to include structured addresses plus a primary-address summary
+- Rendered an address-book view inside `Customers > Profiles`
 
 ## Phase 4: Similar User Suggestions and Merge Workflow
 
@@ -234,7 +242,7 @@ Delivered:
 1. Completed: Add the new left-nav `Customers` button and placeholder page
 2. Completed: Move profile search and customer overview into `Customers`
 3. Completed: Move customer analytics into `Customers`
-4. Next: Add address field support to profile API and UI
+4. Completed: Add backward-compatible address support plus structured address-book storage
 5. Partially done: UI placeholders for `Similar Users` and `Merge History` exist, but no backend logic exists yet
 6. Pending: Design and implement customer merge plus undo-merge backend workflow
 7. Pending: Connect a future similarity model or rule engine to drive suggestions
@@ -255,8 +263,8 @@ Delivered:
 
 ## Immediate Next Step
 
-Implement Phase 3:
+Implement Phase 4:
 
-- Expose `customers.address` in the customer profile API response
-- Render address data inside the `Profiles` view
-- Decide whether the current single-address field is enough for the short term or whether a separate address-book model is needed immediately
+- Replace `Similar Users` placeholder content with a real review queue
+- Design merge and undo-merge data model, API, and audit history
+- Decide whether similarity suggestions should start rule-based or model-based

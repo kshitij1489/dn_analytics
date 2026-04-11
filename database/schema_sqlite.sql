@@ -59,6 +59,24 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 
 -- ============================================================================
+-- 2A. CUSTOMER ADDRESSES
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS customer_addresses (
+    address_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+    label TEXT DEFAULT 'Primary',
+    address_line_1 TEXT,
+    address_line_2 TEXT,
+    city TEXT,
+    state TEXT,
+    postal_code TEXT,
+    country TEXT,
+    is_default BOOLEAN DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
 -- 3. MENU ITEMS
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS menu_items (
@@ -390,6 +408,39 @@ CREATE INDEX IF NOT EXISTS idx_customers_phone_not_null ON customers(phone) WHER
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_identity_key ON customers(customer_identity_key);
 CREATE INDEX IF NOT EXISTS idx_customers_is_verified ON customers(is_verified);
 
+-- Customer Addresses
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer_id ON customer_addresses(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_label ON customer_addresses(label);
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_is_default ON customer_addresses(customer_id, is_default);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_addresses_unique_address
+ON customer_addresses(
+    customer_id,
+    lower(trim(COALESCE(address_line_1, ''))),
+    lower(trim(COALESCE(address_line_2, ''))),
+    lower(trim(COALESCE(city, ''))),
+    lower(trim(COALESCE(state, ''))),
+    lower(trim(COALESCE(postal_code, ''))),
+    lower(trim(COALESCE(country, '')))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_addresses_one_default
+ON customer_addresses(customer_id)
+WHERE is_default = 1;
+
+-- Backfill structured addresses from the legacy customers.address field.
+INSERT OR IGNORE INTO customer_addresses (
+    customer_id,
+    label,
+    address_line_1,
+    is_default
+)
+SELECT
+    c.customer_id,
+    'Primary',
+    trim(c.address),
+    1
+FROM customers c
+WHERE trim(COALESCE(c.address, '')) <> '';
+
 -- Menu Items
 CREATE INDEX IF NOT EXISTS idx_menu_items_name ON menu_items(name);
 CREATE INDEX IF NOT EXISTS idx_menu_items_type ON menu_items(type);
@@ -623,4 +674,3 @@ CREATE TABLE IF NOT EXISTS volume_backtest_cache (
     UNIQUE(forecast_date, item_id, model_trained_through)
 );
 CREATE INDEX IF NOT EXISTS idx_volume_backtest_cache_dates ON volume_backtest_cache(forecast_date, model_trained_through);
-

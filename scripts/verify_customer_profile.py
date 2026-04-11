@@ -29,10 +29,12 @@ def test_customer_profile():
         # 2. Test Profile Fetch
         cid = first_cust['customer_id']
         print(f"\n2. Testing Profile Fetch for ID: {cid}...")
-        customer, orders = customer_queries.fetch_customer_profile_data(conn, cid)
+        customer, orders, addresses = customer_queries.fetch_customer_profile_data(conn, cid)
         
         if customer:
             print(f"Customer Details: {customer['name']}, Total Spent: {customer['total_spent']}")
+            print(f"Saved Address: {customer.get('address') or 'None'}")
+            print(f"Structured Addresses: {len(addresses)}")
             print(f"Orders Found: {len(orders)}")
             if orders:
                 print(f"Latest Order: {orders[0]['order_number']} - {orders[0]['total_amount']}")

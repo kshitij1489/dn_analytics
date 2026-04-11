@@ -24,11 +24,12 @@ def test_customer_profile_enhancements():
     if results:
         cid = results[0]['customer_id']
         print(f"Testing Profile Fetch for ID: {cid}...")
-        customer, orders = customer_queries.fetch_customer_profile_data(conn, cid)
+        customer, orders, addresses = customer_queries.fetch_customer_profile_data(conn, cid)
         
         if customer:
             print(f"Customer: {customer['name']}")
             print(f"Is Verified: {customer['is_verified']} (Type: {type(customer['is_verified'])})")
+            print(f"Structured Addresses: {len(addresses)}")
             
             if orders:
                 print(f"Latest Order Source: {orders[0]['order_source']}")
