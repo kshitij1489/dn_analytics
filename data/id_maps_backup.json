@@ -44,7 +44,6 @@
     "9314d919-4b6f-50d1-a1d1-11aa83647a76": "Eggless Cherry & Chocolate Ice Cream",
     "a69e1017-d393-55c3-bedb-3c1ee47863de": "Strawberry Cream Cheese Ice Cream",
     "0e5a948e-b98d-52c2-96ae-9e4a8ae8a6df": "Mocha Indulgence Duo Ice Creams",
-    "da4af44c-d2cc-5c34-855c-bbf25c1a1e0f": "Bean-to-Bar 70% Dark Chocolate Ice Cream",
     "31419064-2567-548d-9219-0897562e6367": "Old Fashion Vanilla Ice Cream",
     "fc970c78-39d6-5dce-a90d-013c8d833d54": "Waffle Cone",
     "2998b13f-df5c-591e-b432-c0068d41af92": "Pistachio Ice Cream",
@@ -104,7 +103,8 @@
     "db98e456-569d-55d5-be17-f24c73499d6a": "Request",
     "40ad4449-a346-58aa-b244-0e948b030f27": "Orange With Orange Jam",
     "133c4ce6-68b7-564a-b8b4-4b1c34aec328": "Cakes & Cookies",
-    "0cb4d3fb-7cd8-573c-b2f4-cc42e5ac843c": "Lemongrass Ginger & Lemon Jam Ice Cream"
+    "0cb4d3fb-7cd8-573c-b2f4-cc42e5ac843c": "Lemongrass Ginger & Lemon Jam Ice Cream",
+    "0563f0e8-644c-59b8-b410-7e940445d629": "Rose Cardamom (60gm)"
   },
   "variant_id_to_str": {
     "c6438ece-1c0e-5db1-860f-27f45090a616": "PERFECT_PLENTY_300ML",
