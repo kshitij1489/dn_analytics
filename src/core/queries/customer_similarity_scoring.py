@@ -7,6 +7,61 @@ def similarity_ratio(left: str, right: str) -> float:
     return SequenceMatcher(None, left, right).ratio()
 
 
+def _name_tokens(value: str) -> list[str]:
+    return [token for token in (value or "").split() if token]
+
+
+def _sorted_token_join(tokens: list[str]) -> str:
+    return " ".join(sorted(tokens))
+
+
+def compute_name_similarity(left_name: str, right_name: str) -> float:
+    """Compute similarity between two customer names with a confidence penalty.
+
+    For multi-token names, uses a weighted blend of sorted-token, first-token,
+    last-token, and full-string similarity. A confidence multiplier (0.75–1.0)
+    penalizes short or single-token names so that e.g. an exact match on "John"
+    scores lower than a near-match on "John Smith", reducing false positives
+    from common short names.
+    """
+    left_tokens = _name_tokens(left_name)
+    right_tokens = _name_tokens(right_name)
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    full_similarity = similarity_ratio(left_name, right_name)
+    if len(left_tokens) == 1 and len(right_tokens) == 1:
+        base_similarity = full_similarity
+    else:
+        sorted_similarity = similarity_ratio(
+            _sorted_token_join(left_tokens),
+            _sorted_token_join(right_tokens),
+        )
+        first_similarity = similarity_ratio(left_tokens[0], right_tokens[0])
+
+        weighted_sum = (
+            sorted_similarity * 0.35 +
+            first_similarity * 0.25 +
+            full_similarity * 0.20
+        )
+        if len(left_tokens) > 1 and len(right_tokens) > 1:
+            weighted_sum += similarity_ratio(left_tokens[-1], right_tokens[-1]) * 0.20
+        else:
+            weighted_sum += full_similarity * 0.20
+        base_similarity = weighted_sum
+
+    max_token_count = max(len(left_tokens), len(right_tokens), 1)
+    max_char_count = max(
+        sum(len(token) for token in left_tokens),
+        sum(len(token) for token in right_tokens),
+        1,
+    )
+    token_richness = min(max_token_count, 3) / 3.0
+    char_richness = min(max_char_count, 12) / 12.0
+    confidence = 0.75 + 0.25 * ((token_richness * 0.60) + (char_richness * 0.40))
+    return min(1.0, max(0.0, base_similarity * confidence))
+
+
 def build_similarity_candidate(left_record: dict, right_record: dict, text_similarity: float, model_name: str):
     def numeric_closeness(left_value, right_value) -> float:
         left_float = float(left_value or 0.0)
@@ -27,7 +82,7 @@ def build_similarity_candidate(left_record: dict, right_record: dict, text_simil
             customer_id_rank,
         )
 
-    name_similarity = similarity_ratio(left_record["name_norm"], right_record["name_norm"])
+    name_similarity = compute_name_similarity(left_record["name_norm"], right_record["name_norm"])
     address_similarity = similarity_ratio(left_record["address_norm"], right_record["address_norm"])
     phone_exact = bool(left_record["phone_norm"] and left_record["phone_norm"] == right_record["phone_norm"])
     behavior_similarity = (

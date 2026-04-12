@@ -11,9 +11,10 @@ interface KPICardProps {
     value: React.ReactNode;
     /** Shown in the delayed hover tooltip on the card. */
     hint?: string;
+    valueClassName?: string;
 }
 
-export function KPICard({ title, value, hint }: KPICardProps) {
+export function KPICard({ title, value, hint, valueClassName }: KPICardProps) {
     const [showTooltip, setShowTooltip] = useState(false);
     const hoverTimerRef = useRef<number | null>(null);
 
@@ -66,11 +67,14 @@ export function KPICard({ title, value, hint }: KPICardProps) {
             }}>
                 {title}
             </h3>
-            <div style={{
-                fontSize: '1.5em',
-                fontWeight: 'bold',
-                color: 'var(--accent-color)'
-            }}>
+            <div
+                className={valueClassName}
+                style={{
+                    fontSize: '1.5em',
+                    fontWeight: 'bold',
+                    color: 'var(--accent-color)'
+                }}
+            >
                 {value}
             </div>
             {hint && showTooltip && (

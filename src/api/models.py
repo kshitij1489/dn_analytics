@@ -203,10 +203,41 @@ class CustomerSimilarityCandidate(BaseModel):
     metrics: Dict[str, float] = {}
 
 
+class CustomerMergePreviewOrderItem(BaseModel):
+    """One aggregated item entry inside a preview order row."""
+    item_name: str
+    quantity: int = 0
+
+
+class CustomerMergePreviewOrder(BaseModel):
+    """Recent order summary shown during merge preview."""
+    order_id: str
+    order_number: str
+    created_on: Optional[str] = None
+    total_amount: float = 0.0
+    items: List[CustomerMergePreviewOrderItem] = []
+    items_summary: str = ""
+
+
+class CustomerMergePreviewTopItem(BaseModel):
+    """Top/favorite item summary for merge preview."""
+    item_name: str
+    order_count: int = 0
+    total_quantity: int = 0
+
+
+class CustomerMergePreviewCustomerOrders(BaseModel):
+    """Customer order snapshot for side-by-side merge review."""
+    recent_orders: List[CustomerMergePreviewOrder] = []
+    top_items: List[CustomerMergePreviewTopItem] = []
+
+
 class CustomerMergePreviewResponse(BaseModel):
     """Preview payload for a customer merge."""
     source_customer: CustomerSimilarityCandidatePerson
     target_customer: CustomerSimilarityCandidatePerson
+    source_order_snapshot: CustomerMergePreviewCustomerOrders
+    target_order_snapshot: CustomerMergePreviewCustomerOrders
     orders_to_move: int
     source_address_count: int
     target_address_count: int

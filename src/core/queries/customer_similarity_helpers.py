@@ -144,3 +144,4 @@ def fetch_active_similarity_population(conn):
             ) or f"customer_{record['customer_id']}",
         })
     return population
+

@@ -8,7 +8,7 @@ import { useState } from 'react';
 
 interface CardProps {
     children: React.ReactNode;
-    title: string;
+    title?: React.ReactNode;
     headerAction?: React.ReactNode;
     style?: React.CSSProperties;
 }
@@ -27,20 +27,22 @@ export function Card({ children, title, headerAction, style }: CardProps) {
             boxShadow: 'var(--shadow)',
             ...style
         }}>
-            <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '15px'
-            }}>
-                <h3 style={{
-                    margin: 0,
-                    color: 'var(--accent-color)'
+            {(title || headerAction) ? (
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '15px'
                 }}>
-                    {title}
-                </h3>
-                {headerAction}
-            </div>
+                    <h3 style={{
+                        margin: 0,
+                        color: 'var(--accent-color)'
+                    }}>
+                        {title}
+                    </h3>
+                    {headerAction}
+                </div>
+            ) : null}
             {children}
         </div>
     );

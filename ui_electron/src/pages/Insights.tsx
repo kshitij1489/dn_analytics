@@ -4,6 +4,8 @@ import { ResizableTableWrapper, TabButton, KPICard } from '../components';
 import type { CustomerQuickViewData, KPIData } from '../types/api';
 import { exportToCSV } from '../utils/csv';
 import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
+import './Insights.css';
+
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'dailySales' | 'menu'>('dailySales');
     const [kpis, setKpis] = useState<KPIData | null>(null);
@@ -76,32 +78,42 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             {/* KPIs */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '20px' }}>
-                <KPICard
-                    title="Total Revenue"
-                    value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`}
-                    hint="Revenue from all recorded orders."
-                />
-                <KPICard
-                    title="Today's Revenue"
-                    value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`}
-                    hint="Revenue from today's orders."
-                />
-                <KPICard
-                    title="Orders"
-                    value={kpis?.total_orders?.toLocaleString() || 0}
-                    hint="Total number of orders."
-                />
-                <KPICard
-                    title="Avg Order"
-                    value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`}
-                    hint="Average value of one order."
-                />
-                <KPICard
-                    title="Total Customers (est.)"
-                    value={formatCustomerEstimateRange(kpis)}
-                    hint={CUSTOMERS_ESTIMATE_HINT}
-                />
+            <div className="insights-primary-kpis">
+                <div className="insights-primary-kpi insights-primary-kpi-wide">
+                    <KPICard
+                        title="Total Revenue"
+                        value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`}
+                        hint="Revenue from all recorded orders."
+                    />
+                </div>
+                <div className="insights-primary-kpi insights-primary-kpi-wide">
+                    <KPICard
+                        title="Today's Revenue"
+                        value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`}
+                        hint="Revenue from today's orders."
+                    />
+                </div>
+                <div className="insights-primary-kpi insights-primary-kpi-compact">
+                    <KPICard
+                        title="Orders"
+                        value={kpis?.total_orders?.toLocaleString() || 0}
+                        hint="Total number of orders."
+                    />
+                </div>
+                <div className="insights-primary-kpi insights-primary-kpi-compact">
+                    <KPICard
+                        title="Avg Order"
+                        value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`}
+                        hint="Average value of one order."
+                    />
+                </div>
+                <div className="insights-primary-kpi insights-primary-kpi-wide">
+                    <KPICard
+                        title="Total Customers (est.)"
+                        value={formatCustomerEstimateRange(kpis)}
+                        hint={CUSTOMERS_ESTIMATE_HINT}
+                    />
+                </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px', marginBottom: '30px' }}>

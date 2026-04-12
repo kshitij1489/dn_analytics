@@ -88,9 +88,9 @@ def get_customer_profile(customer_id: str, conn=Depends(get_db)):
 
 
 @router.get("/customers/similar", response_model=List[CustomerSimilarityCandidate])
-def get_similar_customers(limit: int = 20, min_score: float = 0.72, conn=Depends(get_db)):
+def get_similar_customers(limit: int = 20, min_score: float = 0.72, q: Optional[str] = None, conn=Depends(get_db)):
     """Get likely duplicate/related customer pairs using a basic similarity model."""
-    return customer_queries.fetch_customer_similarity_candidates(conn, limit=limit, min_score=min_score)
+    return customer_queries.fetch_customer_similarity_candidates(conn, limit=limit, min_score=min_score, search_query=q)
 
 
 @router.get("/customers/merge/preview", response_model=CustomerMergePreviewResponse)

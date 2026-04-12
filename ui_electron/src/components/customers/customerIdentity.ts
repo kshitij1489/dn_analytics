@@ -21,12 +21,39 @@ export interface CustomerSimilarityCandidate {
 export interface CustomerMergePreview {
     source_customer: CustomerSimilarityCandidatePerson;
     target_customer: CustomerSimilarityCandidatePerson;
+    source_order_snapshot: CustomerMergePreviewCustomerOrders;
+    target_order_snapshot: CustomerMergePreviewCustomerOrders;
     orders_to_move: number;
     source_address_count: number;
     target_address_count: number;
     reasons: string[];
     score?: number | null;
     model_name?: string | null;
+}
+
+export interface CustomerMergePreviewOrderItem {
+    item_name: string;
+    quantity: number;
+}
+
+export interface CustomerMergePreviewOrder {
+    order_id: string;
+    order_number: string;
+    created_on?: string | null;
+    total_amount: number;
+    items: CustomerMergePreviewOrderItem[];
+    items_summary: string;
+}
+
+export interface CustomerMergePreviewTopItem {
+    item_name: string;
+    order_count: number;
+    total_quantity: number;
+}
+
+export interface CustomerMergePreviewCustomerOrders {
+    recent_orders: CustomerMergePreviewOrder[];
+    top_items: CustomerMergePreviewTopItem[];
 }
 
 export interface CustomerMergeRequestPayload {
