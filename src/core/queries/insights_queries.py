@@ -1,17 +1,17 @@
 from datetime import date as DateType
 
 import pandas as pd
+from src.core.queries.customer_metric_helpers import (
+    build_customer_quick_view_metrics,
+    fetch_customer_metric_orders,
+    month_bounds,
+)
 from src.core.utils.business_date import (
-    BUSINESS_DATE_SQL, 
-    get_current_business_date, 
+    BUSINESS_DATE_SQL,
+    get_current_business_date,
     get_business_date_range
 )
 from src.core.utils.customer_estimate import estimate_customer_count_range_from_split
-
-
-def _shift_month(month_start: DateType, months: int) -> DateType:
-    total_months = (month_start.year * 12) + (month_start.month - 1) + months
-    return DateType(total_months // 12, (total_months % 12) + 1, 1)
 
 def fetch_kpis(conn):
     """Fetch Top-level KPIs: Revenue, Orders, Avg Order, estimated customer count range."""
@@ -71,240 +71,16 @@ def fetch_customer_quick_view(conn):
 
     current_business_date = get_current_business_date()
     current_month_start = DateType.fromisoformat(current_business_date).replace(day=1)
-    current_month_label = current_month_start.strftime('%Y-%m')
-    previous_month_label = _shift_month(current_month_start, -1).strftime('%Y-%m')
-    two_months_ago_label = _shift_month(current_month_start, -2).strftime('%Y-%m')
-
-    query = """
-        WITH verified_orders AS (
-            SELECT
-                o.customer_id,
-                SUBSTR(DATE(o.created_on, '-5 hours'), 1, 7) as business_month
-            FROM orders o
-            JOIN customers c ON o.customer_id = c.customer_id
-            WHERE o.order_status = 'Success'
-              AND c.is_verified = 1
-              AND o.customer_id IS NOT NULL
-        ),
-        current_month_customers AS (
-            SELECT
-                customer_id,
-                COUNT(*) as order_count
-            FROM verified_orders
-            WHERE business_month = ?
-            GROUP BY customer_id
-        ),
-        previous_month_customers AS (
-            SELECT
-                customer_id,
-                COUNT(*) as order_count
-            FROM verified_orders
-            WHERE business_month = ?
-            GROUP BY customer_id
-        ),
-        previous_one_month_customers AS (
-            SELECT customer_id
-            FROM previous_month_customers
-        ),
-        previous_two_month_customers AS (
-            SELECT DISTINCT customer_id
-            FROM verified_orders
-            WHERE business_month IN (?, ?)
-        ),
-        previous_lifetime_customers AS (
-            SELECT DISTINCT customer_id
-            FROM verified_orders
-            WHERE business_month < ?
-        ),
-        one_month_return_rate_base AS (
-            SELECT
-                COUNT(*) as total_current_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN cm.order_count > 1 OR prev.customer_id IS NOT NULL THEN 1
-                        ELSE 0
-                    END
-                ), 0) as returning_current_month_customers
-            FROM current_month_customers cm
-            LEFT JOIN previous_one_month_customers prev ON prev.customer_id = cm.customer_id
-        ),
-        two_month_return_rate_base AS (
-            SELECT
-                COUNT(*) as total_current_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN cm.order_count > 1 OR prev.customer_id IS NOT NULL THEN 1
-                        ELSE 0
-                    END
-                ), 0) as returning_current_month_customers
-            FROM current_month_customers cm
-            LEFT JOIN previous_two_month_customers prev ON prev.customer_id = cm.customer_id
-        ),
-        lifetime_return_rate_base AS (
-            SELECT
-                COALESCE(SUM(
-                    CASE
-                        WHEN cm.order_count > 1 OR prev.customer_id IS NOT NULL THEN 1
-                        ELSE 0
-                    END
-                ), 0) as returning_current_month_customers_lifetime
-            FROM current_month_customers cm
-            LEFT JOIN previous_lifetime_customers prev ON prev.customer_id = cm.customer_id
-        ),
-        one_month_retention_rate_base AS (
-            SELECT
-                COUNT(*) as total_previous_one_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN cm.customer_id IS NOT NULL THEN 1
-                        ELSE 0
-                    END
-                ), 0) as retained_customers
-            FROM previous_one_month_customers prev
-            LEFT JOIN current_month_customers cm ON cm.customer_id = prev.customer_id
-        ),
-        two_month_retention_rate_base AS (
-            SELECT
-                COUNT(*) as total_previous_two_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN cm.customer_id IS NOT NULL THEN 1
-                        ELSE 0
-                    END
-                ), 0) as retained_customers
-            FROM previous_two_month_customers prev
-            LEFT JOIN current_month_customers cm ON cm.customer_id = prev.customer_id
-        ),
-        current_month_repeat_order_rate_base AS (
-            SELECT
-                COUNT(*) as total_current_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN order_count >= 2 THEN 1
-                        ELSE 0
-                    END
-                ), 0) as repeat_order_customers_current_month
-            FROM current_month_customers
-        ),
-        previous_month_repeat_order_rate_base AS (
-            SELECT
-                COUNT(*) as total_previous_month_customers,
-                COALESCE(SUM(
-                    CASE
-                        WHEN order_count >= 2 THEN 1
-                        ELSE 0
-                    END
-                ), 0) as repeat_order_customers_previous_month
-            FROM previous_month_customers
-        )
-        SELECT
-            ? as current_month,
-            omrrb.returning_current_month_customers as returning_current_month_customers_one_month,
-            tmrrb.returning_current_month_customers as returning_current_month_customers_two_month,
-            tmrrb.total_current_month_customers,
-            COALESCE(
-                ROUND(
-                    100.0 * omrrb.returning_current_month_customers /
-                    NULLIF(omrrb.total_current_month_customers, 0),
-                    2
-                ),
-                0
-            ) as return_rate_one_month,
-            COALESCE(
-                ROUND(
-                    100.0 * tmrrb.returning_current_month_customers /
-                    NULLIF(tmrrb.total_current_month_customers, 0),
-                    2
-                ),
-                0
-            ) as return_rate_two_month,
-            COALESCE(
-                ROUND(
-                    100.0 * lrrb.returning_current_month_customers_lifetime /
-                    NULLIF(tmrrb.total_current_month_customers, 0),
-                    2
-                ),
-                0
-            ) as return_rate_lifetime,
-            omrtb.retained_customers as retained_customers_one_month,
-            omrtb.total_previous_one_month_customers,
-            COALESCE(
-                ROUND(
-                    100.0 * omrtb.retained_customers /
-                    NULLIF(omrtb.total_previous_one_month_customers, 0),
-                    2
-                ),
-                0
-            ) as retention_rate_one_month,
-            tmrtb.retained_customers as retained_customers_two_month,
-            tmrtb.total_previous_two_month_customers,
-            COALESCE(
-                ROUND(
-                    100.0 * tmrtb.retained_customers /
-                    NULLIF(tmrtb.total_previous_two_month_customers, 0),
-                    2
-                ),
-                0
-            ) as retention_rate_two_month,
-            COALESCE(
-                ROUND(
-                    100.0 * cmrorb.repeat_order_customers_current_month /
-                    NULLIF(cmrorb.total_current_month_customers, 0),
-                    2
-                ),
-                0
-            ) as repeat_order_rate_current_month,
-            COALESCE(
-                ROUND(
-                    100.0 * pmrorb.repeat_order_customers_previous_month /
-                    NULLIF(pmrorb.total_previous_month_customers, 0),
-                    2
-                ),
-                0
-            ) as repeat_order_rate_previous_month
-        FROM one_month_return_rate_base omrrb
-        CROSS JOIN two_month_return_rate_base tmrrb
-        CROSS JOIN lifetime_return_rate_base lrrb
-        CROSS JOIN one_month_retention_rate_base omrtb
-        CROSS JOIN two_month_retention_rate_base tmrtb
-        CROSS JOIN current_month_repeat_order_rate_base cmrorb
-        CROSS JOIN previous_month_repeat_order_rate_base pmrorb
-    """
-
-    row = conn.execute(
-        query,
-        (
-            current_month_label,
-            previous_month_label,
-            previous_month_label,
-            two_months_ago_label,
-            current_month_label,
-            current_month_label,
-        ),
-    ).fetchone()
-    metric_data = dict(row) if row else {}
+    _, current_month_end_date = month_bounds(current_month_start)
+    metric_data = build_customer_quick_view_metrics(
+        fetch_customer_metric_orders(conn, end_date=current_month_end_date),
+        current_business_date=current_business_date,
+    )
 
     return {
         "total_customers_estimate_low": base_kpis.get("total_customers_estimate_low"),
         "total_customers_estimate_high": base_kpis.get("total_customers_estimate_high"),
-        "current_month": metric_data.get("current_month"),
-        "returning_current_month_customers_one_month": metric_data.get("returning_current_month_customers_one_month", 0),
-        "returning_current_month_customers_two_month": metric_data.get("returning_current_month_customers_two_month", 0),
-        "total_current_month_customers": metric_data.get("total_current_month_customers", 0),
-        "return_rate_one_month": metric_data.get("return_rate_one_month", 0),
-        "return_rate_two_month": metric_data.get("return_rate_two_month", 0),
-        "return_rate_lifetime": metric_data.get("return_rate_lifetime", 0),
-        "retained_customers_one_month": metric_data.get("retained_customers_one_month", 0),
-        "total_previous_one_month_customers": metric_data.get("total_previous_one_month_customers", 0),
-        "retention_rate_one_month": metric_data.get("retention_rate_one_month", 0),
-        "retained_customers_two_month": metric_data.get("retained_customers_two_month", 0),
-        "total_previous_two_month_customers": metric_data.get("total_previous_two_month_customers", 0),
-        "retention_rate_two_month": metric_data.get("retention_rate_two_month", 0),
-        "repeat_order_rate_current_month": metric_data.get("repeat_order_rate_current_month", 0),
-        "repeat_order_rate_previous_month": metric_data.get("repeat_order_rate_previous_month", 0),
-        # Legacy aliases preserved for compatibility with any existing consumers.
-        "return_rate_current_month": metric_data.get("return_rate_two_month", 0),
-        "retention_rate_current_month": metric_data.get("retention_rate_two_month", 0),
+        **metric_data,
     }
 
 def fetch_daily_sales(conn):
