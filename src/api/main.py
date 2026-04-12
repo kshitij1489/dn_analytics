@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.routers import (
+    customer_analytics,
     insights,
     menu,
     operations,
@@ -196,6 +197,7 @@ app.add_middleware(
 )
 
 app.include_router(insights.router, prefix="/api/insights", tags=["Insights"])
+app.include_router(customer_analytics.router, prefix="/api/insights/customer", tags=["Customer Analytics"])
 app.include_router(menu.router, prefix="/api/menu", tags=["Menu"])
 app.include_router(operations.router, prefix="/api/sync", tags=["Operations"])
 app.include_router(orders.router, prefix="/api/orders", tags=["Orders"])

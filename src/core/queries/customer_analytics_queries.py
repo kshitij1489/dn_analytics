@@ -7,8 +7,11 @@ import pandas as pd
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
     build_customer_return_rate_analysis,
+    build_customer_retention_rate_analysis,
     build_monthly_customer_metric_rows,
+    build_repeat_order_rate_analysis,
     fetch_customer_metric_orders,
+    resolve_lookback_window,
     shift_month,
 )
 from src.core.utils.business_date import get_current_business_date
@@ -30,15 +33,85 @@ def fetch_customer_return_rate_analysis(
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
 ):
+    filters = _build_customer_metric_filters(
+        evaluation_start_date=evaluation_start_date,
+        evaluation_end_date=evaluation_end_date,
+        lookback_start_date=lookback_start_date,
+        lookback_end_date=lookback_end_date,
+        lookback_days=lookback_days,
+        min_orders_per_customer=min_orders_per_customer,
+        order_sources=order_sources,
+        include_lookback=True,
+    )
+    return build_customer_return_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+
+
+def fetch_customer_retention_rate_analysis(
+    conn,
+    *,
+    evaluation_start_date: str | None = None,
+    evaluation_end_date: str | None = None,
+    lookback_start_date: str | None = None,
+    lookback_end_date: str | None = None,
+    lookback_days: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    filters = _build_customer_metric_filters(
+        evaluation_start_date=evaluation_start_date,
+        evaluation_end_date=evaluation_end_date,
+        lookback_start_date=lookback_start_date,
+        lookback_end_date=lookback_end_date,
+        lookback_days=lookback_days,
+        min_orders_per_customer=min_orders_per_customer,
+        order_sources=order_sources,
+        include_lookback=True,
+    )
+    return build_customer_retention_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+
+
+def fetch_repeat_order_rate_analysis(
+    conn,
+    *,
+    evaluation_start_date: str | None = None,
+    evaluation_end_date: str | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    filters = _build_customer_metric_filters(
+        evaluation_start_date=evaluation_start_date,
+        evaluation_end_date=evaluation_end_date,
+        min_orders_per_customer=min_orders_per_customer,
+        order_sources=order_sources,
+        include_lookback=False,
+    )
+    return build_repeat_order_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+
+
+def _build_customer_metric_filters(
+    *,
+    evaluation_start_date: str | None = None,
+    evaluation_end_date: str | None = None,
+    lookback_start_date: str | None = None,
+    lookback_end_date: str | None = None,
+    lookback_days: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+    include_lookback: bool,
+):
     current_business_date = get_current_business_date()
     resolved_evaluation_start_date = evaluation_start_date or DateType.fromisoformat(current_business_date).replace(day=1).isoformat()
-    evaluation_month_start = DateType.fromisoformat(resolved_evaluation_start_date).replace(day=1)
-    previous_month_start = shift_month(evaluation_month_start, -1)
-    previous_month_end = evaluation_month_start - timedelta(days=1)
-    default_lookback_start_date = None if lookback_days is not None else previous_month_start.isoformat()
-    default_lookback_end_date = None if lookback_days is not None else previous_month_end.isoformat()
+    default_lookback_start_date = None
+    default_lookback_end_date = None
 
-    filters = CustomerMetricFilters(
+    if include_lookback:
+        evaluation_month_start = DateType.fromisoformat(resolved_evaluation_start_date).replace(day=1)
+        previous_month_start = shift_month(evaluation_month_start, -1)
+        previous_month_end = evaluation_month_start - timedelta(days=1)
+        default_lookback_start_date = None if lookback_days is not None else previous_month_start.isoformat()
+        default_lookback_end_date = None if lookback_days is not None else previous_month_end.isoformat()
+
+    return CustomerMetricFilters(
         evaluation_start_date=resolved_evaluation_start_date,
         evaluation_end_date=evaluation_end_date or current_business_date,
         lookback_start_date=lookback_start_date if lookback_start_date is not None else default_lookback_start_date,
@@ -47,15 +120,23 @@ def fetch_customer_return_rate_analysis(
         min_orders_per_customer=min_orders_per_customer,
         order_sources=order_sources,
     )
+
+
+def _fetch_metric_orders(conn, filters: CustomerMetricFilters):
+    resolved_lookback_start_date, resolved_lookback_end_date = resolve_lookback_window(filters)
+    has_unbounded_lookback = bool(resolved_lookback_end_date and not resolved_lookback_start_date)
+    fetch_start_candidates = [
+        date_str for date_str in (filters.evaluation_start_date, resolved_lookback_start_date) if date_str
+    ]
     fetch_end_date_candidates = [
         date_str for date_str in (filters.evaluation_end_date, filters.lookback_end_date) if date_str
     ]
-    orders = fetch_customer_metric_orders(
+    return fetch_customer_metric_orders(
         conn,
+        start_date=None if has_unbounded_lookback else min(fetch_start_candidates) if fetch_start_candidates else None,
         end_date=max(fetch_end_date_candidates) if fetch_end_date_candidates else None,
         order_sources=filters.order_sources,
     )
-    return build_customer_return_rate_analysis(orders, filters)
 
 
 def fetch_top_customers(conn):

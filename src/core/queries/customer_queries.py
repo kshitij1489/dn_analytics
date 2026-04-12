@@ -8,6 +8,8 @@ from src.core.queries.customer_analytics_queries import (
     fetch_brand_awareness,
     fetch_customer_loyalty,
     fetch_customer_return_rate_analysis,
+    fetch_customer_retention_rate_analysis,
+    fetch_repeat_order_rate_analysis,
     fetch_top_customers,
 )
 from src.core.queries.customer_merge_history_queries import fetch_customer_merge_history
@@ -32,7 +34,9 @@ __all__ = [
     "fetch_customer_merge_preview",
     "fetch_customer_profile_data",
     "fetch_customer_reorder_rate",
+    "fetch_customer_retention_rate_analysis",
     "fetch_customer_similarity_candidates",
+    "fetch_repeat_order_rate_analysis",
     "fetch_reorder_rate_trend",
     "fetch_top_customers",
     "format_customer_address",

@@ -3,10 +3,13 @@ import unittest
 from unittest.mock import patch
 
 from src.core.queries.customer_analytics_queries import fetch_customer_loyalty
+from src.core.queries.customer_analytics_queries import fetch_customer_retention_rate_analysis
 from src.core.queries.customer_analytics_queries import fetch_customer_return_rate_analysis
+from src.core.queries.customer_analytics_queries import fetch_repeat_order_rate_analysis
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
     calculate_customer_return_rate,
+    calculate_customer_retention_rate,
     calculate_repeat_order_rate,
     fetch_customer_metric_orders,
 )
@@ -165,6 +168,63 @@ class CustomerMetricQueryTests(unittest.TestCase):
         self.assertEqual(rows[2]["returning_status"], "New")
         self.assertEqual(rows[2]["return_reason"], "First-time within selected windows")
 
+    def test_fetch_customer_retention_rate_analysis_returns_summary_and_detail_rows(self) -> None:
+        data = fetch_customer_retention_rate_analysis(
+            self.conn,
+            evaluation_start_date="2024-02-01",
+            evaluation_end_date="2024-02-29",
+            lookback_start_date="2024-01-01",
+            lookback_end_date="2024-01-31",
+            min_orders_per_customer=1,
+        )
+
+        summary = data["summary"]
+        self.assertEqual(summary["evaluation_start_date"], "2024-02-01")
+        self.assertEqual(summary["evaluation_end_date"], "2024-02-29")
+        self.assertEqual(summary["lookback_start_date"], "2024-01-01")
+        self.assertEqual(summary["lookback_end_date"], "2024-01-31")
+        self.assertEqual(summary["prior_cohort_size"], 3)
+        self.assertEqual(summary["retained_customers"], 1)
+        self.assertEqual(summary["not_retained_customers"], 2)
+        self.assertAlmostEqual(summary["retention_rate"], 33.33)
+        self.assertEqual(summary["order_source_label"], "All")
+
+        rows = data["rows"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["customer_id"], 1)
+        self.assertEqual(rows[0]["retention_status"], "Retained")
+        self.assertEqual(rows[0]["evaluation_order_count"], 1)
+        self.assertEqual(rows[0]["first_evaluation_order_date"], "2024-02-10")
+
+        self.assertEqual(rows[1]["customer_id"], 3)
+        self.assertEqual(rows[1]["retention_status"], "Not Retained")
+        self.assertEqual(rows[1]["evaluation_order_count"], 0)
+        self.assertIsNone(rows[1]["first_evaluation_order_date"])
+
+    def test_fetch_repeat_order_rate_analysis_returns_summary_and_detail_rows(self) -> None:
+        data = fetch_repeat_order_rate_analysis(
+            self.conn,
+            evaluation_start_date="2024-02-01",
+            evaluation_end_date="2024-02-29",
+            min_orders_per_customer=2,
+        )
+
+        summary = data["summary"]
+        self.assertEqual(summary["evaluation_start_date"], "2024-02-01")
+        self.assertEqual(summary["evaluation_end_date"], "2024-02-29")
+        self.assertEqual(summary["repeat_order_customers"], 1)
+        self.assertEqual(summary["single_order_customers"], 2)
+        self.assertEqual(summary["total_customers"], 3)
+        self.assertAlmostEqual(summary["repeat_order_rate"], 33.33)
+        self.assertEqual(summary["order_source_label"], "All")
+
+        rows = data["rows"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["customer_id"], 2)
+        self.assertEqual(rows[0]["repeat_order_status"], "Repeat")
+        self.assertEqual(rows[0]["evaluation_order_count"], 2)
+        self.assertEqual(rows[1]["repeat_order_status"], "Single Order")
+
     def test_shared_helper_supports_order_source_filters_and_thresholds(self) -> None:
         all_orders = fetch_customer_metric_orders(self.conn)
         pos_orders = fetch_customer_metric_orders(self.conn, order_sources=("POS",))
@@ -205,6 +265,26 @@ class CustomerMetricQueryTests(unittest.TestCase):
                 min_orders_per_customer=2,
             ),
         )
+        retention_rate_one = calculate_customer_retention_rate(
+            all_orders,
+            CustomerMetricFilters(
+                evaluation_start_date="2024-02-01",
+                evaluation_end_date="2024-02-29",
+                lookback_start_date="2024-01-01",
+                lookback_end_date="2024-01-31",
+                min_orders_per_customer=1,
+            ),
+        )
+        retention_rate_two = calculate_customer_retention_rate(
+            all_orders,
+            CustomerMetricFilters(
+                evaluation_start_date="2024-02-01",
+                evaluation_end_date="2024-02-29",
+                lookback_start_date="2024-01-01",
+                lookback_end_date="2024-01-31",
+                min_orders_per_customer=2,
+            ),
+        )
 
         self.assertEqual(rolling_return_rate["returning_customers"], 2)
         self.assertAlmostEqual(rolling_return_rate["return_rate"], 66.67)
@@ -216,6 +296,10 @@ class CustomerMetricQueryTests(unittest.TestCase):
         self.assertEqual(swiggy_return_rate["total_customers"], 1)
         self.assertEqual(swiggy_return_rate["returning_customers"], 1)
         self.assertAlmostEqual(swiggy_return_rate["return_rate"], 100.0)
+        self.assertEqual(retention_rate_one["retained_customers"], 1)
+        self.assertAlmostEqual(retention_rate_one["retention_rate"], 33.33)
+        self.assertEqual(retention_rate_two["retained_customers"], 0)
+        self.assertAlmostEqual(retention_rate_two["retention_rate"], 0.0)
 
     def test_shared_helper_returns_zero_rate_for_empty_evaluation_windows(self) -> None:
         orders = fetch_customer_metric_orders(self.conn)

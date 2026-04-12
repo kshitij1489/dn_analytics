@@ -100,6 +100,69 @@ export interface CustomerReturnRateResponse {
     rows: CustomerReturnRateRow[];
 }
 
+export interface CustomerRetentionRateSummary {
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    lookback_start_date?: string | null;
+    lookback_end_date?: string | null;
+    lookback_days?: number | null;
+    min_orders_per_customer: number;
+    order_sources: string[];
+    order_source_label: string;
+    total_customers: number;
+    prior_cohort_size: number;
+    retained_customers: number;
+    retention_rate: number;
+    not_retained_customers: number;
+}
+
+export interface CustomerRetentionRateRow extends Record<string, string | number | null> {
+    customer_id: string | number;
+    customer_name: string;
+    lookback_order_count: number;
+    evaluation_order_count: number;
+    evaluation_total_spend: number;
+    first_evaluation_order_date: string | null;
+    last_evaluation_order_date: string | null;
+    retained_flag: number;
+    retention_status: string;
+    retention_reason: string;
+}
+
+export interface CustomerRetentionRateResponse {
+    summary: CustomerRetentionRateSummary;
+    rows: CustomerRetentionRateRow[];
+}
+
+export interface CustomerRepeatOrderRateSummary {
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    min_orders_per_customer: number;
+    order_sources: string[];
+    order_source_label: string;
+    total_customers: number;
+    repeat_order_customers: number;
+    repeat_order_rate: number;
+    single_order_customers: number;
+}
+
+export interface CustomerRepeatOrderRateRow extends Record<string, string | number> {
+    customer_id: string | number;
+    customer_name: string;
+    evaluation_order_count: number;
+    evaluation_total_spend: number;
+    first_order_date: string;
+    last_order_date: string;
+    repeat_order_flag: number;
+    repeat_order_status: string;
+    repeat_order_reason: string;
+}
+
+export interface CustomerRepeatOrderRateResponse {
+    summary: CustomerRepeatOrderRateSummary;
+    rows: CustomerRepeatOrderRateRow[];
+}
+
 export interface DailySalesRow {
     order_date: string;
     total_revenue: number;
