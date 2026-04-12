@@ -112,7 +112,7 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
                         customerQuickView?.return_rate_two_month,
                         customerQuickView?.return_rate_lifetime,
                     ], 'Lookback Period: 1M | 2M | LifeTime')}
-                    hint="Share of current customers who came back.\n1st = 1 month, 2nd = 2 months, 3rd = lifetime."
+                    hint={'Share of current customers who came back.\n1st = 1 month, 2nd = 2 months, 3rd = lifetime.'}
                 />
                 <KPICard
                     title="Customer Retention Rate"
@@ -120,7 +120,7 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
                         customerQuickView?.retention_rate_one_month,
                         customerQuickView?.retention_rate_two_month,
                     ], 'Lookback Period: 1M | 2M')}
-                    hint="Share of past customers who returned this month.\n1st = last month, 2nd = last 2 months."
+                    hint={'Share of past customers who returned this month.\n1st = last month, 2nd = last 2 months.'}
                 />
                 <KPICard
                     title="Repeat Order Rate"
@@ -128,7 +128,7 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
                         customerQuickView?.repeat_order_rate_current_month,
                         customerQuickView?.repeat_order_rate_previous_month,
                     ], 'Current Month | Previous Month')}
-                    hint="Share of customers with 2+ orders.\n1st = current month, 2nd = previous month."
+                    hint={'Share of customers with 2+ orders.\n1st = current month, 2nd = previous month.'}
                 />
             </div>
 
