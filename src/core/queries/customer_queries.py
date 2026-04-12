@@ -7,6 +7,7 @@ Keeps legacy import paths stable while delegating to focused query modules.
 from src.core.queries.customer_analytics_queries import (
     fetch_brand_awareness,
     fetch_customer_loyalty,
+    fetch_customer_return_rate_analysis,
     fetch_top_customers,
 )
 from src.core.queries.customer_merge_history_queries import fetch_customer_merge_history
@@ -26,6 +27,7 @@ from src.core.queries.customer_similarity_queries import (
 __all__ = [
     "fetch_brand_awareness",
     "fetch_customer_loyalty",
+    "fetch_customer_return_rate_analysis",
     "fetch_customer_merge_history",
     "fetch_customer_merge_preview",
     "fetch_customer_profile_data",

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from src.core.queries.customer_analytics_queries import fetch_customer_loyalty
+from src.core.queries.customer_analytics_queries import fetch_customer_return_rate_analysis
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
     calculate_customer_return_rate,
@@ -21,6 +22,7 @@ class CustomerMetricQueryTests(unittest.TestCase):
             """
             CREATE TABLE customers (
                 customer_id INTEGER PRIMARY KEY,
+                name TEXT,
                 is_verified BOOLEAN NOT NULL DEFAULT 0
             );
 
@@ -35,14 +37,14 @@ class CustomerMetricQueryTests(unittest.TestCase):
             """
         )
         self.conn.executemany(
-            "INSERT INTO customers (customer_id, is_verified) VALUES (?, ?)",
+            "INSERT INTO customers (customer_id, name, is_verified) VALUES (?, ?, ?)",
             [
-                (1, 1),
-                (2, 1),
-                (3, 1),
-                (4, 1),
-                (5, 1),
-                (6, 0),
+                (1, "Aarav", 1),
+                (2, "Bhavna", 1),
+                (3, "Charu", 1),
+                (4, "Dev", 1),
+                (5, "Esha", 1),
+                (6, "Ghost", 0),
             ],
         )
         self.conn.executemany(
@@ -120,6 +122,48 @@ class CustomerMetricQueryTests(unittest.TestCase):
         self.assertEqual(data["total_customers"], 3)
         self.assertEqual(data["returning_customers"], 1)
         self.assertAlmostEqual(data["reorder_rate"], 50.0)
+
+    def test_fetch_customer_return_rate_analysis_returns_summary_and_detail_rows(self) -> None:
+        data = fetch_customer_return_rate_analysis(
+            self.conn,
+            evaluation_start_date="2024-02-01",
+            evaluation_end_date="2024-02-29",
+            lookback_start_date="2024-01-01",
+            lookback_end_date="2024-01-31",
+            min_orders_per_customer=2,
+        )
+
+        summary = data["summary"]
+        self.assertEqual(summary["evaluation_start_date"], "2024-02-01")
+        self.assertEqual(summary["evaluation_end_date"], "2024-02-29")
+        self.assertEqual(summary["lookback_start_date"], "2024-01-01")
+        self.assertEqual(summary["lookback_end_date"], "2024-01-31")
+        self.assertEqual(summary["total_customers"], 3)
+        self.assertEqual(summary["returning_customers"], 2)
+        self.assertAlmostEqual(summary["return_rate"], 66.67)
+        self.assertEqual(summary["new_customers"], 1)
+        self.assertEqual(summary["returning_by_repeat_orders"], 1)
+        self.assertEqual(summary["returning_from_lookback"], 1)
+        self.assertEqual(summary["returning_by_both_conditions"], 0)
+        self.assertEqual(summary["order_source_label"], "All")
+
+        rows = data["rows"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["customer_id"], 2)
+        self.assertEqual(rows[0]["returning_status"], "Returning")
+        self.assertEqual(rows[0]["return_reason"], "Repeat in evaluation window")
+        self.assertEqual(rows[0]["evaluation_order_count"], 2)
+        self.assertEqual(rows[0]["lookback_order_count"], 0)
+
+        self.assertEqual(rows[1]["customer_id"], 1)
+        self.assertEqual(rows[1]["returning_status"], "Returning")
+        self.assertEqual(rows[1]["return_reason"], "Ordered in lookback window")
+        self.assertEqual(rows[1]["evaluation_order_count"], 1)
+        self.assertEqual(rows[1]["lookback_order_count"], 1)
+
+        self.assertEqual(rows[2]["customer_id"], 4)
+        self.assertEqual(rows[2]["returning_status"], "New")
+        self.assertEqual(rows[2]["return_reason"], "First-time within selected windows")
 
     def test_shared_helper_supports_order_source_filters_and_thresholds(self) -> None:
         all_orders = fetch_customer_metric_orders(self.conn)

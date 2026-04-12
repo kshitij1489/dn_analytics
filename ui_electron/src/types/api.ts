@@ -62,6 +62,44 @@ export interface CustomerQuickViewData {
     retention_rate_current_month?: number;
 }
 
+export interface CustomerReturnRateSummary {
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    lookback_start_date?: string | null;
+    lookback_end_date?: string | null;
+    lookback_days?: number | null;
+    min_orders_per_customer: number;
+    order_sources: string[];
+    order_source_label: string;
+    total_customers: number;
+    returning_customers: number;
+    return_rate: number;
+    new_customers: number;
+    returning_by_repeat_orders: number;
+    returning_from_lookback: number;
+    returning_by_both_conditions: number;
+}
+
+export interface CustomerReturnRateRow extends Record<string, string | number> {
+    customer_id: string | number;
+    customer_name: string;
+    evaluation_order_count: number;
+    lookback_order_count: number;
+    evaluation_total_spend: number;
+    first_order_date: string;
+    last_order_date: string;
+    qualified_by_repeat_orders: number;
+    qualified_by_lookback: number;
+    returning_flag: number;
+    returning_status: string;
+    return_reason: string;
+}
+
+export interface CustomerReturnRateResponse {
+    summary: CustomerReturnRateSummary;
+    rows: CustomerReturnRateRow[];
+}
+
 export interface DailySalesRow {
     order_date: string;
     total_revenue: number;

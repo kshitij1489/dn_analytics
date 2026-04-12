@@ -71,6 +71,7 @@ export const endpoints = {
         orderSource: (params?: any) => api.get('/insights/order_source', { params }),
         customerQuickView: (params?: any) => api.get('/insights/customer/quick_view', { params }),
         customerReorderRate: (params?: any) => api.get('/insights/customer/reorder_rate', { params }),
+        customerReturnRateAnalysis: (params?: any) => api.get('/insights/customer/return_rate_analysis', { params }),
         reorderRateTrend: (params?: any) => api.get('/insights/customer/reorder_rate_trend', { params }),
         customerLoyalty: (params?: any) => api.get('/insights/customer/loyalty', { params }),
         topCustomers: (params?: any) => api.get('/insights/customer/top', { params }),

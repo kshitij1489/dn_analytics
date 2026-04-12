@@ -1,14 +1,61 @@
+from __future__ import annotations
+
+from datetime import date as DateType, timedelta
+
 import pandas as pd
 
 from src.core.queries.customer_metric_helpers import (
+    CustomerMetricFilters,
+    build_customer_return_rate_analysis,
     build_monthly_customer_metric_rows,
     fetch_customer_metric_orders,
+    shift_month,
 )
+from src.core.utils.business_date import get_current_business_date
 
 
 def fetch_customer_loyalty(conn):
     rows = build_monthly_customer_metric_rows(fetch_customer_metric_orders(conn))
     return pd.DataFrame(rows)
+
+
+def fetch_customer_return_rate_analysis(
+    conn,
+    *,
+    evaluation_start_date: str | None = None,
+    evaluation_end_date: str | None = None,
+    lookback_start_date: str | None = None,
+    lookback_end_date: str | None = None,
+    lookback_days: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    current_business_date = get_current_business_date()
+    resolved_evaluation_start_date = evaluation_start_date or DateType.fromisoformat(current_business_date).replace(day=1).isoformat()
+    evaluation_month_start = DateType.fromisoformat(resolved_evaluation_start_date).replace(day=1)
+    previous_month_start = shift_month(evaluation_month_start, -1)
+    previous_month_end = evaluation_month_start - timedelta(days=1)
+    default_lookback_start_date = None if lookback_days is not None else previous_month_start.isoformat()
+    default_lookback_end_date = None if lookback_days is not None else previous_month_end.isoformat()
+
+    filters = CustomerMetricFilters(
+        evaluation_start_date=resolved_evaluation_start_date,
+        evaluation_end_date=evaluation_end_date or current_business_date,
+        lookback_start_date=lookback_start_date if lookback_start_date is not None else default_lookback_start_date,
+        lookback_end_date=lookback_end_date if lookback_end_date is not None else default_lookback_end_date,
+        lookback_days=lookback_days,
+        min_orders_per_customer=min_orders_per_customer,
+        order_sources=order_sources,
+    )
+    fetch_end_date_candidates = [
+        date_str for date_str in (filters.evaluation_end_date, filters.lookback_end_date) if date_str
+    ]
+    orders = fetch_customer_metric_orders(
+        conn,
+        end_date=max(fetch_end_date_candidates) if fetch_end_date_candidates else None,
+        order_sources=filters.order_sources,
+    )
+    return build_customer_return_rate_analysis(orders, filters)
 
 
 def fetch_top_customers(conn):

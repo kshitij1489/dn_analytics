@@ -4,8 +4,9 @@ Insights Router - Analytics and KPI endpoints
 Provides endpoints for dashboard KPIs, sales trends, customer analytics, etc.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 import pandas as pd
+from typing import List, Optional
 from src.core.queries import insights_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
@@ -126,6 +127,35 @@ def get_customer_reorder_rate(conn=Depends(get_db)):
     return data if data else {}
 
 
+@router.get("/customer/return_rate_analysis")
+def get_customer_return_rate_analysis(
+    evaluation_start_date: str = None,
+    evaluation_end_date: str = None,
+    lookback_start_date: str = None,
+    lookback_end_date: str = None,
+    lookback_days: int = None,
+    min_orders_per_customer: int = 2,
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Get detailed customer return-rate analytics for a custom evaluation and lookback window."""
+    from src.core.queries.customer_queries import fetch_customer_return_rate_analysis
+
+    try:
+        return fetch_customer_return_rate_analysis(
+            conn,
+            evaluation_start_date=evaluation_start_date,
+            evaluation_end_date=evaluation_end_date,
+            lookback_start_date=lookback_start_date,
+            lookback_end_date=lookback_end_date,
+            lookback_days=lookback_days,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/customer/quick_view")
 def get_customer_quick_view(conn=Depends(get_db)):
     """Get customer quick-view KPIs for the Customers workspace."""
@@ -193,5 +223,4 @@ def get_brand_awareness(granularity: str = 'day', conn=Depends(get_db)):
     from src.core.queries.customer_queries import fetch_brand_awareness
     data = fetch_brand_awareness(conn, granularity)
     return {"data": data}
-
 

@@ -50,6 +50,7 @@ class CustomerMetricFilters:
 class CustomerMetricOrder:
     order_id: int
     customer_id: int
+    customer_name: str | None
     created_on: str
     total: float
     order_from: str
@@ -133,6 +134,7 @@ def fetch_customer_metric_orders(
         SELECT
             o.order_id,
             o.customer_id,
+            c.name as customer_name,
             o.created_on,
             COALESCE(o.total, 0) as total,
             COALESCE(o.order_from, 'Unknown') as order_from
@@ -426,6 +428,123 @@ def build_customer_quick_view_metrics(
     }
 
 
+def build_customer_return_rate_detail_rows(
+    orders: Sequence[CustomerMetricOrder],
+    filters: CustomerMetricFilters,
+) -> list[dict[str, object]]:
+    lookback_start_date, lookback_end_date = resolve_lookback_window(filters)
+    lookback_counts = count_orders_by_customer(orders, lookback_start_date, lookback_end_date)
+    customer_rows: dict[int, dict[str, object]] = {}
+
+    for order in orders:
+        if filters.evaluation_start_date and order.business_date < filters.evaluation_start_date:
+            continue
+        if filters.evaluation_end_date and order.business_date > filters.evaluation_end_date:
+            continue
+
+        row = customer_rows.setdefault(
+            order.customer_id,
+            {
+                "customer_id": order.customer_id,
+                "customer_name": order.customer_name or f"Customer {order.customer_id}",
+                "evaluation_order_count": 0,
+                "lookback_order_count": int(lookback_counts.get(order.customer_id, 0)),
+                "evaluation_total_spend": Decimal("0"),
+                "first_order_date": order.business_date,
+                "last_order_date": order.business_date,
+            },
+        )
+        row["evaluation_order_count"] = int(row["evaluation_order_count"]) + 1
+        row["evaluation_total_spend"] = cast_decimal(row["evaluation_total_spend"]) + Decimal(str(order.total))
+        if order.business_date < str(row["first_order_date"]):
+            row["first_order_date"] = order.business_date
+        if order.business_date > str(row["last_order_date"]):
+            row["last_order_date"] = order.business_date
+
+    rows: list[dict[str, object]] = []
+    for row in customer_rows.values():
+        evaluation_order_count = int(row["evaluation_order_count"])
+        lookback_order_count = int(row["lookback_order_count"])
+        qualified_by_repeat_orders = 1 if evaluation_order_count >= filters.min_orders_per_customer else 0
+        qualified_by_lookback = 1 if lookback_order_count > 0 else 0
+        returning_flag = 1 if qualified_by_repeat_orders or qualified_by_lookback else 0
+
+        if qualified_by_repeat_orders and qualified_by_lookback:
+            return_reason = "Repeat in evaluation window and ordered in lookback window"
+        elif qualified_by_repeat_orders:
+            return_reason = "Repeat in evaluation window"
+        elif qualified_by_lookback:
+            return_reason = "Ordered in lookback window"
+        else:
+            return_reason = "First-time within selected windows"
+
+        rows.append(
+            {
+                "customer_id": row["customer_id"],
+                "customer_name": row["customer_name"],
+                "evaluation_order_count": evaluation_order_count,
+                "lookback_order_count": lookback_order_count,
+                "evaluation_total_spend": round_half_up(cast_decimal(row["evaluation_total_spend"]), 2),
+                "first_order_date": row["first_order_date"],
+                "last_order_date": row["last_order_date"],
+                "qualified_by_repeat_orders": qualified_by_repeat_orders,
+                "qualified_by_lookback": qualified_by_lookback,
+                "returning_flag": returning_flag,
+                "returning_status": "Returning" if returning_flag else "New",
+                "return_reason": return_reason,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -int(row["returning_flag"]),
+            -int(row["evaluation_order_count"]),
+            -float(row["evaluation_total_spend"]),
+            str(row["customer_name"]).lower(),
+        )
+    )
+    return rows
+
+
+def build_customer_return_rate_analysis(
+    orders: Sequence[CustomerMetricOrder],
+    filters: CustomerMetricFilters,
+) -> dict[str, object]:
+    detail_rows = build_customer_return_rate_detail_rows(orders, filters)
+    metric = calculate_customer_return_rate(orders, filters)
+    resolved_order_sources = list(normalize_order_sources(filters.order_sources) or [])
+    lookback_start_date, lookback_end_date = resolve_lookback_window(filters)
+
+    returning_by_repeat_orders = sum(int(row["qualified_by_repeat_orders"]) for row in detail_rows)
+    returning_from_lookback = sum(int(row["qualified_by_lookback"]) for row in detail_rows)
+    returning_by_both_conditions = sum(
+        1
+        for row in detail_rows
+        if int(row["qualified_by_repeat_orders"]) and int(row["qualified_by_lookback"])
+    )
+
+    return {
+        "summary": {
+            "evaluation_start_date": filters.evaluation_start_date,
+            "evaluation_end_date": filters.evaluation_end_date,
+            "lookback_start_date": lookback_start_date,
+            "lookback_end_date": lookback_end_date,
+            "lookback_days": filters.lookback_days,
+            "min_orders_per_customer": filters.min_orders_per_customer,
+            "order_sources": resolved_order_sources,
+            "order_source_label": "All" if not resolved_order_sources else ", ".join(resolved_order_sources),
+            "total_customers": metric["total_customers"],
+            "returning_customers": metric["returning_customers"],
+            "return_rate": metric["return_rate"],
+            "new_customers": int(metric["total_customers"]) - int(metric["returning_customers"]),
+            "returning_by_repeat_orders": returning_by_repeat_orders,
+            "returning_from_lookback": returning_from_lookback,
+            "returning_by_both_conditions": returning_by_both_conditions,
+        },
+        "rows": detail_rows,
+    }
+
+
 def count_orders_by_customer(
     orders: Sequence[CustomerMetricOrder],
     start_date: str | None,
@@ -474,6 +593,7 @@ def _to_metric_order(row) -> CustomerMetricOrder:
     return CustomerMetricOrder(
         order_id=int(row["order_id"]),
         customer_id=int(row["customer_id"]),
+        customer_name=row["customer_name"],
         created_on=row["created_on"],
         total=float(row["total"] or 0),
         order_from=row["order_from"],
