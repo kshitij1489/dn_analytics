@@ -20,10 +20,16 @@ import {
     getApiErrorMessage,
 } from '../components/customers/customerIdentity';
 import { useNavigation } from '../contexts/NavigationContext';
+import type { CustomerQuickViewData } from '../types/api';
 import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 import './Customers.css';
 
 type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge';
+
+interface TodaySummarySnapshot {
+    total_customers?: number;
+    returning_customer_count?: number;
+}
 
 function isSameMergeRequest(
     left: CustomerMergeRequestPayload | null,
@@ -58,7 +64,8 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [executingMerge, setExecutingMerge] = useState(false);
     const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
-    const [kpis, setKpis] = useState<any>(null);
+    const [quickView, setQuickView] = useState<CustomerQuickViewData | null>(null);
+    const [todaySummary, setTodaySummary] = useState<TodaySummarySnapshot | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const { pageParams, clearParams } = useNavigation();
     const activeMergeRequestRef = useRef<CustomerMergeRequestPayload | null>(null);
@@ -82,17 +89,63 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
     }, [activeMergeRequest]);
 
     useEffect(() => {
-        const loadKPIs = async () => {
+        const loadQuickView = async () => {
             try {
-                const res = await endpoints.insights.kpis({ _t: lastDbSync });
-                setKpis(res.data);
+                const [quickViewRes, todaySummaryRes] = await Promise.allSettled([
+                    endpoints.insights.customerQuickView({ _t: lastDbSync }),
+                    endpoints.today.getSummary(),
+                ]);
+
+                if (quickViewRes.status === 'fulfilled') {
+                    setQuickView(quickViewRes.value.data);
+                } else {
+                    setPopup({ type: 'error', message: getApiErrorMessage(quickViewRes.reason) });
+                }
+
+                if (todaySummaryRes.status === 'fulfilled') {
+                    setTodaySummary(todaySummaryRes.value.data);
+                } else {
+                    setPopup({ type: 'error', message: getApiErrorMessage(todaySummaryRes.reason) });
+                }
             } catch (error: any) {
                 setPopup({ type: 'error', message: getApiErrorMessage(error) });
             }
         };
 
-        void loadKPIs();
+        void loadQuickView();
     }, [lastDbSync]);
+
+    const formatRate = (value?: number | null) => {
+        if (value == null || Number.isNaN(value)) return '0.0%';
+        return `${value.toFixed(1)}%`;
+    };
+
+    const renderRateValues = (
+        values: Array<number | null | undefined>,
+        label: string,
+    ) => (
+        <div>
+            <span>
+                {values.map((value, index) => (
+                    <span key={index}>
+                        {index > 0 && <span className="customers-kpi-separator"> | </span>}
+                        <span>{formatRate(value)}</span>
+                    </span>
+                ))}
+            </span>
+            <div
+                style={{
+                    marginTop: '8px',
+                    fontSize: '0.52em',
+                    fontWeight: 500,
+                    color: 'var(--text-secondary)',
+                    lineHeight: 1.3,
+                }}
+            >
+                {label}
+            </div>
+        </div>
+    );
 
     const loadSimilarSuggestions = useCallback(async () => {
         setLoadingSimilar(true);
@@ -249,14 +302,45 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
 
             <div className="customers-kpis">
-                <KPICard title="Total Revenue" value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`} />
-                <KPICard title="Today's Revenue" value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`} />
-                <KPICard title="Orders" value={kpis?.total_orders?.toLocaleString() || 0} />
-                <KPICard title="Avg Order" value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`} />
                 <KPICard
                     title="Total Customers (est.)"
-                    value={formatCustomerEstimateRange(kpis)}
+                    value={formatCustomerEstimateRange(quickView)}
                     hint={CUSTOMERS_ESTIMATE_HINT}
+                />
+                <KPICard
+                    title="Customers(Today)"
+                    value={todaySummary?.total_customers?.toLocaleString() || 0}
+                    hint="Customers who ordered today."
+                />
+                <KPICard
+                    title="Returning Customers(Today)"
+                    value={todaySummary?.returning_customer_count?.toLocaleString() || 0}
+                    hint="Today's customers who had ordered before."
+                />
+                <KPICard
+                    title="Customer Return Rate"
+                    value={renderRateValues([
+                        quickView?.return_rate_one_month,
+                        quickView?.return_rate_two_month,
+                        quickView?.return_rate_lifetime,
+                    ], 'Lookback Period: 1M | 2M | LifeTime')}
+                    hint="Share of current customers who came back.\n1st = 1 month, 2nd = 2 months, 3rd = lifetime."
+                />
+                <KPICard
+                    title="Customer Retention Rate"
+                    value={renderRateValues([
+                        quickView?.retention_rate_one_month,
+                        quickView?.retention_rate_two_month,
+                    ], 'Lookback Period: 1M | 2M')}
+                    hint="Share of past customers who returned this month.\n1st = last month, 2nd = last 2 months."
+                />
+                <KPICard
+                    title="Repeat Order Rate"
+                    value={renderRateValues([
+                        quickView?.repeat_order_rate_current_month,
+                        quickView?.repeat_order_rate_previous_month,
+                    ], 'Current Month | Previous Month')}
+                    hint="Share of customers with 2+ orders.\n1st = current month, 2nd = previous month."
                 />
             </div>
 

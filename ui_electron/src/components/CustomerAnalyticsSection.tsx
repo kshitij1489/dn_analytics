@@ -2,15 +2,40 @@ import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
 import { exportToCSV } from '../utils/csv';
 import { CustomerLink } from './CustomerLink';
-import { KPICard } from './KPICard';
 import { ResizableTableWrapper } from './ResizableTableWrapper';
 import { TabButton } from './TabButton';
 
+type CustomerAnalyticsView = 'loyalty' | 'top' | 'returnRate' | 'retentionRate' | 'repeatOrderRate';
+type SortableValue = string | number | null | undefined;
+
+interface LoyaltyRow extends Record<string, SortableValue> {
+    Month: string;
+    'Repeat Orders': number;
+    'Total Orders': number;
+    'Order Repeat%': number;
+    'Repeat Customer Count': number;
+    'Total Verified Customers': number;
+    'Repeat Customer %': number;
+    'Repeat Revenue': number;
+    'Total Revenue': number;
+    'Revenue Repeat %': number;
+}
+
+interface TopCustomerRow extends Record<string, SortableValue> {
+    customer_id: string | number;
+    name: string;
+    total_orders: number;
+    total_spent: number;
+    last_order_date: string;
+    status: string;
+    favorite_item: string;
+    fav_item_qty: number;
+}
+
 export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }) {
-    const [customerView, setCustomerView] = useState<'loyalty' | 'top'>('loyalty');
-    const [reorderRate, setReorderRate] = useState<any>(null);
-    const [loyaltyData, setLoyaltyData] = useState<any[]>([]);
-    const [topCustomers, setTopCustomers] = useState<any[]>([]);
+    const [customerView, setCustomerView] = useState<CustomerAnalyticsView>('loyalty');
+    const [loyaltyData, setLoyaltyData] = useState<LoyaltyRow[]>([]);
+    const [topCustomers, setTopCustomers] = useState<TopCustomerRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [sortKey, setSortKey] = useState<string | null>(null);
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -22,11 +47,13 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
 
     useEffect(() => {
         const loadData = async () => {
+            if (customerView !== 'loyalty' && customerView !== 'top') {
+                setLoading(false);
+                return;
+            }
+
             setLoading(true);
             try {
-                const rateRes = await endpoints.insights.customerReorderRate({ _t: lastDbSync });
-                setReorderRate(rateRes.data);
-
                 if (customerView === 'loyalty') {
                     const loyaltyRes = await endpoints.insights.customerLoyalty({ _t: lastDbSync });
                     setLoyaltyData(loyaltyRes.data);
@@ -53,7 +80,7 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
         }
     };
 
-    const sortRows = (rows: any[]) => {
+    const sortRows = <T extends Record<string, SortableValue>>(rows: T[]) => {
         if (!sortKey) return rows;
 
         return [...rows].sort((a, b) => {
@@ -76,32 +103,45 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
 
     const sortedLoyaltyData = sortRows(loyaltyData);
     const sortedTopCustomers = sortRows(topCustomers);
+    const isPlaceholderView = customerView === 'returnRate' || customerView === 'retentionRate' || customerView === 'repeatOrderRate';
 
     return (
         <div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '20px', marginBottom: '20px' }}>
-                <KPICard title="Total Verified Customers" value={reorderRate?.total_verified_customers?.toLocaleString() || 0} />
-                <KPICard title="Avg Monthly Verified Customers (3M)" value={reorderRate?.total_customers?.toLocaleString() || 0} />
-                <KPICard title="Avg Monthly Repeat Customers (3M)" value={reorderRate?.returning_customers?.toLocaleString() || 0} />
-                <KPICard title="Repeat Customer % (3M)" value={`${reorderRate?.reorder_rate?.toFixed(1) || 0}%`} />
-            </div>
-
-            <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
-
-            <div className="segmented-control" style={{ marginBottom: '8px', width: 'fit-content' }}>
+            <div className="segmented-control" style={{ marginBottom: '8px', width: 'fit-content', maxWidth: '100%', flexWrap: 'wrap' }}>
                 <TabButton
                     active={customerView === 'loyalty'}
                     onClick={() => setCustomerView('loyalty')}
                     variant="segmented"
                 >
-                    🔄 Customer Retention
+                    Summary
+                </TabButton>
+                <TabButton
+                    active={customerView === 'returnRate'}
+                    onClick={() => setCustomerView('returnRate')}
+                    variant="segmented"
+                >
+                    Customer Return Rate
+                </TabButton>
+                <TabButton
+                    active={customerView === 'retentionRate'}
+                    onClick={() => setCustomerView('retentionRate')}
+                    variant="segmented"
+                >
+                    Customer Retention Rate
+                </TabButton>
+                <TabButton
+                    active={customerView === 'repeatOrderRate'}
+                    onClick={() => setCustomerView('repeatOrderRate')}
+                    variant="segmented"
+                >
+                    Repeat Order Rate
                 </TabButton>
                 <TabButton
                     active={customerView === 'top'}
                     onClick={() => setCustomerView('top')}
                     variant="segmented"
                 >
-                    💎 Top Verified Customers
+                    Top Verified Customers
                 </TabButton>
             </div>
 
@@ -112,35 +152,37 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
                             <thead>
                                 <tr>
                                     <th onClick={() => handleSort('Month')}>Month{renderSortIcon('Month')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Customer %')}>Repeat Customer %{renderSortIcon('Repeat Customer %')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Order Repeat%')}>Order Repeat%{renderSortIcon('Order Repeat%')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Revenue Repeat %')}>Revenue Repeat %{renderSortIcon('Revenue Repeat %')}</th>
                                     <th className="text-right" onClick={() => handleSort('Repeat Orders')}>Repeat Orders{renderSortIcon('Repeat Orders')}</th>
                                     <th className="text-right" onClick={() => handleSort('Total Orders')}>Total Orders{renderSortIcon('Total Orders')}</th>
-                                    <th className="text-right" onClick={() => handleSort('Order Repeat%')}>Order Repeat%{renderSortIcon('Order Repeat%')}</th>
-                                    <th className="text-right" onClick={() => handleSort('Repeat Customer Count')}>Repeat Customer Count{renderSortIcon('Repeat Customer Count')}</th>
-                                    <th className="text-right" onClick={() => handleSort('Total Verified Customers')}>Total Verified Customers{renderSortIcon('Total Verified Customers')}</th>
-                                    <th className="text-right" onClick={() => handleSort('Repeat Customer %')}>Repeat Customer %{renderSortIcon('Repeat Customer %')}</th>
                                     <th className="text-right" onClick={() => handleSort('Repeat Revenue')}>Repeat Revenue{renderSortIcon('Repeat Revenue')}</th>
                                     <th className="text-right" onClick={() => handleSort('Total Revenue')}>Total Revenue{renderSortIcon('Total Revenue')}</th>
-                                    <th className="text-right" onClick={() => handleSort('Revenue Repeat %')}>Revenue Repeat %{renderSortIcon('Revenue Repeat %')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Repeat Customer Count')}>Repeat Customer Count{renderSortIcon('Repeat Customer Count')}</th>
+                                    <th className="text-right" onClick={() => handleSort('Total Verified Customers')}>Total Verified Customers{renderSortIcon('Total Verified Customers')}</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {sortedLoyaltyData.map((row, idx) => (
                                     <tr key={idx}>
                                         <td>{row.Month}</td>
+                                        <td className="text-right">{row['Repeat Customer %']}%</td>
+                                        <td className="text-right">{row['Order Repeat%']}%</td>
+                                        <td className="text-right">{row['Revenue Repeat %']}%</td>
                                         <td className="text-right">{row['Repeat Orders']}</td>
                                         <td className="text-right">{row['Total Orders']}</td>
-                                        <td className="text-right">{row['Order Repeat%']}%</td>
-                                        <td className="text-right">{row['Repeat Customer Count']}</td>
-                                        <td className="text-right">{row['Total Verified Customers']}</td>
-                                        <td className="text-right">{row['Repeat Customer %']}%</td>
                                         <td className="text-right">₹{Math.round(row['Repeat Revenue'] || 0).toLocaleString()}</td>
                                         <td className="text-right">₹{Math.round(row['Total Revenue'] || 0).toLocaleString()}</td>
-                                        <td className="text-right">{row['Revenue Repeat %']}%</td>
+                                        <td className="text-right">{row['Repeat Customer Count']}</td>
+                                        <td className="text-right">{row['Total Verified Customers']}</td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </ResizableTableWrapper>
+                ) : isPlaceholderView ? (
+                    <div style={{ minHeight: '320px' }} />
                 ) : (
                     <ResizableTableWrapper onExportCSV={() => exportToCSV(sortedTopCustomers, 'top_customers')}>
                         <table className="standard-table">

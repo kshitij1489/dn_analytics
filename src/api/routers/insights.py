@@ -126,6 +126,13 @@ def get_customer_reorder_rate(conn=Depends(get_db)):
     return data if data else {}
 
 
+@router.get("/customer/quick_view")
+def get_customer_quick_view(conn=Depends(get_db)):
+    """Get customer quick-view KPIs for the Customers workspace."""
+    data = insights_queries.fetch_customer_quick_view(conn)
+    return dict(data) if data else {}
+
+
 @router.get("/customer/reorder_rate_trend")
 def get_reorder_rate_trend(
     granularity: str = 'day',
@@ -186,6 +193,5 @@ def get_brand_awareness(granularity: str = 'day', conn=Depends(get_db)):
     from src.core.queries.customer_queries import fetch_brand_awareness
     data = fetch_brand_awareness(conn, granularity)
     return {"data": data}
-
 
 

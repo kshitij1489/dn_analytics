@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
 import { ResizableTableWrapper, TabButton, KPICard } from '../components';
+import type { CustomerQuickViewData, KPIData } from '../types/api';
 import { exportToCSV } from '../utils/csv';
 import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'dailySales' | 'menu'>('dailySales');
-    const [kpis, setKpis] = useState<any>(null);
+    const [kpis, setKpis] = useState<KPIData | null>(null);
+    const [customerQuickView, setCustomerQuickView] = useState<CustomerQuickViewData | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -14,8 +16,22 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
 
     const loadKPIs = async () => {
         try {
-            const res = await endpoints.insights.kpis({ _t: lastDbSync });
-            setKpis(res.data);
+            const [kpisRes, customerQuickViewRes] = await Promise.allSettled([
+                endpoints.insights.kpis({ _t: lastDbSync }),
+                endpoints.insights.customerQuickView({ _t: lastDbSync }),
+            ]);
+
+            if (kpisRes.status === 'fulfilled') {
+                setKpis(kpisRes.value.data);
+            } else {
+                console.error(kpisRes.reason);
+            }
+
+            if (customerQuickViewRes.status === 'fulfilled') {
+                setCustomerQuickView(customerQuickViewRes.value.data);
+            } else {
+                console.error(customerQuickViewRes.reason);
+            }
         } catch (error) {
             console.error(error);
         } finally {
@@ -23,20 +39,96 @@ export default function Insights({ lastDbSync }: { lastDbSync?: number }) {
         }
     };
 
+    const formatRate = (value?: number | null) => {
+        if (value == null || Number.isNaN(value)) return '0.0%';
+        return `${value.toFixed(1)}%`;
+    };
+
+    const renderRateValues = (
+        values: Array<number | null | undefined>,
+        label: string,
+    ) => (
+        <div>
+            <span>
+                {values.map((value, index) => (
+                    <span key={index}>
+                        {index > 0 && <span style={{ color: 'var(--text-secondary)' }}> | </span>}
+                        <span>{formatRate(value)}</span>
+                    </span>
+                ))}
+            </span>
+            <div
+                style={{
+                    marginTop: '8px',
+                    fontSize: '0.52em',
+                    fontWeight: 500,
+                    color: 'var(--text-secondary)',
+                    lineHeight: 1.3,
+                }}
+            >
+                {label}
+            </div>
+        </div>
+    );
+
     if (loading) return <div>Loading...</div>;
 
     return (
         <div>
             {/* KPIs */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
-                <KPICard title="Total Revenue" value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`} />
-                <KPICard title="Today's Revenue" value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`} />
-                <KPICard title="Orders" value={kpis?.total_orders?.toLocaleString() || 0} />
-                <KPICard title="Avg Order" value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`} />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '20px' }}>
+                <KPICard
+                    title="Total Revenue"
+                    value={`₹${kpis?.total_revenue?.toLocaleString() || 0}`}
+                    hint="Revenue from all recorded orders."
+                />
+                <KPICard
+                    title="Today's Revenue"
+                    value={`₹${kpis?.today_revenue?.toLocaleString() || 0}`}
+                    hint="Revenue from today's orders."
+                />
+                <KPICard
+                    title="Orders"
+                    value={kpis?.total_orders?.toLocaleString() || 0}
+                    hint="Total number of orders."
+                />
+                <KPICard
+                    title="Avg Order"
+                    value={`₹${kpis?.avg_order_value ? Math.round(kpis.avg_order_value).toLocaleString() : 0}`}
+                    hint="Average value of one order."
+                />
                 <KPICard
                     title="Total Customers (est.)"
                     value={formatCustomerEstimateRange(kpis)}
                     hint={CUSTOMERS_ESTIMATE_HINT}
+                />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+                <KPICard
+                    title="Customer Return Rate"
+                    value={renderRateValues([
+                        customerQuickView?.return_rate_one_month,
+                        customerQuickView?.return_rate_two_month,
+                        customerQuickView?.return_rate_lifetime,
+                    ], 'Lookback Period: 1M | 2M | LifeTime')}
+                    hint="Share of current customers who came back.\n1st = 1 month, 2nd = 2 months, 3rd = lifetime."
+                />
+                <KPICard
+                    title="Customer Retention Rate"
+                    value={renderRateValues([
+                        customerQuickView?.retention_rate_one_month,
+                        customerQuickView?.retention_rate_two_month,
+                    ], 'Lookback Period: 1M | 2M')}
+                    hint="Share of past customers who returned this month.\n1st = last month, 2nd = last 2 months."
+                />
+                <KPICard
+                    title="Repeat Order Rate"
+                    value={renderRateValues([
+                        customerQuickView?.repeat_order_rate_current_month,
+                        customerQuickView?.repeat_order_rate_previous_month,
+                    ], 'Current Month | Previous Month')}
+                    hint="Share of customers with 2+ orders.\n1st = current month, 2nd = previous month."
                 />
             </div>
 

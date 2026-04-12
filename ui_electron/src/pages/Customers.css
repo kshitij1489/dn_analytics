@@ -11,6 +11,18 @@
     gap: 20px;
 }
 
+@media (min-width: 1400px) {
+    .customers-kpis {
+        grid-template-columns:
+            minmax(200px, 1fr)
+            minmax(150px, 0.75fr)
+            minmax(150px, 0.75fr)
+            minmax(290px, 1.35fr)
+            minmax(210px, 1fr)
+            minmax(210px, 1fr);
+    }
+}
+
 .customers-divider {
     margin: 0;
     border: none;
@@ -26,6 +38,10 @@
     flex: 1 1 140px;
     text-align: center;
     min-height: 44px;
+}
+
+.customers-kpi-separator {
+    color: var(--text-secondary);
 }
 
 .customers-overview-hint,

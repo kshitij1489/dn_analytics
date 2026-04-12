@@ -40,6 +40,28 @@ export interface KPIData {
     [key: string]: any;
 }
 
+export interface CustomerQuickViewData {
+    total_customers_estimate_low?: number | null;
+    total_customers_estimate_high?: number | null;
+    current_month?: string;
+    returning_current_month_customers_one_month?: number;
+    returning_current_month_customers_two_month?: number;
+    total_current_month_customers?: number;
+    return_rate_one_month?: number;
+    return_rate_two_month?: number;
+    return_rate_lifetime?: number;
+    retained_customers_one_month?: number;
+    total_previous_one_month_customers?: number;
+    retention_rate_one_month?: number;
+    retained_customers_two_month?: number;
+    total_previous_two_month_customers?: number;
+    retention_rate_two_month?: number;
+    repeat_order_rate_current_month?: number;
+    repeat_order_rate_previous_month?: number;
+    return_rate_current_month?: number;
+    retention_rate_current_month?: number;
+}
+
 export interface DailySalesRow {
     order_date: string;
     total_revenue: number;

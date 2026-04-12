@@ -1,7 +1,6 @@
 /** Hover text for KPI cards showing the customer estimate range. */
 export const CUSTOMERS_ESTIMATE_HINT =
-    'Estimated people implied by order volume: verified customers plus unverified orders divided by ' +
-    'guest repeat intensity (assumed 80–100% of verified orders-per-customer). Not a raw unique-ID count.';
+    'Estimated customer range.\nLeft = lower estimate, right = higher estimate.';
 
 export function formatCustomerEstimateRange(kpis: {
     total_customers_estimate_low?: number | null;
