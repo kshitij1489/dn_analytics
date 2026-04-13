@@ -320,6 +320,32 @@ def _lookup_remote_local_merge_id(conn, remote_event_id: str) -> Optional[int]:
     return int(row["local_merge_id"])
 
 
+def _lookup_local_sync_event_merge_id(conn, remote_event_id: str, event_type: str) -> Optional[int]:
+    sync_table = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'customer_merge_sync_events'
+        LIMIT 1
+        """
+    ).fetchone()
+    if sync_table is None:
+        return None
+
+    row = conn.execute(
+        """
+        SELECT merge_id
+        FROM customer_merge_sync_events
+        WHERE event_id = ? AND event_type = ?
+        LIMIT 1
+        """,
+        (remote_event_id, event_type),
+    ).fetchone()
+    if not row or row["merge_id"] is None:
+        return None
+    return int(row["merge_id"])
+
+
 def _record_remote_event(
     conn,
     remote_event_id: str,
@@ -400,6 +426,18 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
         raise ValueError("Merge event is missing remote_event_id")
     if _remote_event_exists(conn, remote_event_id):
         return {"status": "duplicate", "local_merge_id": _lookup_remote_local_merge_id(conn, remote_event_id)}
+    local_sync_merge_id = _lookup_local_sync_event_merge_id(conn, remote_event_id, EVENT_TYPE_APPLIED)
+    if local_sync_merge_id is not None:
+        _record_remote_event(
+            conn,
+            remote_event_id=remote_event_id,
+            event_type=EVENT_TYPE_APPLIED,
+            local_merge_id=local_sync_merge_id,
+            payload=event,
+            remote_cursor=remote_cursor,
+            occurred_at=str(event.get("occurred_at") or ""),
+        )
+        return {"status": "duplicate", "local_merge_id": local_sync_merge_id}
 
     source_customer_id = _resolve_customer_id(conn, event.get("source_customer", {}))
     target_customer_id = _resolve_customer_id(conn, event.get("target_customer", {}))
@@ -600,6 +638,19 @@ def _apply_remote_undo_event(conn, event: Dict[str, Any], remote_cursor: Optiona
     reverted_remote_event_id = str(event.get("reverts_remote_event_id") or "").strip()
     if not reverted_remote_event_id:
         raise ValueError(f"Undo event {remote_event_id} is missing reverts_remote_event_id")
+    local_sync_merge_id = _lookup_local_sync_event_merge_id(conn, remote_event_id, EVENT_TYPE_UNDONE)
+    if local_sync_merge_id is not None:
+        _record_remote_event(
+            conn,
+            remote_event_id=remote_event_id,
+            event_type=EVENT_TYPE_UNDONE,
+            local_merge_id=local_sync_merge_id,
+            payload=event,
+            remote_cursor=remote_cursor,
+            occurred_at=str(event.get("occurred_at") or ""),
+            reverts_remote_event_id=reverted_remote_event_id,
+        )
+        return {"status": "duplicate", "local_merge_id": local_sync_merge_id}
 
     local_merge_id = _lookup_remote_local_merge_id(conn, reverted_remote_event_id)
     if local_merge_id is None:

@@ -4,6 +4,7 @@ from datetime import date as DateType, timedelta
 
 import pandas as pd
 
+from src.core.queries.customer_metric_affinity import analyze_customer_affinity
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
     build_customer_return_rate_analysis,
@@ -11,6 +12,7 @@ from src.core.queries.customer_metric_helpers import (
     build_monthly_customer_metric_rows,
     build_repeat_order_rate_analysis,
     fetch_customer_metric_orders,
+    normalize_order_sources,
     resolve_lookback_window,
     shift_month,
 )
@@ -20,6 +22,11 @@ from src.core.utils.business_date import get_current_business_date
 def fetch_customer_loyalty(conn):
     rows = build_monthly_customer_metric_rows(fetch_customer_metric_orders(conn))
     return pd.DataFrame(rows)
+
+
+def _require_min_orders_at_least(metric_name: str, min_orders_per_customer: int, minimum: int = 2) -> None:
+    if min_orders_per_customer < minimum:
+        raise ValueError(f"{metric_name} requires min_orders_per_customer to be at least {minimum}.")
 
 
 def fetch_customer_return_rate_analysis(
@@ -33,6 +40,7 @@ def fetch_customer_return_rate_analysis(
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
 ):
+    _require_min_orders_at_least("Customer return rate", min_orders_per_customer)
     filters = _build_customer_metric_filters(
         evaluation_start_date=evaluation_start_date,
         evaluation_end_date=evaluation_end_date,
@@ -78,6 +86,7 @@ def fetch_repeat_order_rate_analysis(
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
 ):
+    _require_min_orders_at_least("Repeat order rate", min_orders_per_customer)
     filters = _build_customer_metric_filters(
         evaluation_start_date=evaluation_start_date,
         evaluation_end_date=evaluation_end_date,
@@ -86,6 +95,42 @@ def fetch_repeat_order_rate_analysis(
         include_lookback=False,
     )
     return build_repeat_order_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+
+
+def fetch_customer_affinity_analysis(
+    conn,
+    *,
+    evaluation_start_date: str | None = None,
+    evaluation_end_date: str | None = None,
+    order_sources: tuple[str, ...] | None = None,
+):
+    """
+    Zomato-style affinity: among verified customers with ≥1 order in the evaluation window,
+    segment by recency of last order strictly before evaluation start (60d / 365d rules).
+    """
+    filters = _build_customer_metric_filters(
+        evaluation_start_date=evaluation_start_date,
+        evaluation_end_date=evaluation_end_date,
+        min_orders_per_customer=2,
+        order_sources=order_sources,
+        include_lookback=False,
+    )
+    resolved_sources = list(normalize_order_sources(filters.order_sources) or [])
+    order_source_label = "All" if not resolved_sources else ", ".join(resolved_sources)
+
+    orders = fetch_customer_metric_orders(
+        conn,
+        start_date=None,
+        end_date=filters.evaluation_end_date,
+        order_sources=filters.order_sources,
+    )
+    return analyze_customer_affinity(
+        orders,
+        filters.evaluation_start_date,
+        filters.evaluation_end_date,
+        order_source_label=order_source_label,
+        include_rows=True,
+    )
 
 
 def _build_customer_metric_filters(

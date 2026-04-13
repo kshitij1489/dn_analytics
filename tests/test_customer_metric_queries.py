@@ -14,6 +14,7 @@ from src.core.queries.customer_metric_helpers import (
     fetch_customer_metric_orders,
 )
 from src.core.queries.customer_reorder_rate_queries import fetch_customer_reorder_rate
+from src.core.queries.customer_analytics_queries import fetch_customer_affinity_analysis
 from src.core.queries.insights_queries import fetch_customer_quick_view
 
 
@@ -94,6 +95,71 @@ class CustomerMetricQueryTests(unittest.TestCase):
         self.assertAlmostEqual(data["repeat_order_rate_previous_month"], 0.0)
         self.assertAlmostEqual(data["return_rate_current_month"], 100.0)
         self.assertAlmostEqual(data["retention_rate_current_month"], 50.0)
+        # Affinity: previous month = 2024-01; customers 1,3,5 ordered in Jan; gaps → new, repeat, new
+        self.assertEqual(data["affinity_period_label"], "2024-01")
+        self.assertEqual(data["affinity_customers_total"], 3)
+        self.assertEqual(data["affinity_new_customers"], 2)
+        self.assertEqual(data["affinity_repeat_customers"], 1)
+        self.assertEqual(data["affinity_lapsed_customers"], 0)
+        self.assertAlmostEqual(data["affinity_new_pct"], 66.67, places=1)
+        self.assertAlmostEqual(data["affinity_repeat_pct"], 33.33, places=1)
+        self.assertAlmostEqual(data["affinity_lapsed_pct"], 0.0)
+
+    def test_fetch_customer_affinity_analysis_segments_evaluation_window(self) -> None:
+        data = fetch_customer_affinity_analysis(
+            self.conn,
+            evaluation_start_date="2024-02-01",
+            evaluation_end_date="2024-02-29",
+            order_sources=None,
+        )
+        summary = data["summary"]
+        self.assertEqual(summary["total_customers"], 3)
+        self.assertEqual(summary["new_customers"], 1)
+        self.assertEqual(summary["repeat_customers"], 2)
+        self.assertEqual(summary["lapsed_customers"], 0)
+        self.assertEqual(len(data["rows"]), 3)
+
+    def test_fetch_customer_affinity_analysis_uses_deterministic_sort_and_rounding(self) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO orders (order_id, customer_id, created_on, total, order_from, order_status)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (11, 4, "2024-02-09 12:00:00", 200.555, "Home Website", "Success"),
+        )
+        self.conn.commit()
+
+        data = fetch_customer_affinity_analysis(
+            self.conn,
+            evaluation_start_date="2024-02-01",
+            evaluation_end_date="2024-02-29",
+            order_sources=None,
+        )
+
+        rows = data["rows"]
+        self.assertEqual([row["customer_id"] for row in rows], [4, 1, 2])
+        self.assertEqual(rows[0]["affinity_segment"], "Repeat")
+        self.assertAlmostEqual(rows[0]["evaluation_total_spend"], 400.56)
+
+    def test_fetch_customer_return_rate_analysis_rejects_threshold_below_two(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Customer return rate requires min_orders_per_customer to be at least 2."):
+            fetch_customer_return_rate_analysis(
+                self.conn,
+                evaluation_start_date="2024-02-01",
+                evaluation_end_date="2024-02-29",
+                lookback_start_date="2024-01-01",
+                lookback_end_date="2024-01-31",
+                min_orders_per_customer=1,
+            )
+
+    def test_fetch_repeat_order_rate_analysis_rejects_threshold_below_two(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Repeat order rate requires min_orders_per_customer to be at least 2."):
+            fetch_repeat_order_rate_analysis(
+                self.conn,
+                evaluation_start_date="2024-02-01",
+                evaluation_end_date="2024-02-29",
+                min_orders_per_customer=1,
+            )
 
     def test_fetch_customer_loyalty_uses_shared_monthly_rows(self) -> None:
         rows = fetch_customer_loyalty(self.conn).to_dict("records")

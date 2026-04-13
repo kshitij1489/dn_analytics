@@ -234,6 +234,10 @@ input {
   color: var(--text-color);
 }
 
+.standard-table .status-lapsed {
+  color: #b45309;
+}
+
 /* Boolean Indicators */
 .standard-table .bool-indicator {
   font-size: 14px;

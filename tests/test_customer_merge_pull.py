@@ -398,6 +398,175 @@ class CustomerMergePullTests(unittest.TestCase):
             1,
         )
 
+    @patch("requests.get")
+    def test_pull_skips_self_origin_event_before_ambiguous_customer_resolution(self, mock_get: Mock) -> None:
+        self.conn.executemany(
+            """
+            INSERT INTO customers (
+                customer_id,
+                customer_identity_key,
+                name,
+                name_normalized,
+                phone,
+                address,
+                gstin,
+                total_orders,
+                total_spent,
+                first_order_date,
+                last_order_date,
+                is_verified
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (10, "anon:source-a", "Nirupam Das", "nirupam das", None, None, None, 1, 666.0, None, "2026-02-13 22:43:46", 0),
+                (20, "anon:target-a", "Nirupam Das", "nirupam das", None, None, None, 1, 740.0, None, "2025-12-14 21:05:18", 0),
+                (30, "anon:other-a", "Nirupam Das", "nirupam das", None, None, None, 1, 100.0, None, None, 0),
+                (40, "anon:other-b", "Nirupam Das", "nirupam das", None, None, None, 1, 120.0, None, None, 0),
+            ],
+        )
+        self.conn.execute(
+            """
+            INSERT INTO customer_merge_history (
+                merge_id,
+                source_customer_id,
+                target_customer_id,
+                similarity_score,
+                model_name,
+                suggestion_context,
+                source_snapshot,
+                target_snapshot,
+                moved_order_ids,
+                copied_address_count,
+                merged_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                10,
+                20,
+                0.8258,
+                "basic_duplicate_knn_v1",
+                json.dumps({"reasons": ["Strong text similarity across name, phone, and address"]}),
+                json.dumps({"name": "Nirupam Das", "address": None, "phone": None}),
+                json.dumps({"name": "Nirupam Das", "address": None, "phone": None}),
+                json.dumps([7007]),
+                0,
+                "2026-04-13 19:18:50",
+            ),
+        )
+        remote_event = {
+            "remote_event_id": "dc42ee4a6e5047339a81f29f02da94e0",
+            "schema_version": 1,
+            "event_type": "customer_merge.applied",
+            "occurred_at": "2026-04-13 19:18:50",
+            "source_customer": {
+                "snapshot": {
+                    "name": "Nirupam Das",
+                    "phone": None,
+                    "address": None,
+                    "gstin": None,
+                    "total_orders": 1,
+                    "total_spent": 666.0,
+                    "last_order_date": "2026-02-13 22:43:46",
+                    "is_verified": False,
+                },
+                "portable_locators": {
+                    "customer_identity_key": None,
+                    "phone_hash": None,
+                    "name_address_hash": None,
+                    "name_normalized": "nirupam das",
+                    "address_normalized": None,
+                    "address_book_hashes": [],
+                },
+            },
+            "target_customer": {
+                "snapshot": {
+                    "name": "Nirupam Das",
+                    "phone": None,
+                    "address": None,
+                    "gstin": None,
+                    "total_orders": 1,
+                    "total_spent": 740.0,
+                    "last_order_date": "2025-12-14 21:05:18",
+                    "is_verified": False,
+                },
+                "portable_locators": {
+                    "customer_identity_key": None,
+                    "phone_hash": None,
+                    "name_address_hash": None,
+                    "name_normalized": "nirupam das",
+                    "address_normalized": None,
+                    "address_book_hashes": [],
+                },
+            },
+            "merge_metadata": {
+                "similarity_score": 0.8258,
+                "model_name": "basic_duplicate_knn_v1",
+                "reasons": ["Strong text similarity across name, phone, and address"],
+                "copied_address_count": 0,
+                "target_before_fields": {"phone": None, "address": None, "gstin": None, "is_verified": False},
+                "target_is_verified_after_merge": False,
+                "mark_target_verified": False,
+            },
+            "moved_orders": {"count": 1, "portable_refs": []},
+            "local_refs": {
+                "merge_id": 3,
+                "source_customer_id": 10,
+                "target_customer_id": 20,
+                "moved_order_ids": [7007],
+                "inserted_target_address_ids": [],
+                "removed_target_address_ids": [],
+            },
+        }
+        self.conn.execute(
+            """
+            INSERT INTO customer_merge_sync_events (
+                event_id,
+                merge_id,
+                event_type,
+                payload,
+                occurred_at,
+                uploaded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                remote_event["remote_event_id"],
+                3,
+                "customer_merge.applied",
+                json.dumps(remote_event),
+                remote_event["occurred_at"],
+                "2026-04-13T19:54:11.279867+00:00",
+            ),
+        )
+        self.conn.commit()
+
+        payload = {"events": [remote_event], "next_cursor": "cursor-self-origin"}
+        mock_get.return_value = Mock(status_code=200, json=Mock(return_value=payload))
+
+        result = pull_and_apply_customer_merge_events(
+            self.conn,
+            endpoint="https://cloud.example.com/desktop-analytics-sync/customer-merges",
+        )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 0)
+        self.assertEqual(result["undo_events_applied"], 0)
+        self.assertEqual(result["events_skipped"], 1)
+        self.assertEqual(result["cursor_after"], "cursor-self-origin")
+        remote_row = self.conn.execute(
+            "SELECT remote_event_id, local_merge_id FROM customer_merge_remote_events WHERE remote_event_id = ?",
+            (remote_event["remote_event_id"],),
+        ).fetchone()
+        self.assertIsNotNone(remote_row)
+        self.assertEqual(int(remote_row["local_merge_id"]), 3)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM customer_merge_history WHERE merge_id = 3").fetchone()[0],
+            1,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,11 @@ export const MIN_ORDER_OPTIONS = [
     { value: '5', label: '>= 5 Orders' },
 ];
 
+export const RETENTION_MIN_ORDER_OPTIONS = [
+    { value: '1', label: '>= 1 Orders' },
+    ...MIN_ORDER_OPTIONS,
+];
+
 // --- Date utilities ---
 
 function formatDateUTC(date: Date) {
@@ -175,6 +180,16 @@ export function buildMetricParams(filters: MetricFilters, lastDbSync?: number) {
         evaluation_start_date: filters.evaluationStartDate,
         evaluation_end_date: filters.evaluationEndDate,
         min_orders_per_customer: Number(filters.minOrdersPerCustomer),
+        order_sources: filters.orderSource === 'All' ? undefined : [filters.orderSource],
+    };
+}
+
+/** Customer affinity API: evaluation window + order source only (no order-count threshold). */
+export function buildAffinityParams(filters: MetricFilters, lastDbSync?: number) {
+    return {
+        _t: lastDbSync,
+        evaluation_start_date: filters.evaluationStartDate,
+        evaluation_end_date: filters.evaluationEndDate,
         order_sources: filters.orderSource === 'All' ? undefined : [filters.orderSource],
     };
 }

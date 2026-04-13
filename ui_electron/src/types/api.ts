@@ -60,6 +60,17 @@ export interface CustomerQuickViewData {
     repeat_order_rate_previous_month?: number;
     return_rate_current_month?: number;
     retention_rate_current_month?: number;
+    /** Previous calendar month; verified customers with ≥1 order in that month. */
+    affinity_period_start?: string;
+    affinity_period_end?: string;
+    affinity_period_label?: string;
+    affinity_customers_total?: number;
+    affinity_new_customers?: number;
+    affinity_repeat_customers?: number;
+    affinity_lapsed_customers?: number;
+    affinity_new_pct?: number;
+    affinity_repeat_pct?: number;
+    affinity_lapsed_pct?: number;
 }
 
 export interface CustomerReturnRateSummary {
@@ -161,6 +172,39 @@ export interface CustomerRepeatOrderRateRow extends Record<string, string | numb
 export interface CustomerRepeatOrderRateResponse {
     summary: CustomerRepeatOrderRateSummary;
     rows: CustomerRepeatOrderRateRow[];
+}
+
+export interface CustomerAffinitySummary {
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    order_source_label: string;
+    recent_recency_days: number;
+    dormant_recency_days: number;
+    total_customers: number;
+    new_customers: number;
+    repeat_customers: number;
+    lapsed_customers: number;
+    new_pct: number;
+    repeat_pct: number;
+    lapsed_pct: number;
+}
+
+export interface CustomerAffinityRow extends Record<string, string | number | null | undefined> {
+    customer_id: string | number;
+    customer_name: string;
+    affinity_segment: string;
+    evaluation_order_count: number;
+    evaluation_total_spend: number;
+    first_order_date: string;
+    last_order_date: string;
+    prior_last_order_date: string | null;
+    gap_days_before_eval: number | null;
+    affinity_reason: string;
+}
+
+export interface CustomerAffinityResponse {
+    summary: CustomerAffinitySummary;
+    rows: CustomerAffinityRow[];
 }
 
 export interface DailySalesRow {

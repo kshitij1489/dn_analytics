@@ -13,13 +13,14 @@ import {
 } from './customerAnalyticsShared';
 import { CustomerLink } from './CustomerLink';
 import { LoadingSpinner } from './LoadingSpinner';
+import { AffinityView } from './AffinityView';
 import { RepeatOrderRateView } from './RepeatOrderRateView';
 import { ResizableTableWrapper } from './ResizableTableWrapper';
 import { RetentionRateView } from './RetentionRateView';
 import { ReturnRateView } from './ReturnRateView';
 import { TabButton } from './TabButton';
 
-type CustomerAnalyticsView = 'loyalty' | 'top' | 'returnRate' | 'retentionRate' | 'repeatOrderRate';
+type CustomerAnalyticsView = 'loyalty' | 'top' | 'returnRate' | 'retentionRate' | 'repeatOrderRate' | 'affinity';
 
 interface LoyaltyRow extends Record<string, SortableValue> {
     Month: string;
@@ -91,6 +92,7 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
     const [returnRateFilters, setReturnRateFilters] = useState<LookbackFilters>(() => buildDefaultLookbackFilters());
     const [retentionRateFilters, setRetentionRateFilters] = useState<LookbackFilters>(() => buildDefaultLookbackFilters());
     const [repeatOrderRateFilters, setRepeatOrderRateFilters] = useState<MetricFilters>(() => buildDefaultMetricFilters());
+    const [affinityFilters, setAffinityFilters] = useState<MetricFilters>(() => buildDefaultMetricFilters());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const sort = useSortState();
@@ -155,6 +157,16 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
                     sort={sort}
                     filters={repeatOrderRateFilters}
                     setFilters={setRepeatOrderRateFilters}
+                />
+            );
+        }
+        if (customerView === 'affinity') {
+            return (
+                <AffinityView
+                    lastDbSync={lastDbSync}
+                    sort={sort}
+                    filters={affinityFilters}
+                    setFilters={setAffinityFilters}
                 />
             );
         }
@@ -240,6 +252,7 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
                 <TabButton active={customerView === 'returnRate'} onClick={() => setCustomerView('returnRate')} variant="segmented">Customer Return Rate</TabButton>
                 <TabButton active={customerView === 'retentionRate'} onClick={() => setCustomerView('retentionRate')} variant="segmented">Customer Retention Rate</TabButton>
                 <TabButton active={customerView === 'repeatOrderRate'} onClick={() => setCustomerView('repeatOrderRate')} variant="segmented">Repeat Order Rate</TabButton>
+                <TabButton active={customerView === 'affinity'} onClick={() => setCustomerView('affinity')} variant="segmented">Customer affinity</TabButton>
                 <TabButton active={customerView === 'top'} onClick={() => setCustomerView('top')} variant="segmented">Top Verified Customers</TabButton>
             </div>
 

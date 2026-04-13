@@ -6,7 +6,7 @@ import {
     type LookbackFilters,
     type SortState,
     ORDER_SOURCE_OPTIONS,
-    MIN_ORDER_OPTIONS,
+    RETENTION_MIN_ORDER_OPTIONS,
     buildLookbackParams,
     formatCurrency,
     formatOptionalDate,
@@ -94,7 +94,7 @@ export function RetentionRateView({ lastDbSync, sort, filters, setFilters }: Ret
                 </div>
                 <div className="customers-analytics-filter-group">
                     <span className="customers-analytics-filter-label">Retention Condition</span>
-                    <Select value={filters.minOrdersPerCustomer} onChange={(v) => updateFilters({ minOrdersPerCustomer: v })} options={MIN_ORDER_OPTIONS} />
+                    <Select value={filters.minOrdersPerCustomer} onChange={(v) => updateFilters({ minOrdersPerCustomer: v })} options={RETENTION_MIN_ORDER_OPTIONS} />
                 </div>
                 <div className="customers-analytics-filter-group">
                     <span className="customers-analytics-filter-label">Order Source</span>

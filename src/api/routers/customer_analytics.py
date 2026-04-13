@@ -103,6 +103,27 @@ def get_repeat_order_rate_analysis(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/affinity_analysis")
+def get_customer_affinity_analysis(
+    evaluation_start_date: str = None,
+    evaluation_end_date: str = None,
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Customer affinity (new / repeat / lapsed) for an evaluation window — Zomato-style 60d / 365d rules."""
+    from src.core.queries.customer_queries import fetch_customer_affinity_analysis
+
+    try:
+        return fetch_customer_affinity_analysis(
+            conn,
+            evaluation_start_date=evaluation_start_date,
+            evaluation_end_date=evaluation_end_date,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/quick_view")
 def get_customer_quick_view(conn=Depends(get_db)):
     """Get customer quick-view KPIs for the Customers workspace."""

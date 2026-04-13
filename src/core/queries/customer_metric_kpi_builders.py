@@ -14,6 +14,7 @@ from src.core.queries.customer_metric_calculators import (
     calculate_customer_retention_rate,
     calculate_repeat_order_rate,
 )
+from src.core.queries.customer_metric_affinity import analyze_customer_affinity
 from src.core.queries.customer_metric_types import (
     CustomerMetricFilters,
     CustomerMetricOrder,
@@ -25,6 +26,45 @@ from src.core.queries.customer_metric_types import (
     round_half_up,
     shift_month,
 )
+
+
+def build_customer_affinity_breakup(
+    orders: Sequence[CustomerMetricOrder],
+    *,
+    current_business_date: str,
+    recent_days: int = 60,
+    dormant_days: int = 365,
+) -> dict[str, float | int | str]:
+    """
+    Among verified customers with ≥1 order in the *previous* full calendar month, segment by
+    recency of their last order *strictly before* that month (shared rules with Customer Affinity tab).
+    """
+    cur = DateType.fromisoformat(current_business_date)
+    current_month_start = cur.replace(day=1)
+    prev_month_start = shift_month(current_month_start, -1)
+    period_start_iso, period_end_iso = month_bounds(prev_month_start)
+    analyzed = analyze_customer_affinity(
+        orders,
+        period_start_iso,
+        period_end_iso,
+        recent_days=recent_days,
+        dormant_days=dormant_days,
+        include_rows=False,
+        order_source_label="All",
+    )
+    s = analyzed["summary"]
+    return {
+        "affinity_period_start": period_start_iso,
+        "affinity_period_end": period_end_iso,
+        "affinity_period_label": prev_month_start.strftime("%Y-%m"),
+        "affinity_customers_total": s["total_customers"],
+        "affinity_new_customers": s["new_customers"],
+        "affinity_repeat_customers": s["repeat_customers"],
+        "affinity_lapsed_customers": s["lapsed_customers"],
+        "affinity_new_pct": s["new_pct"],
+        "affinity_repeat_pct": s["repeat_pct"],
+        "affinity_lapsed_pct": s["lapsed_pct"],
+    }
 
 
 def build_monthly_customer_metric_rows(
@@ -140,6 +180,8 @@ def build_customer_quick_view_metrics(
         evaluation_start_date=pm_start, evaluation_end_date=pm_end, min_orders_per_customer=2,
     ))
 
+    affinity = build_customer_affinity_breakup(orders, current_business_date=current_business_date)
+
     return {
         "current_month": current_month_start.strftime("%Y-%m"),
         "returning_current_month_customers_one_month": rr1["returning_customers"],
@@ -158,5 +200,6 @@ def build_customer_quick_view_metrics(
         "repeat_order_rate_previous_month": ror_pm["repeat_order_rate"],
         "return_rate_current_month": rr2["return_rate"],
         "retention_rate_current_month": ret2["retention_rate"],
+        **affinity,
     }
 
