@@ -20,6 +20,72 @@ declare global {
 
 type Tab = 'users' | 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
 type UpdateStatus = 'checking' | 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error' | null;
+type CloudActionKey = 'push' | 'pullCustomerMerges' | 'pullMenuBootstrap' | 'pullMenuMerges';
+
+type CloudPushResult = {
+    errors?: { sent?: number; error?: string | null };
+    learning?: { ai_logs_sent?: number; ai_feedback_sent?: number; tier3_included?: boolean; error?: string | null };
+    menu_bootstrap?: { sent?: boolean; error?: string | null };
+    customer_merges?: { events_sent?: number; error?: string | null };
+    menu_merges?: { events_sent?: number; error?: string | null };
+    forecasts?: {
+        revenue_sent?: number;
+        items_sent?: number;
+        volume_sent?: number;
+        revenue_backtest_sent?: number;
+        item_backtest_sent?: number;
+        volume_backtest_sent?: number;
+        error?: string | null;
+    };
+};
+
+const INITIAL_CLOUD_ACTION_PENDING: Record<CloudActionKey, boolean> = {
+    push: false,
+    pullCustomerMerges: false,
+    pullMenuBootstrap: false,
+    pullMenuMerges: false,
+};
+
+function buildCloudPushPopup(result: CloudPushResult): PopupMessage {
+    const forecastRows =
+        Number(result.forecasts?.revenue_sent ?? 0) +
+        Number(result.forecasts?.items_sent ?? 0) +
+        Number(result.forecasts?.volume_sent ?? 0);
+    const forecastBacktests =
+        Number(result.forecasts?.revenue_backtest_sent ?? 0) +
+        Number(result.forecasts?.item_backtest_sent ?? 0) +
+        Number(result.forecasts?.volume_backtest_sent ?? 0);
+
+    const summary = [
+        `Errors: ${Number(result.errors?.sent ?? 0)}`,
+        `Learning: ${Number(result.learning?.ai_logs_sent ?? 0)} logs, ${Number(result.learning?.ai_feedback_sent ?? 0)} feedback${result.learning?.tier3_included ? ', Tier 3 included' : ''}`,
+        `Menu bootstrap: ${result.menu_bootstrap?.sent ? 'uploaded' : 'skipped'}`,
+        `Customer merges: ${Number(result.customer_merges?.events_sent ?? 0)}`,
+        `Menu merges: ${Number(result.menu_merges?.events_sent ?? 0)}`,
+        `Forecasts: ${forecastRows} rows, ${forecastBacktests} backtests`,
+    ];
+
+    const failures = [
+        result.errors?.error ? `Errors (${result.errors.error})` : null,
+        result.learning?.error ? `Learning (${result.learning.error})` : null,
+        result.menu_bootstrap?.error ? `Menu bootstrap (${result.menu_bootstrap.error})` : null,
+        result.customer_merges?.error ? `Customer merges (${result.customer_merges.error})` : null,
+        result.menu_merges?.error ? `Menu merges (${result.menu_merges.error})` : null,
+        result.forecasts?.error ? `Forecasts (${result.forecasts.error})` : null,
+    ].filter(Boolean) as string[];
+
+    if (failures.length > 0) {
+        return {
+            type: 'info',
+            message: `Cloud push finished with partial errors. ${summary.join(' • ')}. Issues: ${failures.join('; ')}`,
+        };
+    }
+
+    return {
+        type: 'success',
+        message: `Cloud push complete. ${summary.join(' • ')}`,
+    };
+}
 
 export default function Configuration() {
     const [activeTab, setActiveTab] = useState<Tab>('ai_models');
@@ -34,6 +100,7 @@ export default function Configuration() {
     const [userLoadError, setUserLoadError] = useState<string | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const [syncIdentity, setSyncIdentity] = useState<SyncIdentityResponse | null>(null);
+    const [cloudActionPending, setCloudActionPending] = useState<Record<CloudActionKey, boolean>>(INITIAL_CLOUD_ACTION_PENDING);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -141,6 +208,23 @@ export default function Configuration() {
     const handleChange = (key: string, value: string) => {
         setSettings(prev => ({ ...prev, [key]: value }));
     };
+
+    const runCloudAction = async (actionKey: CloudActionKey, action: () => Promise<void>) => {
+        if (cloudActionPending[actionKey]) return;
+
+        setCloudActionPending(prev => ({ ...prev, [actionKey]: true }));
+        try {
+            await action();
+        } finally {
+            setCloudActionPending(prev => ({ ...prev, [actionKey]: false }));
+        }
+    };
+
+    const getCloudActionStyle = (baseStyle: Record<string, string | number>, isPending: boolean) => ({
+        ...baseStyle,
+        opacity: isPending ? 0.65 : 1,
+        cursor: isPending ? 'wait' : 'pointer',
+    });
 
     const checkForUpdates = () => {
         setUpdateStatus('checking');
@@ -516,7 +600,7 @@ export default function Configuration() {
 
                             <h4 style={{ marginBottom: '10px', color: 'var(--accent-color)' }}>Cloud Synchronization</h4>
                             <p style={{ fontSize: '0.9em', color: 'var(--text-secondary)', marginBottom: '15px' }}>
-                                Automatically sync Errors, Learning Logs, and Conversations to your cloud server every 5 minutes.
+                                Automatically sync errors, learning payloads, menu bootstrap snapshots, customer and menu collaboration events, forecasts, and conversations to your cloud server every 5 minutes.
                             </p>
                             {renderInput("Cloud Server URL", "cloud_sync_url", "url", "https://api.example.com")}
                             {renderInput("Cloud API Key", "cloud_sync_api_key", "password")}
@@ -538,32 +622,28 @@ export default function Configuration() {
                             )}
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
                                 <button
-                                    onClick={async () => {
+                                    onClick={() => runCloudAction('push', async () => {
                                         try {
                                             const res = await endpoints.sync.clientLearning();
-                                            const result = res.data?.result || {};
-                                            setPopup({
-                                                type: 'success',
-                                                message: `Cloud push complete. Customer merges: ${result.customer_merges?.events_sent ?? 0}, Menu merges: ${result.menu_merges?.events_sent ?? 0}`,
-                                            });
+                                            setPopup(buildCloudPushPopup(res.data?.result || {}));
                                         } catch (e: any) {
                                             setPopup({ type: 'error', message: e.response?.data?.detail || "Cloud push failed" });
                                         }
-                                    }}
-                                    style={{
+                                    })}
+                                    disabled={cloudActionPending.push}
+                                    style={getCloudActionStyle({
                                         padding: '8px 14px',
                                         background: 'rgba(59, 130, 246, 0.16)',
                                         color: '#3b82f6',
                                         border: '1px solid rgba(59, 130, 246, 0.3)',
                                         borderRadius: '8px',
-                                        cursor: 'pointer',
                                         fontWeight: 600
-                                    }}
+                                    }, cloudActionPending.push)}
                                 >
-                                    Push Now
+                                    {cloudActionPending.push ? 'Pushing...' : 'Push Now'}
                                 </button>
                                 <button
-                                    onClick={async () => {
+                                    onClick={() => runCloudAction('pullCustomerMerges', async () => {
                                         try {
                                             const res = await endpoints.customers.pullFromCloud(200);
                                             setPopup({
@@ -573,21 +653,21 @@ export default function Configuration() {
                                         } catch (e: any) {
                                             setPopup({ type: 'error', message: e.response?.data?.detail || "Customer merge pull failed" });
                                         }
-                                    }}
-                                    style={{
+                                    })}
+                                    disabled={cloudActionPending.pullCustomerMerges}
+                                    style={getCloudActionStyle({
                                         padding: '8px 14px',
                                         background: 'rgba(34, 197, 94, 0.16)',
                                         color: '#22c55e',
                                         border: '1px solid rgba(34, 197, 94, 0.3)',
                                         borderRadius: '8px',
-                                        cursor: 'pointer',
                                         fontWeight: 600
-                                    }}
+                                    }, cloudActionPending.pullCustomerMerges)}
                                 >
-                                    Pull Customer Merges
+                                    {cloudActionPending.pullCustomerMerges ? 'Pulling Customer Merges...' : 'Pull Customer Merges'}
                                 </button>
                                 <button
-                                    onClick={async () => {
+                                    onClick={() => runCloudAction('pullMenuBootstrap', async () => {
                                         try {
                                             const res = await endpoints.menu.pullBootstrapFromCloud('seed_and_relink_orders');
                                             const warnings = Array.isArray(res.data.warnings) && res.data.warnings.length > 0
@@ -600,21 +680,21 @@ export default function Configuration() {
                                         } catch (e: any) {
                                             setPopup({ type: 'error', message: e.response?.data?.detail || "Menu bootstrap pull failed" });
                                         }
-                                    }}
-                                    style={{
+                                    })}
+                                    disabled={cloudActionPending.pullMenuBootstrap}
+                                    style={getCloudActionStyle({
                                         padding: '8px 14px',
                                         background: 'rgba(245, 158, 11, 0.16)',
                                         color: '#f59e0b',
                                         border: '1px solid rgba(245, 158, 11, 0.3)',
                                         borderRadius: '8px',
-                                        cursor: 'pointer',
                                         fontWeight: 600
-                                    }}
+                                    }, cloudActionPending.pullMenuBootstrap)}
                                 >
-                                    Pull Menu Bootstrap
+                                    {cloudActionPending.pullMenuBootstrap ? 'Pulling Menu Bootstrap...' : 'Pull Menu Bootstrap'}
                                 </button>
                                 <button
-                                    onClick={async () => {
+                                    onClick={() => runCloudAction('pullMenuMerges', async () => {
                                         try {
                                             const res = await endpoints.menu.pullMergeEventsFromCloud(200);
                                             setPopup({
@@ -624,18 +704,18 @@ export default function Configuration() {
                                         } catch (e: any) {
                                             setPopup({ type: 'error', message: e.response?.data?.detail || "Menu merge pull failed" });
                                         }
-                                    }}
-                                    style={{
+                                    })}
+                                    disabled={cloudActionPending.pullMenuMerges}
+                                    style={getCloudActionStyle({
                                         padding: '8px 14px',
                                         background: 'rgba(168, 85, 247, 0.16)',
                                         color: '#a855f7',
                                         border: '1px solid rgba(168, 85, 247, 0.3)',
                                         borderRadius: '8px',
-                                        cursor: 'pointer',
                                         fontWeight: 600
-                                    }}
+                                    }, cloudActionPending.pullMenuMerges)}
                                 >
-                                    Pull Menu Merges
+                                    {cloudActionPending.pullMenuMerges ? 'Pulling Menu Merges...' : 'Pull Menu Merges'}
                                 </button>
                             </div>
                             <p style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '20px' }}>
