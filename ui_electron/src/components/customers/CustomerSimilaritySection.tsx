@@ -13,14 +13,18 @@ interface CustomerSimilaritySectionProps {
     loadingPreview: boolean;
     loadingSimilar: boolean;
     mergePreview: CustomerMergePreview | null;
-    queueMode: 'suggestions' | 'search';
+    queueMode: 'suggestions' | 'search' | 'compare';
     searchQuery: string;
+    compareSourceCustomerId: string;
+    compareTargetCustomerId: string;
     selectedSuggestion: CustomerSimilarityCandidate | null;
     similarSuggestions: CustomerSimilarityCandidate[];
     onMerge: (markTargetVerified?: boolean) => void;
-    onModeChange: (mode: 'suggestions' | 'search') => void;
+    onModeChange: (mode: 'suggestions' | 'search' | 'compare') => void;
     onRefresh: () => void;
     onSearchQueryChange: (value: string) => void;
+    onCompareSourceCustomerIdChange: (value: string) => void;
+    onCompareTargetCustomerIdChange: (value: string) => void;
     onSelectSuggestion: (candidate: CustomerSimilarityCandidate) => void;
 }
 
@@ -32,12 +36,16 @@ export function CustomerSimilaritySection({
     mergePreview,
     queueMode,
     searchQuery,
+    compareSourceCustomerId,
+    compareTargetCustomerId,
     selectedSuggestion,
     similarSuggestions,
     onMerge,
     onModeChange,
     onRefresh,
     onSearchQueryChange,
+    onCompareSourceCustomerIdChange,
+    onCompareTargetCustomerIdChange,
     onSelectSuggestion,
 }: CustomerSimilaritySectionProps) {
     return (
@@ -56,6 +64,16 @@ export function CustomerSimilaritySection({
                                     onClick={() => onModeChange('suggestions')}
                                 >
                                     Top Merge Suggestions
+                                </button>
+                                <button
+                                    type="button"
+                                    className={[
+                                        'customer-identity-toggle-button',
+                                        queueMode === 'compare' ? 'customer-identity-toggle-button-active' : '',
+                                    ].filter(Boolean).join(' ')}
+                                    onClick={() => onModeChange('compare')}
+                                >
+                                    Compare
                                 </button>
                                 <button
                                     type="button"
@@ -101,7 +119,41 @@ export function CustomerSimilaritySection({
                         </div>
                     )}
 
-                    {loadingSimilar ? (
+                    {queueMode === 'compare' && (
+                        <div className="customer-identity-search-card">
+                            <div className="customer-identity-input-grid">
+                                <input
+                                    className="customer-identity-input"
+                                    value={compareSourceCustomerId}
+                                    onChange={(event) => onCompareSourceCustomerIdChange(event.target.value)}
+                                    placeholder="Source customer ID"
+                                    autoComplete="off"
+                                    aria-label="Source customer ID"
+                                />
+                                <input
+                                    className="customer-identity-input"
+                                    value={compareTargetCustomerId}
+                                    onChange={(event) => onCompareTargetCustomerIdChange(event.target.value)}
+                                    placeholder="Target customer ID"
+                                    autoComplete="off"
+                                    aria-label="Target customer ID"
+                                />
+                            </div>
+                            <div className="customer-identity-copy">
+                                Orders and profile for the source customer move into the target. The same merge preview as the queue loads in Comparison View.
+                            </div>
+                        </div>
+                    )}
+
+                    {queueMode === 'compare' ? (
+                        <div className="customer-identity-empty">
+                            {!compareSourceCustomerId.trim() || !compareTargetCustomerId.trim()
+                                ? 'Enter both customer IDs to load the side-by-side comparison.'
+                                : loadingPreview
+                                    ? 'Loading preview...'
+                                    : 'When the pair is valid, the merge preview opens in Comparison View on the right.'}
+                        </div>
+                    ) : loadingSimilar ? (
                         <div className="customer-identity-empty">
                             {queueMode === 'search' ? 'Searching similar pairs...' : 'Loading suggestions...'}
                         </div>

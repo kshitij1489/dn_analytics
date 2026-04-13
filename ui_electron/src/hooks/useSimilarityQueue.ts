@@ -9,7 +9,7 @@ import {
 } from '../components/customers/customerIdentity';
 import type { PopupMessage } from '../components';
 
-type SimilarityQueueMode = 'suggestions' | 'search';
+type SimilarityQueueMode = 'suggestions' | 'search' | 'compare';
 
 function isSameMergeRequest(
     left: CustomerMergeRequestPayload | null,
@@ -42,6 +42,8 @@ export function useSimilarityQueue(
     const [activeMergeRequest, setActiveMergeRequest] = useState<CustomerMergeRequestPayload | null>(null);
     const [similarityQueueMode, setSimilarityQueueMode] = useState<SimilarityQueueMode>('suggestions');
     const [similarSearchQuery, setSimilarSearchQuery] = useState('');
+    const [compareSourceCustomerId, setCompareSourceCustomerId] = useState('');
+    const [compareTargetCustomerId, setCompareTargetCustomerId] = useState('');
     const [loadingSimilar, setLoadingSimilar] = useState(false);
     const [loadingPreview, setLoadingPreview] = useState(false);
     const [executingMerge, setExecutingMerge] = useState(false);
@@ -92,20 +94,6 @@ export function useSimilarityQueue(
         }
     }, [setPopup]);
 
-    const refreshSimilarSuggestions = useCallback(async () => {
-        if (similarityQueueMode === 'search') {
-            const query = similarSearchQuery.trim();
-            if (!query) {
-                clearSuggestionQueue();
-                return;
-            }
-            await loadSimilarSuggestions(query);
-            return;
-        }
-
-        await loadSimilarSuggestions();
-    }, [clearSuggestionQueue, loadSimilarSuggestions, similarSearchQuery, similarityQueueMode]);
-
     const loadMergePreview = useCallback(async (request: CustomerMergeRequestPayload | null) => {
         if (!request) {
             setActiveMergeRequest(null);
@@ -137,6 +125,51 @@ export function useSimilarityQueue(
         }
     }, [setPopup]);
 
+    const refreshSimilarSuggestions = useCallback(async () => {
+        if (similarityQueueMode === 'compare') {
+            const sourceId = compareSourceCustomerId.trim();
+            const targetId = compareTargetCustomerId.trim();
+            if (!sourceId || !targetId) {
+                return;
+            }
+            await loadMergePreview({
+                source_customer_id: sourceId,
+                target_customer_id: targetId,
+            });
+            return;
+        }
+
+        if (similarityQueueMode === 'search') {
+            const query = similarSearchQuery.trim();
+            if (!query) {
+                clearSuggestionQueue();
+                return;
+            }
+            await loadSimilarSuggestions(query);
+            return;
+        }
+
+        await loadSimilarSuggestions();
+    }, [
+        clearSuggestionQueue,
+        compareSourceCustomerId,
+        compareTargetCustomerId,
+        loadMergePreview,
+        loadSimilarSuggestions,
+        similarSearchQuery,
+        similarityQueueMode,
+    ]);
+
+    useEffect(() => {
+        if (activeSection !== 'similar' || similarityQueueMode !== 'compare') {
+            return;
+        }
+        similarRequestIdRef.current += 1;
+        setLoadingSimilar(false);
+        setSimilarSuggestions([]);
+        setSelectedSuggestion(null);
+    }, [activeSection, similarityQueueMode]);
+
     useEffect(() => {
         if (activeSection !== 'similar') return;
 
@@ -153,6 +186,10 @@ export function useSimilarityQueue(
             return () => window.clearTimeout(timeoutId);
         }
 
+        if (similarityQueueMode === 'compare') {
+            return;
+        }
+
         void loadSimilarSuggestions();
     }, [
         activeSection,
@@ -164,7 +201,9 @@ export function useSimilarityQueue(
     ]);
 
     useEffect(() => {
-        if (activeSection !== 'similar') return;
+        if (activeSection !== 'similar' || similarityQueueMode === 'compare') {
+            return;
+        }
         if (!selectedSuggestion) {
             setActiveMergeRequest(null);
             setMergePreview(null);
@@ -175,7 +214,37 @@ export function useSimilarityQueue(
         if (isSameMergeRequest(activeMergeRequest, request)) return;
 
         void loadMergePreview(request);
-    }, [activeMergeRequest, activeSection, loadMergePreview, selectedSuggestion]);
+    }, [activeMergeRequest, activeSection, loadMergePreview, selectedSuggestion, similarityQueueMode]);
+
+    useEffect(() => {
+        if (activeSection !== 'similar' || similarityQueueMode !== 'compare') {
+            return;
+        }
+
+        const sourceId = compareSourceCustomerId.trim();
+        const targetId = compareTargetCustomerId.trim();
+
+        if (!sourceId || !targetId) {
+            setActiveMergeRequest(null);
+            setMergePreview(null);
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            void loadMergePreview({
+                source_customer_id: sourceId,
+                target_customer_id: targetId,
+            });
+        }, 300);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [
+        activeSection,
+        compareSourceCustomerId,
+        compareTargetCustomerId,
+        loadMergePreview,
+        similarityQueueMode,
+    ]);
 
     const handleMerge = useCallback(async (markTargetVerified?: boolean) => {
         if (!activeMergeRequest || !mergePreview) {
@@ -195,6 +264,10 @@ export function useSimilarityQueue(
         try {
             await endpoints.customers.merge(mergePayload);
             clearSelectedSuggestion();
+            if (similarityQueueMode === 'compare') {
+                setCompareSourceCustomerId('');
+                setCompareTargetCustomerId('');
+            }
             await Promise.all([refreshSimilarSuggestions(), loadMergeHistory()]);
             onMergeApplied?.();
             setPopup({
@@ -208,7 +281,16 @@ export function useSimilarityQueue(
         } finally {
             setExecutingMerge(false);
         }
-    }, [activeMergeRequest, clearSelectedSuggestion, loadMergeHistory, mergePreview, onMergeApplied, refreshSimilarSuggestions, setPopup]);
+    }, [
+        activeMergeRequest,
+        clearSelectedSuggestion,
+        loadMergeHistory,
+        mergePreview,
+        onMergeApplied,
+        refreshSimilarSuggestions,
+        setPopup,
+        similarityQueueMode,
+    ]);
 
     return {
         similarSuggestions,
@@ -225,5 +307,9 @@ export function useSimilarityQueue(
         setSelectedSuggestion,
         setSimilarityQueueMode,
         setSimilarSearchQuery,
+        compareSourceCustomerId,
+        compareTargetCustomerId,
+        setCompareSourceCustomerId,
+        setCompareTargetCustomerId,
     };
 }

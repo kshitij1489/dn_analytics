@@ -9,6 +9,7 @@ import {
     type PopupMessage,
 } from '../components';
 import { CustomerProfile } from '../components/CustomerProfile';
+import { CustomerBiometricMatchingPlaceholder } from '../components/customers/CustomerBiometricMatchingPlaceholder';
 import { CustomerMergeHistorySection } from '../components/customers/CustomerMergeHistorySection';
 import { CustomerSimilaritySection } from '../components/customers/CustomerSimilaritySection';
 import {
@@ -21,7 +22,7 @@ import type { CustomerQuickViewData } from '../types/api';
 import { CUSTOMERS_ESTIMATE_HINT, formatCustomerEstimateRange } from '../utils/customerEstimateDisplay';
 import './Customers.css';
 
-type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge';
+type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge' | 'biometric';
 
 export default function Customers({
     lastDbSync,
@@ -66,6 +67,10 @@ export default function Customers({
         setSelectedSuggestion,
         setSimilarityQueueMode,
         setSimilarSearchQuery,
+        compareSourceCustomerId,
+        compareTargetCustomerId,
+        setCompareSourceCustomerId,
+        setCompareTargetCustomerId,
     } = useSimilarityQueue(activeSection, lastDbSync, setPopup, loadMergeHistory, onCustomerDataChanged);
 
     useEffect(() => {
@@ -76,7 +81,7 @@ export default function Customers({
             return;
         }
 
-        if (pageParams?.section && ['overview', 'profiles', 'analytics', 'similar', 'merge'].includes(pageParams.section)) {
+        if (pageParams?.section && ['overview', 'profiles', 'analytics', 'similar', 'merge', 'biometric'].includes(pageParams.section)) {
             setActiveSection(pageParams.section as CustomerSection);
             clearParams();
         }
@@ -198,6 +203,9 @@ export default function Customers({
                 <TabButton active={activeSection === 'merge'} onClick={() => setActiveSection('merge')} variant="segmented" size="large">
                     Merge History
                 </TabButton>
+                <TabButton active={activeSection === 'biometric'} onClick={() => setActiveSection('biometric')} variant="segmented" size="large">
+                    Biometric Matching
+                </TabButton>
             </div>
 
             {activeSection === 'overview' && (
@@ -228,12 +236,16 @@ export default function Customers({
                     mergePreview={mergePreview}
                     queueMode={similarityQueueMode}
                     searchQuery={similarSearchQuery}
+                    compareSourceCustomerId={compareSourceCustomerId}
+                    compareTargetCustomerId={compareTargetCustomerId}
                     selectedSuggestion={selectedSuggestion}
                     similarSuggestions={similarSuggestions}
                     onMerge={handleMerge}
                     onModeChange={setSimilarityQueueMode}
                     onRefresh={refreshSimilarSuggestions}
                     onSearchQueryChange={setSimilarSearchQuery}
+                    onCompareSourceCustomerIdChange={setCompareSourceCustomerId}
+                    onCompareTargetCustomerIdChange={setCompareTargetCustomerId}
                     onSelectSuggestion={setSelectedSuggestion}
                 />
             )}
@@ -247,6 +259,8 @@ export default function Customers({
                     onUndoMerge={handleUndoMerge}
                 />
             )}
+
+            {activeSection === 'biometric' && <CustomerBiometricMatchingPlaceholder />}
         </div>
     );
 }
