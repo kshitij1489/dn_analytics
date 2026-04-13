@@ -21,6 +21,94 @@ import Customers from './pages/Customers';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
+const getCloudSectionError = (section: any): string | null => {
+  if (!section || typeof section !== 'object') {
+    return null;
+  }
+  return typeof section.error === 'string' && section.error ? section.error : null;
+};
+
+const getSyncResultLabel = (job: JobResponse | null): string => {
+  if (!job) {
+    return 'Sync complete';
+  }
+
+  const stats = job.stats;
+  if (!stats) {
+    return job.message || 'Sync complete';
+  }
+
+  const cloud = stats.cloud_pull;
+  if (cloud?.attempted) {
+    const parts: string[] = [];
+    const syncedOrders = Number(stats.orders ?? stats.fetched ?? stats.count ?? 0);
+    if (syncedOrders > 0) {
+      parts.push(`Synced ${syncedOrders} new orders`);
+    }
+
+    const customerChanges = Number(cloud.customer_merges?.merge_events_applied ?? 0)
+      + Number(cloud.customer_merges?.undo_events_applied ?? 0);
+    if (customerChanges > 0) {
+      parts.push(`Pulled ${customerChanges} customer ${customerChanges === 1 ? 'change' : 'changes'}`);
+    }
+
+    const menuChanges = Number(cloud.menu_merges?.merge_events_applied ?? 0)
+      + Number(cloud.menu_merges?.undo_events_applied ?? 0);
+    if (menuChanges > 0) {
+      parts.push(`Pulled ${menuChanges} menu ${menuChanges === 1 ? 'change' : 'changes'}`);
+    }
+
+    if (!getCloudSectionError(cloud.menu_bootstrap)) {
+      const mb = cloud.menu_bootstrap;
+      const relinkedOrderItems = Number(mb?.order_items_relinked ?? 0);
+      const seededItems = Number(mb?.items_seeded ?? 0);
+      const mappingAssignments = Number(mb?.mapping_assignments ?? 0);
+      if (relinkedOrderItems > 0) {
+        parts.push(`Relinked ${relinkedOrderItems} order items`);
+      } else if (seededItems > 0) {
+        parts.push('Applied menu bootstrap');
+      } else if (mappingAssignments > 0) {
+        parts.push(`Updated ${mappingAssignments} menu bootstrap mappings`);
+      }
+    }
+
+    const cloudHadIssues = Boolean(
+      getCloudSectionError(cloud.customer_merges)
+      || getCloudSectionError(cloud.menu_merges)
+      || getCloudSectionError(cloud.menu_bootstrap)
+    );
+    if (cloudHadIssues) {
+      return parts.length > 0
+        ? `${parts.join(' · ')} · Cloud pull had issues`
+        : 'Cloud pull finished with issues';
+    }
+
+    if (parts.length > 0) {
+      return parts.join(' · ');
+    }
+
+    const totalMergeEventsFetched = Number(cloud.customer_merges?.events_fetched ?? 0)
+      + Number(cloud.menu_merges?.events_fetched ?? 0);
+    if (syncedOrders === 0 && totalMergeEventsFetched === 0) {
+      return 'No new orders to sync · Cloud pull OK (no new merge events)';
+    }
+    return job.message || 'Sync complete';
+  }
+
+  const syncedOrders = Number(stats.orders ?? stats.fetched ?? stats.count ?? 0);
+  if (syncedOrders > 0) {
+    return `Synced ${syncedOrders} new orders`;
+  }
+  // Cloud phase completed but stats may omit nested counters in edge cases — never imply "no-op"
+  if (stats.cloud_pull?.attempted) {
+    return job.message || 'Sync complete · Cloud pull finished';
+  }
+  if (stats.fetched === 0 || stats.count === 0) {
+    return 'No new orders to sync';
+  }
+  return job.message || 'Sync complete';
+};
+
 function AppContent() {
   const { activeTab, setActiveTab } = useNavigation();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
@@ -276,13 +364,7 @@ function AppContent() {
                 marginTop: '4px',
                 fontWeight: 'bold'
               }}>
-                {/* Display sync result message based on stats */}
-                {!job.stats
-                  ? 'Sync complete'
-                  : (job.stats.fetched === 0 || job.stats.count === 0)
-                    ? 'No new orders to sync'
-                    : `Synced ${job.stats.orders || job.stats.fetched || 0} new orders`
-                }
+                {getSyncResultLabel(job)}
               </div>
             )}
 

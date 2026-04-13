@@ -22,6 +22,16 @@ BATCH_LIMIT_AI_FEEDBACK = 500
 
 # --- Tier 3: cache stats, aggregated counters, schema hash ---
 
+def _rows_to_dicts(cursor, rows) -> List[Dict[str, Any]]:
+    cols = [d[0] for d in cursor.description]
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, sqlite3.Row):
+            out.append(dict(row))
+        else:
+            out.append(dict(zip(cols, row)))
+    return out
+
 def _get_cache_stats() -> Dict[str, Any]:
     """LLM cache: total entries and count by call_id. No raw keys."""
     try:
@@ -99,7 +109,6 @@ def _select_incorrect_cache_entries(limit: int = 100) -> List[Dict[str, Any]]:
 
 def _select_unsent_ai_logs(conn, limit: int = BATCH_LIMIT_AI_LOGS) -> List[Dict[str, Any]]:
     """Select ai_logs rows where uploaded_at IS NULL. Prefer columns that exist."""
-    conn.row_factory = None
     cursor = conn.execute("""
         SELECT query_id, user_query, intent, sql_generated, response_type, response_payload,
                error_message, execution_time_ms, created_at,
@@ -110,10 +119,8 @@ def _select_unsent_ai_logs(conn, limit: int = BATCH_LIMIT_AI_LOGS) -> List[Dict[
         LIMIT ?
     """, (limit,))
     rows = cursor.fetchall()
-    cols = [d[0] for d in cursor.description]
     out = []
-    for row in rows:
-        d = dict(zip(cols, row))
+    for d in _rows_to_dicts(cursor, rows):
         # JSON-decode where needed
         if isinstance(d.get("action_sequence"), str):
             try:
@@ -134,8 +141,7 @@ def _select_unsent_ai_feedback(conn, limit: int = BATCH_LIMIT_AI_FEEDBACK) -> Li
         LIMIT ?
     """, (limit,))
     rows = cursor.fetchall()
-    cols = [d[0] for d in cursor.description]
-    return [dict(zip(cols, row)) for row in rows]
+    return _rows_to_dicts(cursor, rows)
 
 
 def upload_pending(
