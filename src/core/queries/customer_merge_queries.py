@@ -1,6 +1,10 @@
 import json
 from typing import List, Optional
 
+from src.core.customer_merge_sync_events import (
+    record_merge_applied_event,
+    record_merge_undone_event,
+)
 from src.core.queries.customer_merge_helpers import (
     copy_customer_addresses_to_target,
     fetch_customer_mergeable_fields,
@@ -99,6 +103,7 @@ def merge_customers(
             ),
         ).fetchone()[0]
 
+        record_merge_applied_event(conn, int(merge_id))
         recompute_customer_aggregates(conn, source_customer_id)
         recompute_customer_aggregates(conn, target_customer_id)
         conn.commit()
@@ -175,6 +180,7 @@ def undo_customer_merge(conn, merge_id: int):
                 "restored_target_fields": sorted(target_before_fields.keys()),
             }), merge_id),
         )
+        record_merge_undone_event(conn, int(merge_id))
         recompute_customer_aggregates(conn, str(row["source_customer_id"]))
         recompute_customer_aggregates(conn, str(row["target_customer_id"]))
         conn.commit()

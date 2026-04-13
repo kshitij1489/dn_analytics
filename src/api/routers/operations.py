@@ -40,7 +40,8 @@ def get_sync_status(job_id: str):
 @router.post("/client-learning")
 def run_client_learning(conn=Depends(get_db)):
     """
-    Run all client-learning uploads: error logs, ai_logs + ai_feedback, menu bootstrap.
+    Run all cloud push uploads: error logs, ai_logs + ai_feedback, menu bootstrap,
+    customer merge events, and forecasts.
     Uses placeholder URLs by default; set CLIENT_LEARNING_* env vars for real cloud.
     """
     result = run_client_learning_shippers(conn)

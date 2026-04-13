@@ -32,6 +32,12 @@ CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL = os.environ.get(
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/ingest",
 ).strip()
 
+# Customer merge collaboration: POST merge/undo events
+CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL = os.environ.get(
+    "CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/customer-merges/ingest",
+).strip()
+
 # Forecast ingest: POST revenue + item forecasts + backtest caches
 CLIENT_LEARNING_FORECAST_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_FORECAST_INGEST_URL",
@@ -65,6 +71,11 @@ def should_upload_learning() -> bool:
 def should_upload_menu_bootstrap() -> bool:
     """True if menu bootstrap upload is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL)
+
+
+def should_upload_customer_merges() -> bool:
+    """True if customer merge upload is configured (non-empty URL)."""
+    return bool(CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL)
 
 
 def should_upload_forecasts() -> bool:

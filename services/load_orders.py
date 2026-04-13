@@ -45,9 +45,9 @@ def create_schema_if_needed(conn):
         SELECT COUNT(*) as table_count
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN ('orders', 'customer_addresses', 'customer_merge_history')
+          AND name IN ('orders', 'customer_addresses', 'customer_merge_history', 'customer_merge_sync_events')
     """)
-    if cursor.fetchone()[0] == 3:
+    if cursor.fetchone()[0] == 4:
         return
         
     print("  Initialize database schema...")

@@ -1,6 +1,6 @@
 """
 Orchestrator for all client-learning uploads: errors, learning (ai_logs + ai_feedback),
-menu bootstrap, forecasts (revenue + item + backtest caches).
+menu bootstrap, customer merges, forecasts (revenue + item + backtest caches).
 
 Call run_all(conn) periodically (e.g. from a background task or POST /api/sync/client-learning).
 Uses placeholder URLs by default; set env vars for plug-and-play when cloud is ready.
@@ -14,6 +14,7 @@ from src.core.config.cloud_sync_config import get_cloud_sync_config
 from src.core.error_shipper import upload_pending as upload_errors
 from src.core.learning_shipper import upload_pending as upload_learning
 from src.core.menu_bootstrap_shipper import upload_pending as upload_menu_bootstrap
+from src.core.customer_merge_shipper import upload_pending as upload_customer_merges
 from src.core.forecast_shipper import upload_pending as upload_forecasts
 
 
@@ -38,13 +39,20 @@ def get_uploaded_by(conn) -> Optional[Dict[str, str]]:
 
 def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None, auth: Optional[str] = None) -> Dict[str, Any]:
     """
-    Run all client-learning shippers: error logs, ai_logs + ai_feedback, menu bootstrap.
+    Run all cloud push shippers: error logs, ai_logs + ai_feedback, menu bootstrap,
+    customer merge events, and forecasts.
     Appends uploaded_by (from app_users) to every payload so cloud knows which employee the upload is from.
     conn: database connection (used for learning shipper and to read app_users).
     log_dir: optional override for error log directory.
-    Returns combined result: { "errors": {...}, "learning": {...}, "menu_bootstrap": {...} }.
+    Returns combined result for each shipper.
     """
-    result: Dict[str, Any] = {"errors": {}, "learning": {}, "menu_bootstrap": {}, "forecasts": {}}
+    result: Dict[str, Any] = {
+        "errors": {},
+        "learning": {},
+        "menu_bootstrap": {},
+        "customer_merges": {},
+        "forecasts": {},
+    }
     uploaded_by = get_uploaded_by(conn) if conn else None
 
     # If auth is not provided, try to fetch it from system_config (if conn is available)
@@ -54,11 +62,13 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
             auth = db_auth
 
     # Pass configured endpoints/auth to sub-shippers if base_url is provided.
-    # Each sub-shipper (error, learning, menu, forecasts) accepts (endpoint=..., auth=...).
+    # Each sub-shipper (error, learning, menu, customer merges, forecasts) accepts
+    # (endpoint=..., auth=...).
     
     error_kwargs = {"uploaded_by": uploaded_by, "log_dir": log_dir}
     learning_kwargs = {"uploaded_by": uploaded_by}
     menu_kwargs = {"uploaded_by": uploaded_by}
+    customer_merge_kwargs = {"uploaded_by": uploaded_by}
     forecast_kwargs = {"uploaded_by": uploaded_by}
     
     if base_url:
@@ -67,10 +77,16 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
          error_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/errors/ingest"
          learning_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/learning/ingest"
          menu_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-bootstrap/ingest"
+         customer_merge_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/customer-merges/ingest"
          forecast_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/forecasts/ingest"
     else:
          # Fall back to env-based full URLs (for POST /api/sync/client-learning)
-         from src.core.config.client_learning_config import CLIENT_LEARNING_FORECAST_INGEST_URL
+         from src.core.config.client_learning_config import (
+             CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL,
+             CLIENT_LEARNING_FORECAST_INGEST_URL,
+         )
+         if CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL:
+             customer_merge_kwargs["endpoint"] = CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL
          if CLIENT_LEARNING_FORECAST_INGEST_URL:
              forecast_kwargs["endpoint"] = CLIENT_LEARNING_FORECAST_INGEST_URL
 
@@ -78,6 +94,7 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
          error_kwargs["auth"] = auth
          learning_kwargs["auth"] = auth
          menu_kwargs["auth"] = auth
+         customer_merge_kwargs["auth"] = auth
          forecast_kwargs["auth"] = auth
 
     result["errors"] = upload_errors(**error_kwargs)
@@ -87,6 +104,11 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
         else {"ai_logs_sent": 0, "ai_feedback_sent": 0, "tier3_included": False, "error": "No connection"}
     )
     result["menu_bootstrap"] = upload_menu_bootstrap(**menu_kwargs)
+    result["customer_merges"] = (
+        upload_customer_merges(conn, **customer_merge_kwargs)
+        if conn
+        else {"events_sent": 0, "backfilled_applied": 0, "backfilled_undone": 0, "error": "No connection"}
+    )
     result["forecasts"] = (
         upload_forecasts(conn, **forecast_kwargs)
         if conn
