@@ -13,8 +13,15 @@
 |-----------|----------------------|-------|
 | Phase 1 - Customer merge push | Complete | Local merge/undo actions write append-only sync events and upload through the existing cloud push bundle. |
 | Phase 2 - Customer merge pull/apply | Complete on the client | Manual pull route, cursor storage, remote-event idempotency, and deterministic local replay are implemented. |
+| Phase 3 - Multi-device attribution | Complete on the client | Persistent `device_id` / `install_id` attribution is generated locally and included in customer/menu merge sync payloads; the active sync identity is exposed in Configuration. |
+| Phase 4 - Menu bootstrap pull/apply | Complete on the client | Manual `menu-bootstrap/latest` pull writes the standard backup files, reuses `perform_seeding()`, and can relink local `order_items` from the snapshot. |
+| Phase 5 - Menu merge push/pull | Complete on the client | Local menu merge/undo actions emit append-only sync events; scheduler/manual push and manual pull/apply are implemented. |
 | Dachnona backend ingest endpoint | Pending externally | Cloud still needs `POST /desktop-analytics-sync/customer-merges/ingest` to receive the Phase 1 payloads. |
 | Dachnona backend delta endpoint | Pending externally | Cloud still needs `GET /desktop-analytics-sync/customer-merges` for the Phase 2 pull path to talk to. |
+| Dachnona backend attribution persistence | Pending externally | Cloud still needs to persist and surface `device_id` / `install_id` attribution alongside merge events for multi-device auditability. |
+| Dachnona backend menu bootstrap latest endpoint | Pending externally | Cloud still needs `GET /desktop-analytics-sync/menu-bootstrap/latest` available for the Phase 4 pull path if it is not already live. |
+| Dachnona backend menu merge ingest endpoint | Pending externally | Cloud still needs `POST /desktop-analytics-sync/menu-merges/ingest` to receive Phase 5 payloads. |
+| Dachnona backend menu merge delta endpoint | Pending externally | Cloud still needs `GET /desktop-analytics-sync/menu-merges` for the Phase 5 pull path to talk to. |
 
 ---
 
@@ -25,8 +32,8 @@ The repo currently has **three different sync flows**, and they should not be co
 | Flow | Direction | Current entry point | Purpose |
 |------|-----------|---------------------|---------|
 | **Upstream order sync** | Remote -> local | `POST /api/sync/run` -> `src/core/services/sync_service.py` | Pull PetPooja/order stream data into local SQLite. |
-| **Cloud push** | Local -> Dachnona | `src/core/services/cloud_sync_scheduler.py` and `POST /api/sync/client-learning` | Push telemetry, menu bootstrap, forecasts, and conversations to the cloud. |
-| **Cloud pull** | Dachnona -> local | `POST /api/forecast/pull-from-cloud` and `POST /api/orders/customers/merge/pull-from-cloud` | Pull forecast bootstrap and replay customer merge events locally. |
+| **Cloud push** | Local -> Dachnona | `src/core/services/cloud_sync_scheduler.py` and `POST /api/sync/client-learning` | Push telemetry, menu bootstrap, customer merges, menu merges, forecasts, and conversations to the cloud. |
+| **Cloud pull** | Dachnona -> local | `POST /api/forecast/pull-from-cloud`, `POST /api/orders/customers/merge/pull-from-cloud`, `POST /api/menu/bootstrap/pull-from-cloud`, and `POST /api/menu/merge/pull-from-cloud` | Pull forecast bootstrap, customer merge events, menu bootstrap snapshots, and menu merge events into local SQLite. |
 
 The customer merge problem is **not** an upstream PetPooja sync issue. It is a **cloud replication concern**:
 
@@ -88,21 +95,21 @@ Important detail:
 
 ### 2.3 Cloud Pull
 
-There are now two real cloud pull paths in the repo:
+There are now four real cloud pull paths in the repo:
 
 | Pull path | Manual API | Logic | Data pulled |
 |-----------|------------|-------|-------------|
 | Forecast bootstrap | `POST /api/forecast/pull-from-cloud` | `src/core/forecast_bootstrap.py` | Revenue, item, and volume forecasts + backtests |
 | Customer merge replay | `POST /api/orders/customers/merge/pull-from-cloud` | `src/core/customer_merge_sync.py` | Customer merge apply/undo events replayed into local SQLite |
+| Menu bootstrap snapshot | `POST /api/menu/bootstrap/pull-from-cloud` | `src/core/menu_bootstrap_sync.py` | Latest menu bootstrap snapshot, written to local backup JSON and applied via seeding + optional `order_items` relink |
+| Menu merge replay | `POST /api/menu/merge/pull-from-cloud` | `src/core/menu_merge_sync.py` | Menu merge / undo events replayed via the existing local menu merge logic |
 
 There is **no implemented client pull** for:
 
-- menu bootstrap
-- menu merge history
 - conversations
 - learning/error payloads
 
-`scripts/test_server_connection.py` probes `GET /desktop-analytics-sync/menu-bootstrap/latest`, but that is only a connectivity test. No production code consumes that response.
+`scripts/test_server_connection.py` still probes `GET /desktop-analytics-sync/menu-bootstrap/latest`, but production code now also consumes that response through `src/core/menu_bootstrap_sync.py`.
 
 ---
 
@@ -113,11 +120,11 @@ There is **no implemented client pull** for:
 | Error logs | Yes | No | Uploaded from JSONL files; files are truncated/deleted on success. |
 | `ai_logs`, `ai_feedback` | Yes | No | Rows with `uploaded_at IS NULL` are pushed and then marked. |
 | Tier 3 learning payloads | Yes | No | Cache stats, aggregates, schema hash, and incorrect cache entries are posted every run when URL is configured. |
-| Menu bootstrap JSON | Yes | No | File snapshot only: `id_maps_backup.json` + `cluster_state_backup.json`. No local `uploaded_at`; same snapshot can be re-posted every cycle. |
+| Menu bootstrap JSON | Yes | Yes | Pull writes the snapshot into the same local backup files and can optionally relink `order_items`; snapshot parity is still limited by what the backup format contains. |
 | Forecast caches/backtests | Yes | Yes | Push uses `uploaded_at`; pull uses forecast bootstrap endpoint. |
 | Conversations | Yes | No | `synced_at` based push-only flow. |
 | `customer_merge_history` | Yes | Yes | Replicated as append-only merge events, not raw history rows. Pull is manual and idempotent. |
-| `merge_history` | No | No | Menu audit/history gap. |
+| `merge_history` | Yes | Yes | Replicated as append-only menu merge events, not as raw `merge_history` rows. Undo replay stays explicit and idempotent. |
 | `customer_addresses` | No direct sync | No | Only local DB state today. |
 
 `uploaded_by` attribution comes from `app_users WHERE is_active = 1 LIMIT 1`, but the current user model is effectively a singleton:
@@ -319,8 +326,9 @@ Startup now attempts to add `uploaded_at` to all forecast cache/backtest tables.
    - The analytics client can now push merge events and manually pull/apply them.
    - The remaining gap is server-side ingest + delta APIs.
 
-2. **No menu bootstrap pull implementation**
-   - The repo only has a connectivity probe script for `menu-bootstrap/latest`.
+2. **Menu bootstrap pull now exists client-side, but its parity is bounded by snapshot shape**
+   - The client can now consume `menu-bootstrap/latest`, write the local backup files, seed menu tables, and relink `order_items`.
+   - Snapshot pull still cannot restore addon remaps or raw menu merge audit rows because that data is not in the snapshot format.
 
 3. **No manual conversations push endpoint**
    - Conversations are scheduled, but not included in `POST /api/sync/client-learning`.
@@ -331,8 +339,9 @@ Startup now attempts to add `uploaded_at` to all forecast cache/backtest tables.
    - No dedupe
    - No change detection
 
-5. **Single-user attribution model**
-   - `app_users` behaves like a singleton, which is weak for multi-device auditability.
+5. **Employee identity is still singleton-style, but device/install attribution is now added**
+   - `app_users` still behaves like a singleton.
+   - The client now also emits persistent `device_id` / `install_id` metadata so cloud-side auditability is no longer limited to the singleton employee row.
 
 6. **Customer merge payload fields are local-machine-oriented**
    - Good for local undo
@@ -494,17 +503,23 @@ Status: Complete in the analytics client.
 
 ### Phase 3 - Multi-Device Attribution
 
+Status: Complete in the analytics client. Dachnona backend persistence/reporting is still pending externally.
+
 - add `device_id` / `install_id`
 - stop treating `app_users` as sufficient multi-device identity
 - send both employee identity and device identity with merge events
 
 ### Phase 4 - Menu Pull, If Still Needed
 
+Status: Complete in the analytics client. Depends on Dachnona serving `menu-bootstrap/latest`.
+
 - implement `menu-bootstrap/latest` consumption
 - decide whether snapshot apply is only for fresh installs or also for populated DBs
 - if populated DB parity matters, extend apply logic beyond `perform_seeding()`
 
 ### Phase 5 - Optional Menu Merge Event Sync
+
+Status: Complete in the analytics client. Dachnona ingest/delta endpoints are still pending externally.
 
 - only after deciding whether menu bootstrap snapshots are enough
 - if not enough, add explicit menu merge event ingest/pull
@@ -517,7 +532,7 @@ Status: Complete in the analytics client.
    Because `customer_merge_history` is only stored in local SQLite and is not part of any current cloud push/pull flow.
 
 2. **Is this missing from the routine sync/push/pull path?**  
-   Yes. Current cloud push covers errors, learning, menu bootstrap, forecasts, and conversations. Current cloud pull covers forecasts only.
+   It was missing when this plan was first written. In the current repo, cloud push now covers customer merges and menu merges, and cloud pull covers forecasts, customer merges, menu bootstrap snapshots, and menu merges. The remaining gap is the corresponding Dachnona backend support.
 
 3. **Will menu bootstrap pull solve the customer merge problem?**  
    No. Customer merges need their own replicated event/apply path.

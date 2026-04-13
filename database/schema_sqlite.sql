@@ -361,6 +361,31 @@ CREATE TABLE IF NOT EXISTS merge_history (
     merged_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS menu_merge_sync_events (
+    event_id TEXT PRIMARY KEY,
+    merge_id INTEGER,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    upload_attempted_at TEXT,
+    uploaded_at TEXT,
+    last_error TEXT,
+    CHECK (event_type IN ('menu_merge.applied', 'menu_merge.undone'))
+);
+
+CREATE TABLE IF NOT EXISTS menu_merge_remote_events (
+    remote_event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    reverts_remote_event_id TEXT,
+    local_merge_id INTEGER,
+    payload TEXT NOT NULL,
+    remote_cursor TEXT,
+    occurred_at TEXT,
+    applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    CHECK (event_type IN ('menu_merge.applied', 'menu_merge.undone'))
+);
+
 -- ============================================================================
 -- 15. AI LOGS & FEEDBACK
 -- ============================================================================
@@ -549,6 +574,14 @@ CREATE INDEX IF NOT EXISTS idx_order_item_addons_group_name ON order_item_addons
 
 -- Merge History
 CREATE INDEX IF NOT EXISTS idx_merge_history_target ON merge_history(target_id);
+CREATE INDEX IF NOT EXISTS idx_menu_merge_sync_events_pending
+ON menu_merge_sync_events(uploaded_at, occurred_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_menu_merge_sync_events_merge_type
+ON menu_merge_sync_events(merge_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_menu_merge_remote_events_reverts
+ON menu_merge_remote_events(reverts_remote_event_id);
+CREATE INDEX IF NOT EXISTS idx_menu_merge_remote_events_local_merge_id
+ON menu_merge_remote_events(local_merge_id);
 -- ============================================================================
 -- 18. SYSTEM CONFIGURATION
 -- ============================================================================

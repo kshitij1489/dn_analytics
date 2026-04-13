@@ -13,6 +13,7 @@ class ConfigUpdate(BaseModel):
     settings: Dict[str, str]
 
 from src.core.db.connection import get_db_connection
+from src.core.sync_identity import get_sync_attribution
 
 @router.get("/")
 def get_config():
@@ -163,6 +164,18 @@ def update_config(data: ConfigUpdate):
     except Exception as e:
         print(f"Error updating config: {e}")
         conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.get("/sync-identity")
+def get_sync_identity():
+    """Return the current employee + device/install identity used for cloud sync."""
+    conn, _ = get_db_connection()
+    try:
+        return get_sync_attribution(conn)
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -415,4 +428,3 @@ def save_user(user: User):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-

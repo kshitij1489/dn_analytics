@@ -3,6 +3,7 @@ import { Card } from '../components/Card';
 import { ErrorPopup } from '../components';
 import type { PopupMessage } from '../components';
 import { endpoints } from '../api';
+import type { SyncIdentityResponse } from '../types/api';
 
 // Type declaration for Electron IPC
 declare global {
@@ -32,6 +33,7 @@ export default function Configuration() {
     const [savingUser, setSavingUser] = useState(false);
     const [userLoadError, setUserLoadError] = useState<string | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
+    const [syncIdentity, setSyncIdentity] = useState<SyncIdentityResponse | null>(null);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -41,6 +43,7 @@ export default function Configuration() {
 
     useEffect(() => {
         loadSettings();
+        loadSyncIdentity();
 
         // Get current app version
         if (window.electron) {
@@ -80,6 +83,15 @@ export default function Configuration() {
         }
     };
 
+    const loadSyncIdentity = async () => {
+        try {
+            const res = await endpoints.config.getSyncIdentity();
+            setSyncIdentity(res.data);
+        } catch (e) {
+            console.error("Failed to load sync identity", e);
+        }
+    };
+
     const handleSaveUser = async () => {
         if (!userForm.name || !userForm.employee_id) {
             setPopup({ type: 'error', message: "Name and Employee ID are required" });
@@ -91,6 +103,7 @@ export default function Configuration() {
             setPopup({ type: 'success', message: "User saved successfully!" });
             setUserLoadError(null);
             loadUsers();
+            loadSyncIdentity();
         } catch (e: any) {
             const errorMsg = e.response?.data?.detail || "Failed to save user";
             setPopup({ type: 'error', message: errorMsg });
@@ -508,6 +521,126 @@ export default function Configuration() {
                             {renderInput("Cloud Server URL", "cloud_sync_url", "url", "https://api.example.com")}
                             {renderInput("Cloud API Key", "cloud_sync_api_key", "password")}
                             {renderTestButton('cloud_sync')}
+                            {syncIdentity && (
+                                <div style={{
+                                    marginBottom: '16px',
+                                    padding: '12px',
+                                    borderRadius: '10px',
+                                    background: 'rgba(148, 163, 184, 0.08)',
+                                    border: '1px solid var(--border-color)',
+                                    fontSize: '0.9em',
+                                    color: 'var(--text-secondary)'
+                                }}>
+                                    <div><strong style={{ color: 'var(--text-color)' }}>Employee:</strong> {syncIdentity.employee?.name || 'Unassigned'} ({syncIdentity.employee?.employee_id || 'n/a'})</div>
+                                    <div><strong style={{ color: 'var(--text-color)' }}>Device:</strong> {syncIdentity.device.device_label} · {syncIdentity.device.device_id}</div>
+                                    <div><strong style={{ color: 'var(--text-color)' }}>Install:</strong> {syncIdentity.device.install_id}</div>
+                                </div>
+                            )}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const res = await endpoints.sync.clientLearning();
+                                            const result = res.data?.result || {};
+                                            setPopup({
+                                                type: 'success',
+                                                message: `Cloud push complete. Customer merges: ${result.customer_merges?.events_sent ?? 0}, Menu merges: ${result.menu_merges?.events_sent ?? 0}`,
+                                            });
+                                        } catch (e: any) {
+                                            setPopup({ type: 'error', message: e.response?.data?.detail || "Cloud push failed" });
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '8px 14px',
+                                        background: 'rgba(59, 130, 246, 0.16)',
+                                        color: '#3b82f6',
+                                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    Push Now
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const res = await endpoints.customers.pullFromCloud(200);
+                                            setPopup({
+                                                type: 'success',
+                                                message: `Customer merge pull complete. Applied: ${res.data.merge_events_applied ?? 0}, Undone: ${res.data.undo_events_applied ?? 0}`,
+                                            });
+                                        } catch (e: any) {
+                                            setPopup({ type: 'error', message: e.response?.data?.detail || "Customer merge pull failed" });
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '8px 14px',
+                                        background: 'rgba(34, 197, 94, 0.16)',
+                                        color: '#22c55e',
+                                        border: '1px solid rgba(34, 197, 94, 0.3)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    Pull Customer Merges
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const res = await endpoints.menu.pullBootstrapFromCloud('seed_and_relink_orders');
+                                            const warnings = Array.isArray(res.data.warnings) && res.data.warnings.length > 0
+                                                ? ` ${res.data.warnings.join(' ')}`
+                                                : '';
+                                            setPopup({
+                                                type: 'success',
+                                                message: `Menu bootstrap applied. Items: ${res.data.items_seeded ?? 0}, Variants: ${res.data.variants_seeded ?? 0}, Order items relinked: ${res.data.order_items_relinked ?? 0}.${warnings}`,
+                                            });
+                                        } catch (e: any) {
+                                            setPopup({ type: 'error', message: e.response?.data?.detail || "Menu bootstrap pull failed" });
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '8px 14px',
+                                        background: 'rgba(245, 158, 11, 0.16)',
+                                        color: '#f59e0b',
+                                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    Pull Menu Bootstrap
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const res = await endpoints.menu.pullMergeEventsFromCloud(200);
+                                            setPopup({
+                                                type: 'success',
+                                                message: `Menu merge pull complete. Applied: ${res.data.merge_events_applied ?? 0}, Undone: ${res.data.undo_events_applied ?? 0}`,
+                                            });
+                                        } catch (e: any) {
+                                            setPopup({ type: 'error', message: e.response?.data?.detail || "Menu merge pull failed" });
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '8px 14px',
+                                        background: 'rgba(168, 85, 247, 0.16)',
+                                        color: '#a855f7',
+                                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    Pull Menu Merges
+                                </button>
+                            </div>
+                            <p style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                                Menu bootstrap pull restores snapshot-backed menu mappings and can relink historical <code>order_items</code>, but it does not restore addon remaps or menu merge audit history by itself.
+                            </p>
                             <div style={{ marginBottom: '20px' }}></div>
                             <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
 

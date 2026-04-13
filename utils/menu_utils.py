@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 import json
+from datetime import datetime, timezone
 from scripts.seed_from_backups import export_to_backups
 from utils.id_generator import generate_deterministic_id
 
@@ -240,11 +241,12 @@ def _update_merge_target_stats(cursor, target_id: str, source_metrics: Tuple[Any
     """, (source_sold or 0, source_as_item or 0, source_as_addon or 0, source_revenue or 0, target_id))
 
 
-def _insert_merge_history(cursor, source_id: str, target_id: str, source_name: str, source_type: str, payload: Any) -> None:
+def _insert_merge_history(cursor, source_id: str, target_id: str, source_name: str, source_type: str, payload: Any) -> int:
     cursor.execute("""
         INSERT INTO merge_history (source_id, target_id, source_name, source_type, affected_order_items)
         VALUES (?, ?, ?, ?, ?)
     """, (source_id, target_id, source_name, source_type, json.dumps(payload)))
+    return int(cursor.lastrowid)
 
 
 def _ensure_variant(conn, variant_name: str) -> str:
@@ -444,6 +446,7 @@ def merge_menu_items_with_variant_mappings(
     source_id: str,
     target_id: str,
     variant_mappings: List[Dict[str, Any]],
+    emit_sync_event: bool = True,
 ) -> Dict[str, Any]:
     """Merge a source item into a target item while remapping source variants."""
     if source_id == target_id:
@@ -544,7 +547,7 @@ def merge_menu_items_with_variant_mappings(
                 for row in addon_rows
             ],
         }
-        _insert_merge_history(cursor, source_id, target_id, source_name, source_type, history_payload)
+        merge_id = _insert_merge_history(cursor, source_id, target_id, source_name, source_type, history_payload)
 
         _update_merge_target_stats(cursor, target_id, source_metrics)
 
@@ -555,12 +558,18 @@ def merge_menu_items_with_variant_mappings(
 
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
 
+        if emit_sync_event:
+            from src.core.menu_merge_sync_events import record_menu_merge_applied_event
+
+            record_menu_merge_applied_event(conn, merge_id)
+
         conn.commit()
         export_to_backups(conn)
 
         return {
             "status": "success",
             "message": f"Merged '{source_name}' into '{target[1]}' with variant mapping",
+            "merge_id": merge_id,
             "stats": {
                 "variant_mappings": len(resolved_variant_ids),
                 "source_total_sold": int(source[4] or 0),
@@ -574,7 +583,13 @@ def merge_menu_items_with_variant_mappings(
         cursor.close()
 
 
-def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: bool = False) -> Dict[str, Any]:
+def merge_menu_items(
+    conn,
+    source_id: str,
+    target_id: str,
+    adopt_source_prices: bool = False,
+    emit_sync_event: bool = True,
+) -> Dict[str, Any]:
     """
     Merge source_id (UUID) into target_id (UUID).
     
@@ -606,7 +621,7 @@ def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: 
         # 1.5 Record History (Collect affected order_item_ids from mappings)
         cursor.execute("SELECT order_item_id FROM menu_item_variants WHERE menu_item_id = ?", (source_id,))
         affected_ids = [row[0] for row in cursor.fetchall()]
-        _insert_merge_history(cursor, source_id, target_id, source_name, source_type, affected_ids)
+        merge_id = _insert_merge_history(cursor, source_id, target_id, source_name, source_type, affected_ids)
         
         # 2. Update Target Stats
         _update_merge_target_stats(cursor, target_id, (source_sold, source_revenue, source_as_item, source_as_addon))
@@ -636,6 +651,11 @@ def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: 
 
         # 6. Delete Source Item
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
+
+        if emit_sync_event:
+            from src.core.menu_merge_sync_events import record_menu_merge_applied_event
+
+            record_menu_merge_applied_event(conn, merge_id)
         
         conn.commit()
         
@@ -645,6 +665,7 @@ def merge_menu_items(conn, source_id: str, target_id: str, adopt_source_prices: 
         return {
             "status": "success", 
             "message": f"Merged '{source_name}' into '{target_name}'",
+            "merge_id": merge_id,
             "stats": {
                 "orders_relinked": relinked_count,
                 "mappings_updated": mappings_updated,
@@ -847,6 +868,7 @@ def resolve_menu_item_variant(
     new_type: str = None,
     target_variant_id: str = None,
     new_variant_name: str = None,
+    emit_sync_event: bool = True,
 ) -> Dict[str, Any]:
     """Resolve a single unresolved menu item + variant pair."""
     source_menu_item_id = str(source_menu_item_id or "").strip()
@@ -998,6 +1020,7 @@ def resolve_menu_item_variant(
             resolved_target_id != source_menu_item_id or
             resolved_target_variant_id != source_variant_db_id
         )
+        merge_id = None
         if should_record_history:
             history_payload = {
                 "kind": "resolution_variant_v1",
@@ -1009,7 +1032,7 @@ def resolve_menu_item_variant(
                 "order_items": order_item_rows,
                 "order_item_addons": addon_rows,
             }
-            _insert_merge_history(
+            merge_id = _insert_merge_history(
                 cursor,
                 source_menu_item_id,
                 resolved_target_id,
@@ -1089,6 +1112,11 @@ def resolve_menu_item_variant(
         for menu_item_id in {source_menu_item_id, resolved_target_id}:
             _sync_menu_item_resolution_state(cursor, menu_item_id)
 
+        if emit_sync_event and merge_id is not None:
+            from src.core.menu_merge_sync_events import record_menu_merge_applied_event
+
+            record_menu_merge_applied_event(conn, merge_id)
+
         conn.commit()
         export_to_backups(conn)
 
@@ -1103,6 +1131,7 @@ def resolve_menu_item_variant(
         return {
             "status": "success",
             "message": message,
+            "merge_id": merge_id,
             "stats": {
                 "mapping_rows_updated": len(mapping_rows),
                 "order_items_updated": len(order_item_rows),
@@ -1151,7 +1180,7 @@ def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> D
     finally:
         cursor.close()
 
-def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
+def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, Any]:
     """
     Reverse a merge operation.
     1. Re-insert source menu item
@@ -1272,6 +1301,15 @@ def undo_merge(conn, merge_id: int) -> Dict[str, Any]:
         if history_kind == "resolution_variant_v1":
             for mid in [target_id, source_id]:
                 _sync_menu_item_resolution_state(cursor, mid)
+
+        if emit_sync_event:
+            from src.core.menu_merge_sync_events import record_menu_merge_undone_event
+
+            record_menu_merge_undone_event(
+                conn,
+                history_dict,
+                occurred_at=datetime.now(timezone.utc).isoformat(),
+            )
 
         
         # 7. Delete History

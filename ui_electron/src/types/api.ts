@@ -296,6 +296,20 @@ export interface AppUser {
     created_at?: string;
 }
 
+export interface SyncDeviceIdentity {
+    device_id: string;
+    install_id: string;
+    device_label: string;
+    platform: string;
+    platform_release: string;
+    machine: string;
+}
+
+export interface SyncIdentityResponse {
+    employee: AppUser | null;
+    device: SyncDeviceIdentity;
+}
+
 // --- API Response Wrappers ---
 
 export interface TopItemsResponse {

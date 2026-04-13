@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { AppUser } from './types/api';
+import type { AppUser, SyncIdentityResponse } from './types/api';
 
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
@@ -104,6 +104,12 @@ export const endpoints = {
             }>,
         }) => api.post('/menu/merge', data),
         undoMerge: (data: { merge_id: number }) => api.post('/menu/merge/undo', data),
+        pullMergeEventsFromCloud: (limit?: number) =>
+            api.post('/menu/merge/pull-from-cloud', null, { params: { limit: limit || 100 } }),
+        pullBootstrapFromCloud: (applyMode?: 'seed_only' | 'seed_and_relink_orders') =>
+            api.post('/menu/bootstrap/pull-from-cloud', null, {
+                params: { apply_mode: applyMode || 'seed_and_relink_orders' },
+            }),
 
         remapCheck: (oid: string) => api.get(`/menu/remap/check/${oid}`),
         remap: (data: { order_item_id: string, new_menu_item_id: string, new_variant_id: string }) => api.post('/menu/remap', data),
@@ -148,12 +154,15 @@ export const endpoints = {
             mark_target_verified?: boolean;
         }) => api.post('/orders/customers/merge', data),
         undoMerge: (data: { merge_id: number }) => api.post('/orders/customers/merge/undo', data),
+        pullFromCloud: (limit?: number) =>
+            api.post('/orders/customers/merge/pull-from-cloud', null, { params: { limit: limit || 100 } }),
     },
 
 
     sync: {
         run: () => api.post('/sync/run'),
         status: (jobId: string) => api.get(`/sync/status/${jobId}`),
+        clientLearning: () => api.post('/sync/client-learning'),
     },
 
     sql: {
@@ -209,6 +218,7 @@ export const endpoints = {
         resetDb: (section: string) => api.post('/config/reset-db', { section }),
         getUsers: () => api.get<AppUser[]>('/config/users'),
         saveUser: (user: AppUser) => api.post('/config/users', user),
+        getSyncIdentity: () => api.get<SyncIdentityResponse>('/config/sync-identity'),
     },
 
     today: {

@@ -240,6 +240,8 @@ class CustomerMergeSyncTests(unittest.TestCase):
         self.assertEqual(payload["merge_metadata"]["reasons"], ["phone exact match"])
         self.assertEqual(payload["moved_orders"]["count"], 1)
         self.assertEqual(payload["moved_orders"]["portable_refs"][0]["petpooja_order_id"], "PP-101")
+        self.assertTrue(payload["attribution"]["device"]["device_id"].startswith("device-"))
+        self.assertTrue(payload["attribution"]["device"]["install_id"].startswith("install-"))
         expected_phone_hash = hashlib.sha256("9999999999".encode("utf-8")).hexdigest()
         self.assertEqual(
             payload["source_customer"]["portable_locators"]["phone_hash"],

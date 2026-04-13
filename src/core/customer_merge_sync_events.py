@@ -3,6 +3,7 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
+from src.core.sync_identity import get_sync_attribution
 from src.core.queries.customer_query_utils import (
     format_customer_address,
     json_loads_maybe,
@@ -337,6 +338,7 @@ def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
         "schema_version": SCHEMA_VERSION,
         "event_type": EVENT_TYPE_APPLIED,
         "occurred_at": merge_row["merged_at"],
+        "attribution": get_sync_attribution(conn),
         "source_customer": _build_customer_descriptor(conn, int(merge_row["source_customer_id"]), source_snapshot),
         "target_customer": _build_customer_descriptor(conn, int(merge_row["target_customer_id"]), target_snapshot),
         "merge_metadata": _build_merge_metadata(merge_row),
@@ -387,6 +389,7 @@ def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
         "event_type": EVENT_TYPE_UNDONE,
         "occurred_at": merge_row["undone_at"],
         "reverts_remote_event_id": applied_event_id,
+        "attribution": get_sync_attribution(conn),
         "source_customer": _build_customer_descriptor(conn, int(merge_row["source_customer_id"]), source_snapshot),
         "target_customer": _build_customer_descriptor(conn, int(merge_row["target_customer_id"]), target_snapshot),
         "merge_metadata": _build_merge_metadata(merge_row),

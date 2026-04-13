@@ -20,6 +20,7 @@ def upload_pending(
     endpoint: Optional[str] = None,
     auth: Optional[str] = None,
     uploaded_by: Optional[Dict[str, str]] = None,
+    uploaded_from: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Read id_maps_backup.json and cluster_state_backup.json from data/, POST to cloud.
@@ -49,6 +50,8 @@ def upload_pending(
     payload: Dict[str, Any] = {"id_maps": id_maps, "cluster_state": cluster_state}
     if uploaded_by:
         payload["uploaded_by"] = uploaded_by
+    if uploaded_from:
+        payload["uploaded_from"] = uploaded_from
     headers = {"Content-Type": "application/json"}
     token = auth
     if token:

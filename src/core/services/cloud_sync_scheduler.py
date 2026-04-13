@@ -2,7 +2,7 @@
 Cloud Sync Scheduler
 Background service that triggers the 'Push' sync to the cloud every 5 minutes.
 Scope:
-1. Client Learning (Errors, Logs, Menu Bootstrap) -> /api/errors/ingest, /api/learning/ingest, etc.
+1. Client Learning (Errors, Logs, Menu Bootstrap, Customer/Menu Merge Events) -> /api/errors/ingest, /api/learning/ingest, etc.
 2. Conversations -> /api/conversations/sync
 3. Forecast Automation: Checks if local forecast is fresh at the start of business day; triggers full retrain if missing.
 """

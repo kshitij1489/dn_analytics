@@ -1,36 +1,30 @@
 """
-Customer merge shipper: upload append-only customer merge events to cloud.
-
-Follows the same pattern as the existing cloud shippers:
-  - read pending rows from a local sync table
-  - POST them to a dedicated ingest endpoint
-  - mark uploaded_at on success
+Upload append-only menu merge events to cloud.
 """
 
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.core.config.client_learning_config import (
-    CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL,
-)
-from src.core.customer_merge_sync_events import (
+from src.core.config.client_learning_config import CLIENT_LEARNING_MENU_MERGE_INGEST_URL
+from src.core.menu_merge_sync_events import (
     SCHEMA_VERSION,
-    backfill_customer_merge_sync_events,
-    has_customer_merge_sync_table,
+    backfill_menu_merge_sync_events,
+    has_menu_merge_sync_table,
 )
+
 
 BATCH_LIMIT_EVENTS = 200
 
 
 def _select_unsent_events(conn, limit: int = BATCH_LIMIT_EVENTS) -> List[Dict[str, Any]]:
-    if not has_customer_merge_sync_table(conn):
+    if not has_menu_merge_sync_table(conn):
         return []
 
     rows = conn.execute(
         """
         SELECT event_id, payload
-        FROM customer_merge_sync_events
+        FROM menu_merge_sync_events
         WHERE uploaded_at IS NULL
         ORDER BY occurred_at ASC, created_at ASC
         LIMIT ?
@@ -57,7 +51,7 @@ def _mark_events(conn, event_ids: List[str], uploaded_at: Optional[str], error: 
     placeholders = ",".join("?" for _ in event_ids)
     conn.execute(
         f"""
-        UPDATE customer_merge_sync_events
+        UPDATE menu_merge_sync_events
         SET upload_attempted_at = ?,
             uploaded_at = ?,
             last_error = ?
@@ -75,28 +69,16 @@ def upload_pending(
     uploaded_by: Optional[Dict[str, str]] = None,
     uploaded_from: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """
-    Upload unsent customer merge events and mark them as uploaded on success.
+    url = (endpoint or CLIENT_LEARNING_MENU_MERGE_INGEST_URL).strip()
+    if not url or conn is None:
+        return {"events_sent": 0, "backfilled_applied": 0, "error": None}
 
-    Returns:
-        {"events_sent": int, "backfilled_applied": int, "backfilled_undone": int, "error": str or None}
-    """
-    url = (endpoint or CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL).strip()
-    if not url or conn is None or not has_customer_merge_sync_table(conn):
-        return {
-            "events_sent": 0,
-            "backfilled_applied": 0,
-            "backfilled_undone": 0,
-            "error": None,
-        }
-
-    backfill_counts = backfill_customer_merge_sync_events(conn)
+    backfill_counts = backfill_menu_merge_sync_events(conn)
     events = _select_unsent_events(conn)
     if not events:
         return {
             "events_sent": 0,
             "backfilled_applied": backfill_counts["applied"],
-            "backfilled_undone": backfill_counts["undone"],
             "error": None,
         }
 
@@ -110,8 +92,7 @@ def upload_pending(
     if uploaded_from:
         payload["uploaded_from"] = uploaded_from
 
-    event_ids = [event["remote_event_id"] for event in events]
-
+    event_ids = [str(event["remote_event_id"]) for event in events]
     try:
         import requests
 
@@ -122,7 +103,6 @@ def upload_pending(
             return {
                 "events_sent": 0,
                 "backfilled_applied": backfill_counts["applied"],
-                "backfilled_undone": backfill_counts["undone"],
                 "error": error,
             }
     except Exception as exc:
@@ -131,7 +111,6 @@ def upload_pending(
         return {
             "events_sent": 0,
             "backfilled_applied": backfill_counts["applied"],
-            "backfilled_undone": backfill_counts["undone"],
             "error": error,
         }
 
@@ -140,6 +119,5 @@ def upload_pending(
     return {
         "events_sent": len(events),
         "backfilled_applied": backfill_counts["applied"],
-        "backfilled_undone": backfill_counts["undone"],
         "error": None,
     }

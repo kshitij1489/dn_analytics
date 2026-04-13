@@ -32,16 +32,34 @@ CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL = os.environ.get(
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/ingest",
 ).strip()
 
+# Menu bootstrap: GET latest snapshot for local seed/reconciliation
+CLIENT_LEARNING_MENU_BOOTSTRAP_PULL_URL = os.environ.get(
+    "CLIENT_LEARNING_MENU_BOOTSTRAP_PULL_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/latest",
+).strip()
+
 # Customer merge collaboration: POST merge/undo events
 CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL",
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/customer-merges/ingest",
 ).strip()
 
+# Menu merge collaboration: POST merge/undo events
+CLIENT_LEARNING_MENU_MERGE_INGEST_URL = os.environ.get(
+    "CLIENT_LEARNING_MENU_MERGE_INGEST_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-merges/ingest",
+).strip()
+
 # Customer merge collaboration: GET merge/undo events for remote replay
 CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL = os.environ.get(
     "CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL",
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/customer-merges",
+).strip()
+
+# Menu merge collaboration: GET merge/undo events for remote replay
+CLIENT_LEARNING_MENU_MERGE_PULL_URL = os.environ.get(
+    "CLIENT_LEARNING_MENU_MERGE_PULL_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-merges",
 ).strip()
 
 # Forecast ingest: POST revenue + item forecasts + backtest caches
@@ -79,14 +97,29 @@ def should_upload_menu_bootstrap() -> bool:
     return bool(CLIENT_LEARNING_MENU_BOOTSTRAP_INGEST_URL)
 
 
+def should_pull_menu_bootstrap() -> bool:
+    """True if menu bootstrap pull is configured (non-empty URL)."""
+    return bool(CLIENT_LEARNING_MENU_BOOTSTRAP_PULL_URL)
+
+
 def should_upload_customer_merges() -> bool:
     """True if customer merge upload is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL)
 
 
+def should_upload_menu_merges() -> bool:
+    """True if menu merge upload is configured (non-empty URL)."""
+    return bool(CLIENT_LEARNING_MENU_MERGE_INGEST_URL)
+
+
 def should_pull_customer_merges() -> bool:
     """True if customer merge pull is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL)
+
+
+def should_pull_menu_merges() -> bool:
+    """True if menu merge pull is configured (non-empty URL)."""
+    return bool(CLIENT_LEARNING_MENU_MERGE_PULL_URL)
 
 
 def should_upload_forecasts() -> bool:

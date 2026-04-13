@@ -295,6 +295,81 @@ def undo_merge(req: UndoMergeRequest, conn=Depends(get_db)):
     return res
 
 
+@router.post("/merge/pull-from-cloud")
+def pull_menu_merges_from_cloud(limit: int = 100, conn=Depends(get_db)):
+    """Manually pull menu merge events from cloud and replay them locally."""
+    from src.core.config.cloud_sync_config import get_cloud_sync_config
+    from src.core.menu_merge_sync import (
+        get_menu_merge_pull_endpoint,
+        pull_and_apply_menu_merge_events,
+    )
+
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    endpoint = get_menu_merge_pull_endpoint(conn)
+    if not endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud sync URL not configured. Set cloud_sync_url in Configuration.",
+        )
+
+    _, auth_key = get_cloud_sync_config(conn)
+    result = pull_and_apply_menu_merge_events(conn, endpoint, auth=auth_key, limit=limit)
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=f"Menu merge pull failed: {result['error']}")
+
+    return {
+        "message": "Menu merge events pulled from cloud",
+        **result,
+    }
+
+
+@router.post("/bootstrap/pull-from-cloud")
+def pull_menu_bootstrap_from_cloud(
+    apply_mode: str = "seed_and_relink_orders",
+    conn=Depends(get_db),
+):
+    """Manually pull the latest menu bootstrap snapshot from cloud and apply it locally."""
+    from src.core.config.cloud_sync_config import get_cloud_sync_config
+    from src.core.menu_bootstrap_sync import (
+        SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES,
+        fetch_and_apply_menu_bootstrap_snapshot,
+        get_menu_bootstrap_pull_endpoint,
+    )
+
+    if apply_mode not in SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "apply_mode must be one of: "
+                + ", ".join(sorted(SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES))
+            ),
+        )
+
+    endpoint = get_menu_bootstrap_pull_endpoint(conn)
+    if not endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud sync URL not configured. Set cloud_sync_url in Configuration.",
+        )
+
+    _, auth_key = get_cloud_sync_config(conn)
+    result = fetch_and_apply_menu_bootstrap_snapshot(
+        conn,
+        endpoint,
+        auth=auth_key,
+        apply_mode=apply_mode,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=f"Menu bootstrap pull failed: {result['error']}")
+
+    return {
+        "message": "Menu bootstrap snapshot pulled from cloud",
+        **result,
+    }
+
+
 # --- Remap Logic ---
 
 @router.get("/remap/check/{order_item_id}")
