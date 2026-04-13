@@ -32,6 +32,7 @@ function AppContent() {
   const [lastDbSync, setLastDbSync] = useState<number>(Date.now());
   const [showSyncStatus, setShowSyncStatus] = useState(false);
   const [popup, setPopup] = useState<PopupMessage | null>(null);
+  const bumpLastDbSync = () => setLastDbSync(Date.now());
 
   // Theme Config
   useEffect(() => {
@@ -62,7 +63,7 @@ function AppContent() {
             setPolling(false);
             setJob(res.data);
             if (res.data.status === 'completed') {
-              setLastDbSync(Date.now());
+              bumpLastDbSync();
               setShowSyncStatus(true);
             } else if (res.data.status === 'failed') {
               setPopup({ type: 'error', message: `Sync Failed: ${res.data.message}` });
@@ -109,7 +110,7 @@ function AppContent() {
             setPolling(false);
             setJob(statusRes.data);
             if (statusRes.data.status === 'completed') {
-              setLastDbSync(Date.now());
+              bumpLastDbSync();
               setShowSyncStatus(true);
             }
           }
@@ -368,7 +369,12 @@ function AppContent() {
         {activeTab === 'forecast' && <ForecastPage lastDbSync={lastDbSync} />}
         {activeTab === 'chart' && <ChartPage lastDbSync={lastDbSync} />}
         {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
-        {activeTab === 'customers' && <Customers lastDbSync={lastDbSync} />}
+        {activeTab === 'customers' && (
+          <Customers
+            lastDbSync={lastDbSync}
+            onCustomerDataChanged={bumpLastDbSync}
+          />
+        )}
         {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
         {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
         {activeTab === 'sql' && <SQLConsole />}

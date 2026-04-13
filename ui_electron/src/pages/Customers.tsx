@@ -23,7 +23,13 @@ import './Customers.css';
 
 type CustomerSection = 'overview' | 'profiles' | 'analytics' | 'similar' | 'merge';
 
-export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
+export default function Customers({
+    lastDbSync,
+    onCustomerDataChanged,
+}: {
+    lastDbSync?: number;
+    onCustomerDataChanged?: () => void;
+}) {
     const [activeSection, setActiveSection] = useState<CustomerSection>('overview');
     const [linkedCustomerId, setLinkedCustomerId] = useState<string | number | undefined>(undefined);
     const [mergeHistory, setMergeHistory] = useState<CustomerMergeHistoryEntry[]>([]);
@@ -60,7 +66,7 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
         setSelectedSuggestion,
         setSimilarityQueueMode,
         setSimilarSearchQuery,
-    } = useSimilarityQueue(activeSection, lastDbSync, setPopup, loadMergeHistory);
+    } = useSimilarityQueue(activeSection, lastDbSync, setPopup, loadMergeHistory, onCustomerDataChanged);
 
     useEffect(() => {
         if (pageParams?.mode === 'profile' && pageParams?.customerId != null) {
@@ -124,13 +130,14 @@ export default function Customers({ lastDbSync }: { lastDbSync?: number }) {
         try {
             await endpoints.customers.undoMerge({ merge_id: mergeId });
             await Promise.all([refreshSimilarSuggestions(), loadMergeHistory()]);
+            onCustomerDataChanged?.();
             setPopup({ type: 'success', message: `Undo complete for merge #${mergeId}.` });
         } catch (error: any) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         } finally {
             setUndoingMergeId(null);
         }
-    }, [loadMergeHistory, refreshSimilarSuggestions]);
+    }, [loadMergeHistory, onCustomerDataChanged, refreshSimilarSuggestions]);
 
     return (
         <div className="page-container customers-page">

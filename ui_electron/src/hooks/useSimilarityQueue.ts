@@ -34,6 +34,7 @@ export function useSimilarityQueue(
     lastDbSync: number | undefined,
     setPopup: (popup: PopupMessage | null) => void,
     loadMergeHistory: () => Promise<void>,
+    onMergeApplied?: () => void,
 ) {
     const [similarSuggestions, setSimilarSuggestions] = useState<CustomerSimilarityCandidate[]>([]);
     const [selectedSuggestion, setSelectedSuggestion] = useState<CustomerSimilarityCandidate | null>(null);
@@ -195,6 +196,7 @@ export function useSimilarityQueue(
             await endpoints.customers.merge(mergePayload);
             clearSelectedSuggestion();
             await Promise.all([refreshSimilarSuggestions(), loadMergeHistory()]);
+            onMergeApplied?.();
             setPopup({
                 type: 'success',
                 message: markTargetVerified
@@ -206,7 +208,7 @@ export function useSimilarityQueue(
         } finally {
             setExecutingMerge(false);
         }
-    }, [activeMergeRequest, clearSelectedSuggestion, loadMergeHistory, mergePreview, refreshSimilarSuggestions, setPopup]);
+    }, [activeMergeRequest, clearSelectedSuggestion, loadMergeHistory, mergePreview, onMergeApplied, refreshSimilarSuggestions, setPopup]);
 
     return {
         similarSuggestions,

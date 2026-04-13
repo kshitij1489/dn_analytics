@@ -115,7 +115,48 @@ The cloud ingest tables described in `docs/FORECASTING_AND_SYNC.md` use `UNIQUE(
 
 ---
 
-## 6. Recommendations for the Dachnona backend (“store all information”)
+## 6. Dachnona server: do they need to update DB, models, and APIs?
+
+**Short answer:**  
+- **If Dachnona only keeps doing what the client already sends today** (errors, learning, menu JSON snapshot ingest, forecast ingest, conversations) and you do **not** add merge replication or menu pull — they mainly need their **existing** ingest tables and handlers to match `docs/FORECASTING_AND_SYNC.md` (and any drift you have already agreed with them). **No new tables are strictly required for that baseline**, beyond whatever they already created for those endpoints.  
+- **If you implement this plan** (versioned menu bootstrap for pull, merge-event sync, multi-device attribution, raw payload archive) — **yes: the Dachnona team must add or extend PostgreSQL tables, backend models (e.g. Django), serializers, migrations, and HTTP routes.** The analytics client cannot “cater” new tables on the server; the server must define persistence and APIs.
+
+### 6.1 What stays “server as-is” (baseline)
+
+| Client feature | Dachnona change? |
+|----------------|------------------|
+| Current `POST .../menu-bootstrap/ingest` with `{ id_maps, cluster_state, uploaded_by? }` | **None**, if their DB already stores each snapshot (even as a single JSONB row per upload). Optional: add `content_hash`, `received_at`, store key for dedup/analytics. |
+| Current learning / errors / forecast ingest | **None**, if implemented per existing spec; otherwise align models to the spec. |
+
+### 6.2 What **requires** Dachnona DB + model + API updates
+
+These are **not** representable by the current menu-bootstrap JSON alone; the server must own new contracts and storage.
+
+| Need | **PostgreSQL / storage** | **Models / domain layer** | **API** |
+|------|---------------------------|---------------------------|---------|
+| **Pull menu state for other machines** | Table(s) for **versioned** menu bootstrap blobs per tenant (e.g. `store_id`, `id_maps`, `cluster_state`, `created_at`, `content_hash`, optional `uploaded_by` JSON). | ORM models + admin/query helpers to resolve “latest” and optionally history. | Stable **`GET /desktop-analytics-sync/menu-bootstrap/latest`** (and optionally `?since=cursor` or ETag). Must match what the client will call after Phase B. |
+| **Customer merge replication** | Tables mirroring (or normalizing) `customer_merge_history`: source/target IDs, `merged_at`, `undone_at`, `similarity_score`, `model_name`, JSON blobs for `suggestion_context`, snapshots, `moved_order_ids`, etc. | Django models, validation (no duplicate active source per store), idempotency keys. | **`POST .../customer-merge-events/ingest`** (or equivalent) + **`GET .../customer-merge-events`** (or delta) for pull. |
+| **Menu merge audit replication** | Tables mirroring `merge_history`: `source_id`, `target_id`, `affected_order_items` JSON, `merged_at`, undo metadata if you add server-side undo. | Same as above. | **`POST .../menu-merge-events/ingest`** + optional GET/delta for pull. |
+| **Conflict handling** | Tables or columns for **merge conflict** records, tombstones, or reconciliation status. | State machine or service layer enforcing policies in §8. | Responses with **409** + machine-readable conflict body (recommended in §7). |
+| **Forensic / “store everything”** | Optional `ingest_raw_payload` (or object storage pointer + metadata table). | Model for audit row linked to endpoint + tenant + hash. | No new public route required if internal only; optional admin export API. |
+| **Multi-operator / multi-device** | Extend ingest rows with `device_id`, `install_id`, `schema_version` (columns or JSONB). | Model field updates + migrations on **all** ingest tables that should be auditable. | Document required headers or JSON fields; validate in view layer. |
+
+### 6.3 Who does what (split of work)
+
+| Layer | Owner |
+|-------|--------|
+| **New columns / tables / migrations on Dachnona Postgres** | **Dachnona backend team** |
+| **Django (or framework) models, serializers, admin, validation** | **Dachnona backend team** |
+| **New or changed REST routes, auth, rate limits** | **Dachnona backend team** |
+| **Client shipper + pull logic + UI** to send/receive new payloads | **Analytics repo** (this project) |
+
+### 6.4 Alignment with recent client-side table changes
+
+Any **new or renamed fields** on the client in SQLite (e.g. extra columns on `customer_merge_history`, richer `merge_history` JSON, new attribution fields) only reach the cloud **if** the client is updated to POST them. Once the client does, **Dachnona must update their ingest models and DB columns** (or JSON schema documentation) to accept and persist those fields — otherwise data is dropped at the boundary. Treat **payload schema** as a shared contract: version it (`schema_version` in body or header) so server migrations can lag safely.
+
+---
+
+## 7. Recommendations for the Dachnona backend (“store all information”)
 
 To align the **server** with what operators need for parity:
 
@@ -124,11 +165,11 @@ To align the **server** with what operators need for parity:
 3. **Add authoritative merge journals** (or materialized views) on the server:
    - **Menu:** sequence of merges (source UUID → target UUID, variant mapping, actor, timestamp).
    - **Customer:** same, plus optional link to upstream identity keys used by clients.
-4. **Define conflict policies** (see §7) and return **409 / structured conflicts** when ingest ordering violates invariants.
+4. **Define conflict policies** (see §8) and return **409 / structured conflicts** when ingest ordering violates invariants.
 
 ---
 
-## 7. Conflict scenarios to design for
+## 8. Conflict scenarios to design for
 
 | Scenario | Example | Suggested policy |
 |----------|---------|------------------|
@@ -140,16 +181,18 @@ To align the **server** with what operators need for parity:
 
 ---
 
-## 8. Phased implementation plan
+## 9. Phased implementation plan
 
 ### Phase A — Inventory & contracts (short)
 
 - [ ] Document **store / restaurant** identifier on every ingest payload (today some paths only send `uploaded_by`).
 - [ ] List **all** SQLite tables that influence operator-visible truth; mark push/pull/never.
 - [ ] Align `FORECASTING_AND_SYNC.md` with actual Dachnona Django models (including any new tables).
+- [ ] **Dachnona:** confirm which of §6.2 items they will ship first (menu latest vs merge-events vs audit).
 
 ### Phase B — Client pull for menu bootstrap (high value, medium effort)
 
+- [ ] **Dachnona:** implement/version **`GET .../menu-bootstrap/latest`** (and DB backing) per §6.2 if not already production-complete beyond the test script probe.
 - [ ] Implement `fetch_menu_bootstrap(conn, endpoint, auth)` mirroring `forecast_bootstrap`:
   - GET latest (or since `cursor`) from `/desktop-analytics-sync/menu-bootstrap/latest`.
   - Write JSON to `data/` **or** apply directly to `menu_items` / `variants` / `menu_item_variants` with clear precedence rules.
@@ -158,6 +201,7 @@ To align the **server** with what operators need for parity:
 
 ### Phase C — Replicate merge journals (high value for correctness)
 
+- [ ] **Dachnona:** add **merge-event** ingest + pull APIs and **Postgres tables/models** per §6.2 (cannot be client-only).
 - [ ] Extend ingest API (or add `/desktop-analytics-sync/merge-events/ingest`) for **append-only** `merge_history` + `customer_merge_history` events (JSON rows).
 - [ ] On pull, apply events in `merged_at` order; detect cycles / double-source using DB constraints + server validation.
 - [ ] Keep SQLite unique index semantics aligned with server rules (`idx_customer_merge_history_active_source`).
@@ -166,6 +210,7 @@ To align the **server** with what operators need for parity:
 
 - [ ] Replace `LIMIT 1` on `app_users` with explicit **session / device** selection in the UI, or store `device_id` + `employee_id` in `system_config`.
 - [ ] Pass **both** to every shipper payload for auditing.
+- [ ] **Dachnona:** extend ingest schemas and DB columns to persist `device_id` / `install_id` / `schema_version` (§6.2).
 
 ### Phase E — Training / model artifacts (optional)
 
@@ -173,7 +218,7 @@ To align the **server** with what operators need for parity:
 
 ---
 
-## 9. Quick answers to the original questions
+## 10. Quick answers to the original questions
 
 1. **What must change for Dachnona to “store all the information”?**  
    Extend ingest beyond forecasts/learning/menu JSON/errors: at minimum **merge journals + versioning metadata**, ideally **raw payload archive** per upload.
@@ -189,7 +234,7 @@ To align the **server** with what operators need for parity:
 
 ---
 
-## 10. Related code references (for implementers)
+## 11. Related code references (for implementers)
 
 - Menu export / seed: `scripts/seed_from_backups.py` (`export_to_backups`, `perform_seeding`).
 - Menu bootstrap upload: `src/core/menu_bootstrap_shipper.py`.

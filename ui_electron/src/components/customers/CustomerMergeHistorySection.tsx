@@ -22,7 +22,13 @@ export function CustomerMergeHistorySection({
             <Card
                 title="Merge Audit Trail"
                 headerAction={(
-                    <ActionButton variant="secondary" size="small" onClick={onRefresh} disabled={loadingHistory}>
+                    <ActionButton
+                        variant="secondary"
+                        size="small"
+                        className="customer-merge-history-action-button"
+                        onClick={onRefresh}
+                        disabled={loadingHistory}
+                    >
                         Refresh
                     </ActionButton>
                 )}
@@ -56,6 +62,7 @@ export function CustomerMergeHistorySection({
                                                 <ActionButton
                                                     variant="danger"
                                                     size="small"
+                                                    className="customer-merge-history-action-button"
                                                     onClick={() => onUndoMerge(entry.merge_id)}
                                                     disabled={undoingMergeId === entry.merge_id}
                                                 >
