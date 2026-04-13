@@ -32,6 +32,10 @@
     flex-wrap: wrap;
 }
 
+.customers-analytics-table-toggle {
+    flex-shrink: 0;
+}
+
 .customers-analytics-tabs {
     margin-bottom: 8px;
     width: fit-content;

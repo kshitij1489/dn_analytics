@@ -194,6 +194,37 @@ export function buildAffinityParams(filters: MetricFilters, lastDbSync?: number)
     };
 }
 
+const CUSTOMER_METRIC_TREND_MONTHS = 6;
+
+/** Params for month-level return / retention trend APIs (order source + threshold; horizon is server default). */
+export function buildReturnRetentionTrendParams(filters: LookbackFilters, lastDbSync?: number) {
+    return {
+        _t: lastDbSync,
+        months: CUSTOMER_METRIC_TREND_MONTHS,
+        min_orders_per_customer: Number(filters.minOrdersPerCustomer),
+        order_sources: filters.orderSource === 'All' ? undefined : [filters.orderSource],
+    };
+}
+
+/** Params for repeat-order monthly trend. */
+export function buildRepeatOrderTrendParams(filters: MetricFilters, lastDbSync?: number) {
+    return {
+        _t: lastDbSync,
+        months: CUSTOMER_METRIC_TREND_MONTHS,
+        min_orders_per_customer: Number(filters.minOrdersPerCustomer),
+        order_sources: filters.orderSource === 'All' ? undefined : [filters.orderSource],
+    };
+}
+
+/** Params for affinity monthly trend (order source only). */
+export function buildAffinityTrendParams(filters: MetricFilters, lastDbSync?: number) {
+    return {
+        _t: lastDbSync,
+        months: CUSTOMER_METRIC_TREND_MONTHS,
+        order_sources: filters.orderSource === 'All' ? undefined : [filters.orderSource],
+    };
+}
+
 // --- Format helpers ---
 
 export function getErrorMessage(error: any) {

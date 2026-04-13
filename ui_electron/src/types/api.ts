@@ -207,6 +207,99 @@ export interface CustomerAffinityResponse {
     rows: CustomerAffinityRow[];
 }
 
+/** Month-level trend row (Summary table) for Customer affinity. */
+export interface CustomerAffinityTrendRow extends Record<string, string | number> {
+    month: string;
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    customers_in_window: number;
+    new_customers: number;
+    repeat_customers: number;
+    lapsed_customers: number;
+    new_pct: number;
+    repeat_pct: number;
+    lapsed_pct: number;
+}
+
+export interface CustomerMetricTrendDefaults {
+    num_months: number;
+    business_date: string;
+    order_source_label?: string;
+    min_orders_per_customer?: number;
+    horizon_note?: string;
+}
+
+export interface CustomerAffinityTrendResponse {
+    rows: CustomerAffinityTrendRow[];
+    defaults: CustomerMetricTrendDefaults;
+}
+
+export interface CustomerReturnRateTrendRow extends Record<string, string | number | null | undefined> {
+    month: string;
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    return_rate_30d: number;
+    return_rate_60d: number;
+    return_rate_lifetime: number;
+    returning_customers_30d: number;
+    returning_customers_60d: number;
+    returning_customers_lifetime: number;
+    evaluation_customers_30d: number;
+    evaluation_customers_60d: number;
+    evaluation_customers_lifetime: number;
+    lookback_start_30d: string | null;
+    lookback_end_30d: string | null;
+    lookback_start_60d: string | null;
+    lookback_end_60d: string | null;
+    lookback_start_lifetime: string | null;
+    lookback_end_lifetime: string | null;
+}
+
+export interface CustomerReturnRateTrendResponse {
+    rows: CustomerReturnRateTrendRow[];
+    defaults: CustomerMetricTrendDefaults;
+}
+
+export interface CustomerRetentionRateTrendRow extends Record<string, string | number | null | undefined> {
+    month: string;
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    retention_rate_30d: number;
+    retention_rate_60d: number;
+    retention_rate_lifetime: number;
+    retained_customers_30d: number;
+    retained_customers_60d: number;
+    retained_customers_lifetime: number;
+    prior_cohort_size_30d: number;
+    prior_cohort_size_60d: number;
+    prior_cohort_size_lifetime: number;
+    lookback_start_30d: string | null;
+    lookback_end_30d: string | null;
+    lookback_start_60d: string | null;
+    lookback_end_60d: string | null;
+    lookback_start_lifetime: string | null;
+    lookback_end_lifetime: string | null;
+}
+
+export interface CustomerRetentionRateTrendResponse {
+    rows: CustomerRetentionRateTrendRow[];
+    defaults: CustomerMetricTrendDefaults;
+}
+
+export interface CustomerRepeatOrderRateTrendRow extends Record<string, string | number> {
+    month: string;
+    evaluation_start_date: string;
+    evaluation_end_date: string;
+    repeat_order_rate: number;
+    repeat_order_customers: number;
+    evaluation_customers: number;
+}
+
+export interface CustomerRepeatOrderRateTrendResponse {
+    rows: CustomerRepeatOrderRateTrendRow[];
+    defaults: CustomerMetricTrendDefaults;
+}
+
 export interface DailySalesRow {
     order_date: string;
     total_revenue: number;

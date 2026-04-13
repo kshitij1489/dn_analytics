@@ -1,6 +1,11 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { endpoints } from '../api';
-import type { CustomerRepeatOrderRateResponse, CustomerRepeatOrderRateRow } from '../types/api';
+import type {
+    CustomerRepeatOrderRateResponse,
+    CustomerRepeatOrderRateRow,
+    CustomerRepeatOrderRateTrendResponse,
+    CustomerRepeatOrderRateTrendRow,
+} from '../types/api';
 import { exportToCSV } from '../utils/csv';
 import {
     type MetricFilters,
@@ -8,12 +13,14 @@ import {
     ORDER_SOURCE_OPTIONS,
     MIN_ORDER_OPTIONS,
     buildMetricParams,
+    buildRepeatOrderTrendParams,
     formatCurrency,
     formatPercentage,
     getErrorMessage,
     updateEvaluationEndDate,
     updateEvaluationStartDate,
 } from './customerAnalyticsShared';
+import { CustomerAnalyticsViewToolbar, type CustomerAnalyticsTableViewMode } from './CustomerAnalyticsViewToolbar';
 import { CustomerLink } from './CustomerLink';
 import { DateSelector } from './DateSelector';
 import { KPICard } from './KPICard';
@@ -32,6 +39,10 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
     const [data, setData] = useState<CustomerRepeatOrderRateResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [tableView, setTableView] = useState<CustomerAnalyticsTableViewMode>('summary');
+    const [trend, setTrend] = useState<CustomerRepeatOrderRateTrendResponse | null>(null);
+    const [trendLoading, setTrendLoading] = useState(false);
+    const [trendError, setTrendError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -53,13 +64,47 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
         return () => { cancelled = true; };
     }, [filters, lastDbSync]);
 
+    useEffect(() => {
+        if (tableView !== 'summary') {
+            setTrend(null);
+            setTrendError(null);
+            return;
+        }
+        let cancelled = false;
+        const load = async () => {
+            setTrendLoading(true);
+            setTrendError(null);
+            try {
+                const res = await endpoints.insights.customerRepeatOrderRateTrend(
+                    buildRepeatOrderTrendParams(filters, lastDbSync),
+                );
+                if (!cancelled) setTrend(res.data);
+            } catch (e: any) {
+                if (!cancelled) setTrendError(getErrorMessage(e));
+            } finally {
+                if (!cancelled) setTrendLoading(false);
+            }
+        };
+        void load();
+        return () => { cancelled = true; };
+    }, [tableView, filters.orderSource, filters.minOrdersPerCustomer, lastDbSync]);
+
     if (loading) return <LoadingSpinner />;
     if (error) return <div className="customers-analytics-error">{error}</div>;
 
     const summary = data?.summary;
     const rows = sort.sortRows<CustomerRepeatOrderRateRow>(data?.rows || []);
+    const trendRows = sort.sortRows<CustomerRepeatOrderRateTrendRow>(trend?.rows || []);
     const updateFilters = (partial: Partial<MetricFilters>) =>
         setFilters((c) => ({ ...c, ...partial }));
+
+    const handleExport = () => {
+        if (tableView === 'summary') {
+            exportToCSV(trendRows, 'repeat_order_rate_trend');
+            return;
+        }
+        exportToCSV(rows, 'repeat_order_rate_details');
+    };
 
     return (
         <div className="customers-analytics-view">
@@ -103,36 +148,72 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
                 {' | '}Source: <strong>{summary?.order_source_label || 'All'}</strong>
                 {' | '}Condition: <strong>at least {summary?.min_orders_per_customer || 2} orders</strong>
             </div>
+            {tableView === 'summary' && trend?.defaults?.horizon_note ? (
+                <div className="customers-analytics-subnote">{trend.defaults.horizon_note}</div>
+            ) : null}
 
-            <ResizableTableWrapper defaultHeight={520} onExportCSV={() => exportToCSV(rows, 'repeat_order_rate_details')}>
-                <table className="standard-table">
-                    <thead>
-                        <tr>
-                            <th onClick={() => sort.handleSort('customer_name')}>Customer{sort.renderSortIcon('customer_name')}</th>
-                            <th onClick={() => sort.handleSort('repeat_order_flag')}>Status{sort.renderSortIcon('repeat_order_flag')}</th>
-                            <th className="text-right" onClick={() => sort.handleSort('evaluation_order_count')}>Eval Orders{sort.renderSortIcon('evaluation_order_count')}</th>
-                            <th className="text-right" onClick={() => sort.handleSort('evaluation_total_spend')}>Eval Spend{sort.renderSortIcon('evaluation_total_spend')}</th>
-                            <th onClick={() => sort.handleSort('first_order_date')}>First Eval Order{sort.renderSortIcon('first_order_date')}</th>
-                            <th onClick={() => sort.handleSort('last_order_date')}>Last Eval Order{sort.renderSortIcon('last_order_date')}</th>
-                            <th onClick={() => sort.handleSort('repeat_order_reason')}>Reason{sort.renderSortIcon('repeat_order_reason')}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.length > 0 ? rows.map((row) => (
-                            <tr key={String(row.customer_id)}>
-                                <td><CustomerLink customerId={row.customer_id} name={row.customer_name} /></td>
-                                <td><span className={row.repeat_order_flag ? 'status-returning' : 'status-new'}>{row.repeat_order_status}</span></td>
-                                <td className="text-right">{row.evaluation_order_count}</td>
-                                <td className="text-right">{formatCurrency(row.evaluation_total_spend)}</td>
-                                <td>{row.first_order_date}</td>
-                                <td>{row.last_order_date}</td>
-                                <td>{row.repeat_order_reason}</td>
+            <ResizableTableWrapper
+                defaultHeight={520}
+                leftContent={<CustomerAnalyticsViewToolbar view={tableView} onViewChange={setTableView} />}
+                onExportCSV={handleExport}
+            >
+                {tableView === 'customerList' ? (
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th onClick={() => sort.handleSort('customer_name')}>Customer{sort.renderSortIcon('customer_name')}</th>
+                                <th onClick={() => sort.handleSort('repeat_order_flag')}>Status{sort.renderSortIcon('repeat_order_flag')}</th>
+                                <th className="text-right" onClick={() => sort.handleSort('evaluation_order_count')}>Eval Orders{sort.renderSortIcon('evaluation_order_count')}</th>
+                                <th className="text-right" onClick={() => sort.handleSort('evaluation_total_spend')}>Eval Spend{sort.renderSortIcon('evaluation_total_spend')}</th>
+                                <th onClick={() => sort.handleSort('first_order_date')}>First Eval Order{sort.renderSortIcon('first_order_date')}</th>
+                                <th onClick={() => sort.handleSort('last_order_date')}>Last Eval Order{sort.renderSortIcon('last_order_date')}</th>
+                                <th onClick={() => sort.handleSort('repeat_order_reason')}>Reason{sort.renderSortIcon('repeat_order_reason')}</th>
                             </tr>
-                        )) : (
-                            <tr><td colSpan={7} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
-                        )}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {rows.length > 0 ? rows.map((row) => (
+                                <tr key={String(row.customer_id)}>
+                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} /></td>
+                                    <td><span className={row.repeat_order_flag ? 'status-returning' : 'status-new'}>{row.repeat_order_status}</span></td>
+                                    <td className="text-right">{row.evaluation_order_count}</td>
+                                    <td className="text-right">{formatCurrency(row.evaluation_total_spend)}</td>
+                                    <td>{row.first_order_date}</td>
+                                    <td>{row.last_order_date}</td>
+                                    <td>{row.repeat_order_reason}</td>
+                                </tr>
+                            )) : (
+                                <tr><td colSpan={7} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                ) : trendError ? (
+                    <div className="customers-analytics-error">{trendError}</div>
+                ) : trendLoading ? (
+                    <LoadingSpinner />
+                ) : (
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th onClick={() => sort.handleSort('month')}>Month{sort.renderSortIcon('month')}</th>
+                                <th className="text-right" onClick={() => sort.handleSort('repeat_order_rate')}>Repeat order rate{sort.renderSortIcon('repeat_order_rate')}</th>
+                                <th className="text-right" onClick={() => sort.handleSort('repeat_order_customers')}>Repeat customers{sort.renderSortIcon('repeat_order_customers')}</th>
+                                <th className="text-right" onClick={() => sort.handleSort('evaluation_customers')}>Evaluation customers{sort.renderSortIcon('evaluation_customers')}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {trendRows.length > 0 ? trendRows.map((row) => (
+                                <tr key={row.month}>
+                                    <td>{row.month}</td>
+                                    <td className="text-right">{formatPercentage(row.repeat_order_rate)}</td>
+                                    <td className="text-right">{row.repeat_order_customers}</td>
+                                    <td className="text-right">{row.evaluation_customers}</td>
+                                </tr>
+                            )) : (
+                                <tr><td colSpan={4} className="text-center customers-analytics-empty">No trend rows for this range.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                )}
             </ResizableTableWrapper>
         </div>
     );

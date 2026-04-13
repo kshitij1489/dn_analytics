@@ -2,9 +2,13 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
+from src.core.queries.customer_analytics_queries import fetch_customer_affinity_trend
 from src.core.queries.customer_analytics_queries import fetch_customer_loyalty
+from src.core.queries.customer_analytics_queries import fetch_customer_repeat_order_rate_trend
 from src.core.queries.customer_analytics_queries import fetch_customer_retention_rate_analysis
+from src.core.queries.customer_analytics_queries import fetch_customer_retention_rate_trend
 from src.core.queries.customer_analytics_queries import fetch_customer_return_rate_analysis
+from src.core.queries.customer_analytics_queries import fetch_customer_return_rate_trend
 from src.core.queries.customer_analytics_queries import fetch_repeat_order_rate_analysis
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
@@ -383,6 +387,41 @@ class CustomerMetricQueryTests(unittest.TestCase):
         self.assertEqual(metric["total_customers"], 0)
         self.assertEqual(metric["returning_customers"], 0)
         self.assertAlmostEqual(metric["return_rate"], 0.0)
+
+    @patch("src.core.queries.customer_analytics_queries.get_current_business_date", return_value="2024-02-15")
+    def test_fetch_customer_affinity_trend_newest_month_first(self, _mock_bd) -> None:
+        out = fetch_customer_affinity_trend(self.conn, months=3, order_sources=None)
+        self.assertEqual(len(out["rows"]), 3)
+        self.assertEqual(out["rows"][0]["month"], "2024-02")
+        self.assertEqual(out["rows"][1]["month"], "2024-01")
+        self.assertEqual(out["rows"][2]["month"], "2023-12")
+        self.assertIn("customers_in_window", out["rows"][0])
+        self.assertIn("horizon_note", out["defaults"])
+
+    @patch("src.core.queries.customer_analytics_queries.get_current_business_date", return_value="2024-02-15")
+    def test_fetch_customer_return_rate_trend_includes_lookback_columns(self, _mock_bd) -> None:
+        out = fetch_customer_return_rate_trend(self.conn, months=2, min_orders_per_customer=2, order_sources=None)
+        self.assertEqual(len(out["rows"]), 2)
+        row = out["rows"][0]
+        self.assertEqual(row["month"], "2024-02")
+        for key in ("return_rate_30d", "return_rate_60d", "return_rate_lifetime", "evaluation_customers_30d"):
+            self.assertIn(key, row)
+
+    @patch("src.core.queries.customer_analytics_queries.get_current_business_date", return_value="2024-02-15")
+    def test_fetch_customer_repeat_order_rate_trend_rows(self, _mock_bd) -> None:
+        out = fetch_customer_repeat_order_rate_trend(self.conn, months=2, min_orders_per_customer=2, order_sources=None)
+        self.assertEqual(len(out["rows"]), 2)
+        self.assertIn("repeat_order_rate", out["rows"][0])
+
+    @patch("src.core.queries.customer_analytics_queries.get_current_business_date", return_value="2024-02-15")
+    def test_fetch_customer_retention_rate_trend_rows(self, _mock_bd) -> None:
+        out = fetch_customer_retention_rate_trend(self.conn, months=2, min_orders_per_customer=2, order_sources=None)
+        self.assertEqual(len(out["rows"]), 2)
+        self.assertIn("retention_rate_lifetime", out["rows"][0])
+
+    def test_fetch_customer_affinity_trend_rejects_invalid_months(self) -> None:
+        with self.assertRaises(ValueError):
+            fetch_customer_affinity_trend(self.conn, months=99, order_sources=None)
 
 
 if __name__ == "__main__":

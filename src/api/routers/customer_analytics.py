@@ -124,6 +124,88 @@ def get_customer_affinity_analysis(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/affinity_trend")
+def get_customer_affinity_trend(
+    months: int = Query(6, ge=1, le=24),
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Month-level affinity counts for recent calendar months (newest row first)."""
+    from src.core.queries.customer_queries import fetch_customer_affinity_trend
+
+    try:
+        return fetch_customer_affinity_trend(
+            conn,
+            months=months,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/return_rate_trend")
+def get_customer_return_rate_trend(
+    months: int = Query(6, ge=1, le=24),
+    min_orders_per_customer: int = Query(2, ge=2, le=99),
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Return rate by calendar month with 30d, 60d, and lifetime lookbacks."""
+    from src.core.queries.customer_queries import fetch_customer_return_rate_trend
+
+    try:
+        return fetch_customer_return_rate_trend(
+            conn,
+            months=months,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/retention_rate_trend")
+def get_customer_retention_rate_trend(
+    months: int = Query(6, ge=1, le=24),
+    min_orders_per_customer: int = Query(2, ge=1, le=99),
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Retention rate by calendar month with 30d, 60d, and lifetime lookbacks."""
+    from src.core.queries.customer_queries import fetch_customer_retention_rate_trend
+
+    try:
+        return fetch_customer_retention_rate_trend(
+            conn,
+            months=months,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/repeat_order_rate_trend")
+def get_customer_repeat_order_rate_trend(
+    months: int = Query(6, ge=1, le=24),
+    min_orders_per_customer: int = Query(2, ge=2, le=99),
+    order_sources: Optional[List[str]] = Query(None),
+    conn=Depends(get_db),
+):
+    """Repeat order rate by calendar month (evaluation window only)."""
+    from src.core.queries.customer_queries import fetch_customer_repeat_order_rate_trend
+
+    try:
+        return fetch_customer_repeat_order_rate_trend(
+            conn,
+            months=months,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=tuple(order_sources) if order_sources else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/quick_view")
 def get_customer_quick_view(conn=Depends(get_db)):
     """Get customer quick-view KPIs for the Customers workspace."""

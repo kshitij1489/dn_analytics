@@ -5,6 +5,11 @@ from datetime import date as DateType, timedelta
 import pandas as pd
 
 from src.core.queries.customer_metric_affinity import analyze_customer_affinity
+from src.core.queries.customer_metric_calculators import (
+    calculate_customer_retention_rate,
+    calculate_customer_return_rate,
+    calculate_repeat_order_rate,
+)
 from src.core.queries.customer_metric_helpers import (
     CustomerMetricFilters,
     build_customer_return_rate_analysis,
@@ -12,6 +17,7 @@ from src.core.queries.customer_metric_helpers import (
     build_monthly_customer_metric_rows,
     build_repeat_order_rate_analysis,
     fetch_customer_metric_orders,
+    month_bounds,
     normalize_order_sources,
     resolve_lookback_window,
     shift_month,
@@ -261,3 +267,318 @@ def fetch_brand_awareness(conn, granularity: str = 'day'):
         ORDER BY 1 ASC
     """
     return [dict(row) for row in conn.execute(query).fetchall()]
+
+
+CUSTOMER_METRIC_TREND_MAX_MONTHS = 24
+CUSTOMER_METRIC_TREND_DEFAULT_MONTHS = 6
+
+
+def _normalize_trend_months(months: int | None) -> int:
+    if months is None:
+        return CUSTOMER_METRIC_TREND_DEFAULT_MONTHS
+    if months < 1 or months > CUSTOMER_METRIC_TREND_MAX_MONTHS:
+        raise ValueError(f"months must be between 1 and {CUSTOMER_METRIC_TREND_MAX_MONTHS}.")
+    return months
+
+
+def _month_trend_specs(business_date_iso: str, num_months: int) -> list[tuple[str, str, str]]:
+    """
+    Calendar-month rows, newest first.
+
+    Each tuple is (month_label YYYY-MM, evaluation_start, evaluation_end).
+    evaluation_end is the month-end or the business date, whichever is earlier.
+    """
+    bd = DateType.fromisoformat(business_date_iso)
+    month_cursor = DateType(bd.year, bd.month, 1)
+    specs: list[tuple[str, str, str]] = []
+    for _ in range(num_months):
+        m_start, m_end_full = month_bounds(month_cursor)
+        m_end_dt = DateType.fromisoformat(m_end_full)
+        eval_end = min(m_end_dt, bd).isoformat()
+        label = f"{month_cursor.year:04d}-{month_cursor.month:02d}"
+        specs.append((label, m_start, eval_end))
+        month_cursor = shift_month(month_cursor, -1)
+    return specs
+
+
+def _trend_order_source_label(order_sources: tuple[str, ...] | None) -> str:
+    resolved = list(normalize_order_sources(order_sources) or [])
+    return "All" if not resolved else ", ".join(resolved)
+
+
+def _return_rate_filters_for_lookback(
+    *,
+    eval_start: str,
+    eval_end: str,
+    min_orders_per_customer: int,
+    order_sources: tuple[str, ...] | None,
+    lookback_mode: str,
+) -> CustomerMetricFilters:
+    if lookback_mode == "30d":
+        return CustomerMetricFilters(
+            evaluation_start_date=eval_start,
+            evaluation_end_date=eval_end,
+            lookback_days=30,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=order_sources,
+        )
+    if lookback_mode == "60d":
+        return CustomerMetricFilters(
+            evaluation_start_date=eval_start,
+            evaluation_end_date=eval_end,
+            lookback_days=60,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=order_sources,
+        )
+    if lookback_mode == "lifetime":
+        eval_start_dt = DateType.fromisoformat(eval_start)
+        day_before = eval_start_dt - timedelta(days=1)
+        return CustomerMetricFilters(
+            evaluation_start_date=eval_start,
+            evaluation_end_date=eval_end,
+            lookback_start_date=None,
+            lookback_end_date=day_before.isoformat(),
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=order_sources,
+        )
+    raise ValueError(f"Unknown lookback_mode: {lookback_mode}")
+
+
+def fetch_customer_affinity_trend(
+    conn,
+    *,
+    months: int | None = None,
+    order_sources: tuple[str, ...] | None = None,
+):
+    num_months = _normalize_trend_months(months)
+    business_date_iso = get_current_business_date()
+    specs = _month_trend_specs(business_date_iso, num_months)
+    if not specs:
+        return _empty_trend_response(business_date_iso, num_months, _trend_order_source_label(order_sources))
+
+    orders = fetch_customer_metric_orders(
+        conn,
+        start_date=None,
+        end_date=business_date_iso,
+        order_sources=order_sources,
+    )
+    label = _trend_order_source_label(order_sources)
+    rows: list[dict[str, object]] = []
+    for month_label, eval_start, eval_end in specs:
+        result = analyze_customer_affinity(
+            orders,
+            eval_start,
+            eval_end,
+            order_source_label=label,
+            include_rows=False,
+        )
+        s = result["summary"]
+        rows.append(
+            {
+                "month": month_label,
+                "evaluation_start_date": eval_start,
+                "evaluation_end_date": eval_end,
+                "customers_in_window": int(s["total_customers"]),
+                "new_customers": int(s["new_customers"]),
+                "repeat_customers": int(s["repeat_customers"]),
+                "lapsed_customers": int(s["lapsed_customers"]),
+                "new_pct": float(s["new_pct"]),
+                "repeat_pct": float(s["repeat_pct"]),
+                "lapsed_pct": float(s["lapsed_pct"]),
+            }
+        )
+    return {
+        "rows": rows,
+        "defaults": {
+            "num_months": num_months,
+            "business_date": business_date_iso,
+            "order_source_label": label,
+            "horizon_note": (
+                "One row per calendar month (newest first). "
+                "The current month ends on the latest business date in the database."
+            ),
+        },
+    }
+
+
+def fetch_customer_return_rate_trend(
+    conn,
+    *,
+    months: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    _require_min_orders_at_least("Customer return rate trend", min_orders_per_customer)
+    num_months = _normalize_trend_months(months)
+    business_date_iso = get_current_business_date()
+    specs = _month_trend_specs(business_date_iso, num_months)
+    label = _trend_order_source_label(order_sources)
+    if not specs:
+        return _empty_trend_response(business_date_iso, num_months, label)
+
+    orders = fetch_customer_metric_orders(
+        conn,
+        start_date=None,
+        end_date=business_date_iso,
+        order_sources=order_sources,
+    )
+    rows: list[dict[str, object]] = []
+    for month_label, eval_start, eval_end in specs:
+        row: dict[str, object] = {
+            "month": month_label,
+            "evaluation_start_date": eval_start,
+            "evaluation_end_date": eval_end,
+        }
+        for mode in ("30d", "60d", "lifetime"):
+            filt = _return_rate_filters_for_lookback(
+                eval_start=eval_start,
+                eval_end=eval_end,
+                min_orders_per_customer=min_orders_per_customer,
+                order_sources=order_sources,
+                lookback_mode=mode,
+            )
+            m = calculate_customer_return_rate(orders, filt)
+            lb_s, lb_e = resolve_lookback_window(filt)
+            row[f"return_rate_{mode}"] = float(m["return_rate"])
+            row[f"returning_customers_{mode}"] = int(m["returning_customers"])
+            row[f"evaluation_customers_{mode}"] = int(m["total_customers"])
+            row[f"lookback_start_{mode}"] = lb_s
+            row[f"lookback_end_{mode}"] = lb_e
+        rows.append(row)
+    return {
+        "rows": rows,
+        "defaults": {
+            "num_months": num_months,
+            "business_date": business_date_iso,
+            "order_source_label": label,
+            "min_orders_per_customer": min_orders_per_customer,
+            "horizon_note": (
+                "30d / 60d lookbacks end the day before evaluation starts (rolling calendar days). "
+                "Lifetime lookback is all orders on or before that day."
+            ),
+        },
+    }
+
+
+def fetch_customer_retention_rate_trend(
+    conn,
+    *,
+    months: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    if min_orders_per_customer < 1:
+        raise ValueError("min_orders_per_customer must be at least 1.")
+    num_months = _normalize_trend_months(months)
+    business_date_iso = get_current_business_date()
+    specs = _month_trend_specs(business_date_iso, num_months)
+    label = _trend_order_source_label(order_sources)
+    if not specs:
+        return _empty_trend_response(business_date_iso, num_months, label)
+
+    orders = fetch_customer_metric_orders(
+        conn,
+        start_date=None,
+        end_date=business_date_iso,
+        order_sources=order_sources,
+    )
+    rows: list[dict[str, object]] = []
+    for month_label, eval_start, eval_end in specs:
+        row: dict[str, object] = {
+            "month": month_label,
+            "evaluation_start_date": eval_start,
+            "evaluation_end_date": eval_end,
+        }
+        for mode in ("30d", "60d", "lifetime"):
+            filt = _return_rate_filters_for_lookback(
+                eval_start=eval_start,
+                eval_end=eval_end,
+                min_orders_per_customer=min_orders_per_customer,
+                order_sources=order_sources,
+                lookback_mode=mode,
+            )
+            m = calculate_customer_retention_rate(orders, filt)
+            lb_s, lb_e = resolve_lookback_window(filt)
+            row[f"retention_rate_{mode}"] = float(m["retention_rate"])
+            row[f"retained_customers_{mode}"] = int(m["retained_customers"])
+            row[f"prior_cohort_size_{mode}"] = int(m["total_customers"])
+            row[f"lookback_start_{mode}"] = lb_s
+            row[f"lookback_end_{mode}"] = lb_e
+        rows.append(row)
+    return {
+        "rows": rows,
+        "defaults": {
+            "num_months": num_months,
+            "business_date": business_date_iso,
+            "order_source_label": label,
+            "min_orders_per_customer": min_orders_per_customer,
+            "horizon_note": (
+                "Cohort = customers with ≥1 order in the lookback window; retained = "
+                "cohort members with ≥ min_orders in the evaluation month."
+            ),
+        },
+    }
+
+
+def fetch_customer_repeat_order_rate_trend(
+    conn,
+    *,
+    months: int | None = None,
+    min_orders_per_customer: int = 2,
+    order_sources: tuple[str, ...] | None = None,
+):
+    _require_min_orders_at_least("Repeat order rate trend", min_orders_per_customer)
+    num_months = _normalize_trend_months(months)
+    business_date_iso = get_current_business_date()
+    specs = _month_trend_specs(business_date_iso, num_months)
+    label = _trend_order_source_label(order_sources)
+    if not specs:
+        return _empty_trend_response(business_date_iso, num_months, label)
+
+    orders = fetch_customer_metric_orders(
+        conn,
+        start_date=None,
+        end_date=business_date_iso,
+        order_sources=order_sources,
+    )
+    rows: list[dict[str, object]] = []
+    for month_label, eval_start, eval_end in specs:
+        filt = CustomerMetricFilters(
+            evaluation_start_date=eval_start,
+            evaluation_end_date=eval_end,
+            min_orders_per_customer=min_orders_per_customer,
+            order_sources=order_sources,
+        )
+        m = calculate_repeat_order_rate(orders, filt)
+        rows.append(
+            {
+                "month": month_label,
+                "evaluation_start_date": eval_start,
+                "evaluation_end_date": eval_end,
+                "repeat_order_rate": float(m["repeat_order_rate"]),
+                "repeat_order_customers": int(m["repeat_order_customers"]),
+                "evaluation_customers": int(m["total_customers"]),
+            }
+        )
+    return {
+        "rows": rows,
+        "defaults": {
+            "num_months": num_months,
+            "business_date": business_date_iso,
+            "order_source_label": label,
+            "min_orders_per_customer": min_orders_per_customer,
+            "horizon_note": "Repeat order rate uses only orders inside each evaluation month.",
+        },
+    }
+
+
+def _empty_trend_response(business_date_iso: str, num_months: int, order_source_label: str) -> dict[str, object]:
+    return {
+        "rows": [],
+        "defaults": {
+            "num_months": num_months,
+            "business_date": business_date_iso,
+            "order_source_label": order_source_label,
+            "horizon_note": "No months in range.",
+        },
+    }
