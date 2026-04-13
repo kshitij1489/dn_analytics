@@ -13,6 +13,7 @@ from src.core.queries.customer_query_utils import (
 SCHEMA_VERSION = 1
 EVENT_TYPE_APPLIED = "customer_merge.applied"
 EVENT_TYPE_UNDONE = "customer_merge.undone"
+SYNC_ORIGIN_CLOUD_PULL = "cloud_pull"
 
 
 def _table_exists(conn, table_name: str) -> bool:
@@ -263,6 +264,20 @@ def _get_merge_row(conn, merge_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def _merge_suggestion_context(merge_row: Dict[str, Any]) -> Dict[str, Any]:
+    suggestion_context = json_loads_maybe(merge_row.get("suggestion_context"), {})
+    return suggestion_context if isinstance(suggestion_context, dict) else {}
+
+
+def _merge_undo_context(merge_row: Dict[str, Any]) -> Dict[str, Any]:
+    undo_context = json_loads_maybe(merge_row.get("undo_context"), {})
+    return undo_context if isinstance(undo_context, dict) else {}
+
+
+def _is_cloud_pull_origin(context: Dict[str, Any]) -> bool:
+    return str(context.get("sync_origin") or "").strip() == SYNC_ORIGIN_CLOUD_PULL
+
+
 def _lookup_event_id(conn, merge_id: int, event_type: str) -> Optional[str]:
     row = conn.execute(
         """
@@ -305,6 +320,8 @@ def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
     merge_row = _get_merge_row(conn, merge_id)
     if not merge_row or not merge_row.get("merged_at"):
         return None
+    if _is_cloud_pull_origin(_merge_suggestion_context(merge_row)):
+        return None
 
     source_snapshot = json_loads_maybe(merge_row.get("source_snapshot"), {})
     target_snapshot = json_loads_maybe(merge_row.get("target_snapshot"), {})
@@ -339,10 +356,18 @@ def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
     merge_row = _get_merge_row(conn, merge_id)
     if not merge_row or not merge_row.get("undone_at"):
         return None
+    suggestion_context = _merge_suggestion_context(merge_row)
+    undo_context = _merge_undo_context(merge_row)
+    if _is_cloud_pull_origin(undo_context):
+        return None
 
     applied_event_id = _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED)
     if not applied_event_id:
-        applied_event_id = record_merge_applied_event(conn, merge_id)
+        remote_event_id = suggestion_context.get("remote_event_id")
+        if remote_event_id:
+            applied_event_id = str(remote_event_id)
+        else:
+            applied_event_id = record_merge_applied_event(conn, merge_id)
 
     source_snapshot = json_loads_maybe(merge_row.get("source_snapshot"), {})
     target_snapshot = json_loads_maybe(merge_row.get("target_snapshot"), {})
@@ -383,21 +408,19 @@ def backfill_customer_merge_sync_events(conn) -> Dict[str, int]:
     if not has_customer_merge_sync_table(conn):
         return {"applied": 0, "undone": 0}
 
-    rows = conn.execute(
-        """
-        SELECT merge_id, undone_at
-        FROM customer_merge_history
-        ORDER BY merge_id ASC
-        """
-    ).fetchall()
-
     counts = {"applied": 0, "undone": 0}
+    rows = conn.execute("SELECT merge_id FROM customer_merge_history ORDER BY merge_id ASC").fetchall()
     for row in rows:
         merge_id = int(row["merge_id"])
+        merge_row = _get_merge_row(conn, merge_id)
+        if not merge_row:
+            continue
+        suggestion_context = _merge_suggestion_context(merge_row)
+        undo_context = _merge_undo_context(merge_row)
         if _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED) is None:
-            if record_merge_applied_event(conn, merge_id):
+            if not _is_cloud_pull_origin(suggestion_context) and record_merge_applied_event(conn, merge_id):
                 counts["applied"] += 1
-        if row["undone_at"] and _lookup_event_id(conn, merge_id, EVENT_TYPE_UNDONE) is None:
-            if record_merge_undone_event(conn, merge_id):
+        if merge_row["undone_at"] and _lookup_event_id(conn, merge_id, EVENT_TYPE_UNDONE) is None:
+            if not _is_cloud_pull_origin(undo_context) and record_merge_undone_event(conn, merge_id):
                 counts["undone"] += 1
     return counts

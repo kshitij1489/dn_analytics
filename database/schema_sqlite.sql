@@ -110,6 +110,18 @@ CREATE TABLE IF NOT EXISTS customer_merge_sync_events (
     UNIQUE (merge_id, event_type)
 );
 
+CREATE TABLE IF NOT EXISTS customer_merge_remote_events (
+    remote_event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    reverts_remote_event_id TEXT,
+    local_merge_id INTEGER REFERENCES customer_merge_history(merge_id),
+    payload TEXT NOT NULL,
+    remote_cursor TEXT,
+    occurred_at TEXT,
+    applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    CHECK (event_type IN ('customer_merge.applied', 'customer_merge.undone'))
+);
+
 -- ============================================================================
 -- 3. MENU ITEMS
 -- ============================================================================
@@ -468,6 +480,10 @@ ON customer_merge_history(source_customer_id)
 WHERE undone_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_customer_merge_sync_events_pending
 ON customer_merge_sync_events(uploaded_at, occurred_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_customer_merge_remote_events_reverts
+ON customer_merge_remote_events(reverts_remote_event_id);
+CREATE INDEX IF NOT EXISTS idx_customer_merge_remote_events_local_merge_id
+ON customer_merge_remote_events(local_merge_id);
 
 -- Backfill structured addresses from the legacy customers.address field.
 INSERT OR IGNORE INTO customer_addresses (

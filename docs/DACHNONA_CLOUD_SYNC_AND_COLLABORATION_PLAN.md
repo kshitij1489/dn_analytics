@@ -2,8 +2,19 @@
 
 **Audience:** Engineers working on the Dachnona cloud APIs and this analytics client.  
 **Date:** April 13, 2026  
-**Status:** Reviewed against the current repo implementation, not just the earlier Cursor analysis.  
+**Status:** Reviewed against the current repo implementation, not just the earlier Cursor analysis. Updated to track shipped client-side progress.  
 **Primary goal:** Make customer merges portable across machines without inventing a one-off sync path that diverges from the existing push/pull patterns.
+
+---
+
+## 0. Implementation Progress
+
+| Workstream | Status in this repo | Notes |
+|-----------|----------------------|-------|
+| Phase 1 - Customer merge push | Complete | Local merge/undo actions write append-only sync events and upload through the existing cloud push bundle. |
+| Phase 2 - Customer merge pull/apply | Complete on the client | Manual pull route, cursor storage, remote-event idempotency, and deterministic local replay are implemented. |
+| Dachnona backend ingest endpoint | Pending externally | Cloud still needs `POST /desktop-analytics-sync/customer-merges/ingest` to receive the Phase 1 payloads. |
+| Dachnona backend delta endpoint | Pending externally | Cloud still needs `GET /desktop-analytics-sync/customer-merges` for the Phase 2 pull path to talk to. |
 
 ---
 
@@ -15,23 +26,24 @@ The repo currently has **three different sync flows**, and they should not be co
 |------|-----------|---------------------|---------|
 | **Upstream order sync** | Remote -> local | `POST /api/sync/run` -> `src/core/services/sync_service.py` | Pull PetPooja/order stream data into local SQLite. |
 | **Cloud push** | Local -> Dachnona | `src/core/services/cloud_sync_scheduler.py` and `POST /api/sync/client-learning` | Push telemetry, menu bootstrap, forecasts, and conversations to the cloud. |
-| **Cloud pull** | Dachnona -> local | `POST /api/forecast/pull-from-cloud` | Pull forecast bootstrap only. |
+| **Cloud pull** | Dachnona -> local | `POST /api/forecast/pull-from-cloud` and `POST /api/orders/customers/merge/pull-from-cloud` | Pull forecast bootstrap and replay customer merge events locally. |
 
-The customer merge problem is **not** an upstream PetPooja sync issue. It is a **cloud replication gap**:
+The customer merge problem is **not** an upstream PetPooja sync issue. It is a **cloud replication concern**:
 
 - `customer_merge_history` is stored locally in SQLite.
 - New incoming orders correctly honor that local merge history.
-- But no current cloud push/pull path replicates those merges to another machine.
+- The analytics client now has a push path and a manual pull/apply path for those merges.
+- The remaining external dependency is Dachnona backend support for the corresponding ingest and delta endpoints.
 
 The earlier analysis was directionally right on that point, but it missed two important implementation realities:
 
 1. **Pulling raw `customer_merge_history` rows is not enough.** Another machine must apply the same data mutations as the local merge flow, not just insert history rows.
 2. **Local numeric IDs are not a safe cloud contract.** `customer_id`, `order_id`, and `address_id` are local SQLite values and can differ across machines.
 
-Because your main pain is customer merge divergence, the highest-value next step is:
+Because your main pain is customer merge divergence, the high-value work items are:
 
-1. Add **customer merge event push** into the existing cloud push pipeline.
-2. Add **customer merge pull/apply** as a feature-specific cloud pull path, similar to forecast bootstrap.
+1. Keep the new **customer merge event push** path stable and validated against the real Dachnona ingest API.
+2. Keep the new **customer merge pull/apply** path stable and validated against the real Dachnona delta API.
 3. Treat menu bootstrap pull as a secondary track, not the first fix for this problem.
 
 ---
@@ -64,6 +76,7 @@ The scheduler currently pushes:
 - Errors
 - Learning payloads
 - Menu bootstrap JSON
+- Customer merge events
 - Forecast caches/backtests
 - Conversations
 
@@ -75,18 +88,16 @@ Important detail:
 
 ### 2.3 Cloud Pull
 
-Only one real cloud pull path exists in the repo today:
+There are now two real cloud pull paths in the repo:
 
-| Item | Implementation |
-|------|----------------|
-| Manual API | `POST /api/forecast/pull-from-cloud` |
-| Logic | `src/core/forecast_bootstrap.py` |
-| Data pulled | Revenue, item, and volume forecasts + backtests |
+| Pull path | Manual API | Logic | Data pulled |
+|-----------|------------|-------|-------------|
+| Forecast bootstrap | `POST /api/forecast/pull-from-cloud` | `src/core/forecast_bootstrap.py` | Revenue, item, and volume forecasts + backtests |
+| Customer merge replay | `POST /api/orders/customers/merge/pull-from-cloud` | `src/core/customer_merge_sync.py` | Customer merge apply/undo events replayed into local SQLite |
 
 There is **no implemented client pull** for:
 
 - menu bootstrap
-- customer merge history
 - menu merge history
 - conversations
 - learning/error payloads
@@ -105,7 +116,7 @@ There is **no implemented client pull** for:
 | Menu bootstrap JSON | Yes | No | File snapshot only: `id_maps_backup.json` + `cluster_state_backup.json`. No local `uploaded_at`; same snapshot can be re-posted every cycle. |
 | Forecast caches/backtests | Yes | Yes | Push uses `uploaded_at`; pull uses forecast bootstrap endpoint. |
 | Conversations | Yes | No | `synced_at` based push-only flow. |
-| `customer_merge_history` | No | No | Main customer collaboration gap. |
+| `customer_merge_history` | Yes | Yes | Replicated as append-only merge events, not raw history rows. Pull is manual and idempotent. |
 | `merge_history` | No | No | Menu audit/history gap. |
 | `customer_addresses` | No direct sync | No | Only local DB state today. |
 
@@ -304,8 +315,9 @@ Startup now attempts to add `uploaded_at` to all forecast cache/backtest tables.
 
 ### 6.2 Confirmed Existing Gaps Still Present
 
-1. **No customer merge push/pull path**
-   - This is the main collaboration gap for the new customer page.
+1. **Customer merge sync now exists client-side, but still depends on Dachnona backend support**
+   - The analytics client can now push merge events and manually pull/apply them.
+   - The remaining gap is server-side ingest + delta APIs.
 
 2. **No menu bootstrap pull implementation**
    - The repo only has a connectivity probe script for `menu-bootstrap/latest`.
@@ -464,12 +476,16 @@ The previous version prioritized menu bootstrap pull first. For your stated goal
 
 ### Phase 1 - Customer Merge Push
 
+Status: Complete in the analytics client.
+
 - add client-side customer merge shipper
 - add server ingest endpoint/table
 - integrate push into `client_learning_shipper.run_all()`
 - include result in `POST /api/sync/client-learning`
 
 ### Phase 2 - Customer Merge Pull and Apply
+
+Status: Complete in the analytics client.
 
 - add server delta endpoint
 - add client manual pull route
@@ -518,6 +534,9 @@ The previous version prioritized menu bootstrap pull first. For your stated goal
 
 - Upstream sync: `src/core/services/sync_service.py`
 - Manual upstream sync API: `src/api/routers/operations.py`
+- Customer merge push shipper: `src/core/customer_merge_shipper.py`
+- Customer merge pull/apply: `src/core/customer_merge_sync.py`
+- Customer merge manual pull API: `src/api/routers/orders.py`
 - Scheduler: `src/core/services/cloud_sync_scheduler.py`
 - Cloud push orchestrator: `src/core/client_learning_shipper.py`
 - Learning shipper: `src/core/learning_shipper.py`

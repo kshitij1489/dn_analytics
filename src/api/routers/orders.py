@@ -132,3 +132,33 @@ def undo_customer_merge(req: CustomerUndoMergeRequest, conn=Depends(get_db)):
     if res.get("status") == "error":
         raise HTTPException(400, res["message"])
     return res
+
+
+@router.post("/customers/merge/pull-from-cloud")
+def pull_customer_merges_from_cloud(limit: int = 100, conn=Depends(get_db)):
+    """Manually pull customer merge events from cloud and replay them locally."""
+    from src.core.config.cloud_sync_config import get_cloud_sync_config
+    from src.core.customer_merge_sync import (
+        get_customer_merge_pull_endpoint,
+        pull_and_apply_customer_merge_events,
+    )
+
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    endpoint = get_customer_merge_pull_endpoint(conn)
+    if not endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud sync URL not configured. Set cloud_sync_url in Configuration.",
+        )
+
+    _, auth_key = get_cloud_sync_config(conn)
+    result = pull_and_apply_customer_merge_events(conn, endpoint, auth=auth_key, limit=limit)
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=f"Customer merge pull failed: {result['error']}")
+
+    return {
+        "message": "Customer merge events pulled from cloud",
+        **result,
+    }
