@@ -119,6 +119,10 @@ def normalize_optional_text(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def identity_key_implies_verified(identity_key: str) -> bool:
+    return not str(identity_key or "").startswith("anon:")
+
+
 def upsert_customer_address(conn, customer_id: int, address: Optional[str], label: str = "Primary") -> None:
     """
     Persist a structured address row for a customer.
@@ -284,9 +288,9 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
         update_values.append(float(order_total))
         
         # Calculate verification status
-        is_verified = not identity_key.startswith("anon:")
-        update_fields.append("is_verified = ?")
-        update_values.append(1 if is_verified else 0)
+        derived_is_verified = identity_key_implies_verified(identity_key)
+        update_fields.append("is_verified = CASE WHEN is_verified = 1 OR ? = 1 THEN 1 ELSE 0 END")
+        update_values.append(1 if derived_is_verified else 0)
         
         # Update phone if provided and currently NULL
         if phone:
@@ -309,7 +313,7 @@ def get_or_create_customer(conn, customer_data: Dict, order_date: datetime, orde
         conn.commit()
     else:
         # Insert new customer
-        is_verified = not identity_key.startswith("anon:")
+        is_verified = identity_key_implies_verified(identity_key)
         cursor.execute("""
             INSERT INTO customers (
                 customer_identity_key,

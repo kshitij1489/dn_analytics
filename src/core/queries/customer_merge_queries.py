@@ -17,6 +17,7 @@ def merge_customers(
     similarity_score: Optional[float] = None,
     model_name: Optional[str] = None,
     reasons: Optional[List[str]] = None,
+    mark_target_verified: Optional[bool] = None,
 ):
     preview = fetch_customer_merge_preview(
         conn,
@@ -31,6 +32,10 @@ def merge_customers(
 
     source_customer_id = preview["source_customer"]["customer_id"]
     target_customer_id = preview["target_customer"]["customer_id"]
+    source_is_verified = bool(preview["source_customer"]["is_verified"])
+    target_is_verified = bool(preview["target_customer"]["is_verified"])
+    should_mark_target_verified = bool(mark_target_verified) and not source_is_verified and not target_is_verified
+    target_is_verified_after_merge = target_is_verified or should_mark_target_verified
 
     try:
         moved_order_ids = [int(row[0]) for row in conn.execute(
@@ -46,10 +51,17 @@ def merge_customers(
             SET phone = COALESCE(phone, (SELECT phone FROM customers WHERE customer_id = ?)),
                 address = COALESCE(address, (SELECT address FROM customers WHERE customer_id = ?)),
                 gstin = COALESCE(gstin, (SELECT gstin FROM customers WHERE customer_id = ?)),
+                is_verified = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE customer_id = ?
             """,
-            (source_customer_id, source_customer_id, source_customer_id, target_customer_id),
+            (
+                source_customer_id,
+                source_customer_id,
+                source_customer_id,
+                1 if target_is_verified_after_merge else 0,
+                target_customer_id,
+            ),
         )
         conn.execute(
             """
@@ -78,6 +90,7 @@ def merge_customers(
                     "reasons": reasons or preview.get("reasons", []),
                     "target_before_fields": target_before_fields,
                     "inserted_target_address_ids": address_copy_result["inserted_address_ids"],
+                    "target_is_verified_after_merge": target_is_verified_after_merge,
                 }),
                 json.dumps(preview["source_customer"]),
                 json.dumps(preview["target_customer"]),
@@ -96,6 +109,7 @@ def merge_customers(
             "source_customer_id": str(source_customer_id),
             "target_customer_id": str(target_customer_id),
             "orders_moved": len(moved_order_ids),
+            "target_is_verified": bool(target_is_verified_after_merge),
         }
     except Exception as exc:
         conn.rollback()
@@ -137,13 +151,14 @@ def undo_customer_merge(conn, merge_id: int):
             conn.execute(
                 """
                 UPDATE customers
-                SET phone = ?, address = ?, gstin = ?, updated_at = CURRENT_TIMESTAMP
+                SET phone = ?, address = ?, gstin = ?, is_verified = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE customer_id = ?
                 """,
                 (
                     target_before_fields.get("phone"),
                     target_before_fields.get("address"),
                     target_before_fields.get("gstin"),
+                    1 if target_before_fields.get("is_verified") else 0,
                     row["target_customer_id"],
                 ),
             )

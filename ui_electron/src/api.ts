@@ -145,6 +145,7 @@ export const endpoints = {
             similarity_score?: number;
             model_name?: string;
             reasons?: string[];
+            mark_target_verified?: boolean;
         }) => api.post('/orders/customers/merge', data),
         undoMerge: (data: { merge_id: number }) => api.post('/orders/customers/merge/undo', data),
     },

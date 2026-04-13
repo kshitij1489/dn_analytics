@@ -1,7 +1,7 @@
 import sqlite3
 import unittest
 
-from src.core.queries.customer_merge_queries import merge_customers
+from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
 from src.core.queries.customer_similarity_queries import (
     fetch_customer_merge_preview,
     fetch_customer_similarity_candidates,
@@ -89,9 +89,10 @@ class CustomerMergeRuleTests(unittest.TestCase):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                (1, "Rahul Sharma", "9999999999", "HSR Layout", 5, 500.0, "2024-01-01", "2024-02-01", 1),
+                (1, "Rahul Sharma", "9999999999", "HSR Layout", 2, 400.0, "2024-01-15", "2024-02-05", 1),
                 (2, "Rahul Sharma", None, "HSR Layout", 1, 80.0, "2024-02-03", "2024-02-03", 0),
-                (3, "Rahul Sharma", None, "HSR Layout", 2, 120.0, "2024-02-04", "2024-02-04", 0),
+                (3, "Rahul Sharma", None, "HSR Layout", 1, 120.0, "2024-02-04", "2024-02-04", 0),
+                (4, "Rahul Sharma", "9999999999", "HSR Layout", 1, 260.0, "2024-02-06", "2024-02-06", 1),
             ],
         )
         self.conn.executemany(
@@ -104,6 +105,7 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 (102, 3, "PP-102", 120.0, "2024-02-04 10:00:00"),
                 (201, 1, "PP-201", 180.0, "2024-01-15 13:00:00"),
                 (202, 1, "PP-202", 220.0, "2024-02-05 18:30:00"),
+                (301, 4, "PP-301", 260.0, "2024-02-06 14:00:00"),
             ],
         )
         self.conn.executemany(
@@ -128,6 +130,8 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 (201, "m_apple_pie", "Apple Pie", 1),
                 (202, "m_burger", "Burger", 2),
                 (202, "m_pasta", "Pasta", 1),
+                (301, "m_burger", "Burger", 1),
+                (301, "m_pasta", "Pasta", 2),
             ],
         )
         self.conn.commit()
@@ -135,23 +139,30 @@ class CustomerMergeRuleTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.conn.close()
 
-    def test_merge_preview_rejects_unverified_target(self) -> None:
+    def test_merge_preview_rejects_verified_source_into_unverified_target(self) -> None:
         preview = fetch_customer_merge_preview(self.conn, "1", "2")
 
         self.assertEqual(preview["status"], "error")
         self.assertEqual(
             preview["message"],
-            "Customers can only be merged into a verified target customer.",
+            "Verified customers cannot be merged into an unverified target customer.",
         )
 
-    def test_merge_rejects_unverified_target(self) -> None:
+    def test_merge_rejects_verified_source_into_unverified_target(self) -> None:
         result = merge_customers(self.conn, "1", "2")
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(
             result["message"],
-            "Customers can only be merged into a verified target customer.",
+            "Verified customers cannot be merged into an unverified target customer.",
         )
+
+    def test_merge_preview_allows_verified_pair(self) -> None:
+        preview = fetch_customer_merge_preview(self.conn, "4", "1")
+
+        self.assertEqual(preview["merge_rule"], "verified_pair")
+        self.assertFalse(preview["requires_verification_selection"])
+        self.assertFalse(preview["can_mark_target_verified"])
 
     def test_merge_preview_includes_order_snapshots_with_sorted_items_and_top_items(self) -> None:
         preview = fetch_customer_merge_preview(self.conn, "2", "1")
@@ -169,11 +180,44 @@ class CustomerMergeRuleTests(unittest.TestCase):
         self.assertEqual(preview["target_order_snapshot"]["top_items"][0]["total_quantity"], 3)
         self.assertEqual(preview["target_order_snapshot"]["top_items"][0]["order_count"], 2)
 
-    def test_similarity_candidates_only_keep_verified_targets(self) -> None:
+    def test_merge_preview_allows_unverified_pair_and_requests_verification_selection(self) -> None:
+        preview = fetch_customer_merge_preview(self.conn, "2", "3")
+
+        self.assertEqual(preview["merge_rule"], "unverified_pair")
+        self.assertTrue(preview["requires_verification_selection"])
+        self.assertTrue(preview["can_mark_target_verified"])
+        self.assertFalse(preview["target_customer"]["is_verified"])
+
+    def test_merge_can_promote_unverified_target_to_verified_and_undo_restores_state(self) -> None:
+        result = merge_customers(self.conn, "2", "3", mark_target_verified=True)
+
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["target_is_verified"])
+
+        target_row = self.conn.execute(
+            "SELECT is_verified, total_orders FROM customers WHERE customer_id = 3"
+        ).fetchone()
+        self.assertEqual(int(target_row["is_verified"]), 1)
+        self.assertEqual(int(target_row["total_orders"]), 2)
+
+        source_row = self.conn.execute(
+            "SELECT total_orders FROM customers WHERE customer_id = 2"
+        ).fetchone()
+        self.assertEqual(int(source_row["total_orders"]), 0)
+
+        undo_result = undo_customer_merge(self.conn, result["merge_id"])
+        self.assertEqual(undo_result["status"], "success")
+
+        restored_target_row = self.conn.execute(
+            "SELECT is_verified, total_orders FROM customers WHERE customer_id = 3"
+        ).fetchone()
+        self.assertEqual(int(restored_target_row["is_verified"]), 0)
+        self.assertEqual(int(restored_target_row["total_orders"]), 1)
+
+    def test_similarity_candidates_keep_only_policy_allowed_directions(self) -> None:
         suggestions = fetch_customer_similarity_candidates(self.conn, limit=10, min_score=0.5)
 
         self.assertGreaterEqual(len(suggestions), 1)
-        self.assertTrue(all(item["target_customer"]["is_verified"] for item in suggestions))
         self.assertTrue(
             any(
                 item["source_customer"]["customer_id"] in {"2", "3"}
@@ -181,9 +225,15 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 for item in suggestions
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             any(
                 {item["source_customer"]["customer_id"], item["target_customer"]["customer_id"]} == {"2", "3"}
+                for item in suggestions
+            )
+        )
+        self.assertFalse(
+            any(
+                item["source_customer"]["is_verified"] and not item["target_customer"]["is_verified"]
                 for item in suggestions
             )
         )
@@ -208,7 +258,12 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 for item in suggestions
             )
         )
-        self.assertTrue(all(item["target_customer"]["is_verified"] for item in suggestions))
+        self.assertFalse(
+            any(
+                item["source_customer"]["is_verified"] and not item["target_customer"]["is_verified"]
+                for item in suggestions
+            )
+        )
         self.assertEqual(
             fetch_customer_similarity_candidates(
                 self.conn,

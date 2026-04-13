@@ -4,6 +4,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import NearestNeighbors
 
 from src.core.queries.customer_order_snapshot import fetch_customer_order_snapshot
+from src.core.queries.customer_merge_helpers import evaluate_customer_merge_policy
 from src.core.queries.customer_query_utils import normalize_text
 from src.core.queries.customer_similarity_helpers import (
     fetch_active_similarity_population,
@@ -49,7 +50,11 @@ def fetch_customer_similarity_candidates(
 
     def register_pair(left_record, right_record, text_similarity):
         candidate = build_similarity_candidate(left_record, right_record, text_similarity, model_name)
-        if not candidate["target_customer"]["is_verified"]:
+        merge_policy = evaluate_customer_merge_policy(
+            candidate["source_customer"]["is_verified"],
+            candidate["target_customer"]["is_verified"],
+        )
+        if merge_policy.get("status") == "error":
             return
         if matched_customer_ids and (
             candidate["source_customer"]["customer_id"] not in matched_customer_ids and
@@ -119,8 +124,12 @@ def fetch_customer_merge_preview(
         return {"status": "error", "message": "The selected source customer has already been merged."}
     if target_summary["is_merged_source"]:
         return {"status": "error", "message": "The selected target customer is not active."}
-    if not target_summary["is_verified"]:
-        return {"status": "error", "message": "Customers can only be merged into a verified target customer."}
+    merge_policy = evaluate_customer_merge_policy(
+        source_summary["is_verified"],
+        target_summary["is_verified"],
+    )
+    if merge_policy.get("status") == "error":
+        return {"status": "error", "message": merge_policy["message"]}
 
     moved_orders = conn.execute("SELECT COUNT(*) FROM orders WHERE customer_id = ?", (source_summary["customer_id"],)).fetchone()[0]
     if not reasons:
@@ -151,4 +160,7 @@ def fetch_customer_merge_preview(
         "reasons": reasons or [],
         "score": similarity_score,
         "model_name": model_name or "basic_duplicate_knn_v1",
+        "merge_rule": merge_policy["merge_rule"],
+        "requires_verification_selection": bool(merge_policy["requires_verification_selection"]),
+        "can_mark_target_verified": bool(merge_policy["can_mark_target_verified"]),
     }

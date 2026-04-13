@@ -244,6 +244,9 @@ class CustomerMergePreviewResponse(BaseModel):
     reasons: List[str] = []
     score: Optional[float] = None
     model_name: Optional[str] = None
+    merge_rule: str = "into_verified_target"
+    requires_verification_selection: bool = False
+    can_mark_target_verified: bool = False
 
 
 class CustomerMergeRequest(BaseModel):
@@ -253,6 +256,7 @@ class CustomerMergeRequest(BaseModel):
     similarity_score: Optional[float] = None
     model_name: Optional[str] = None
     reasons: Optional[List[str]] = None
+    mark_target_verified: Optional[bool] = None
 
 
 class CustomerMergeHistoryEntry(BaseModel):
@@ -278,6 +282,7 @@ class CustomerMergeResult(BaseModel):
     source_customer_id: Optional[str] = None
     target_customer_id: Optional[str] = None
     orders_moved: Optional[int] = None
+    target_is_verified: Optional[bool] = None
 
 
 class CustomerUndoMergeRequest(BaseModel):

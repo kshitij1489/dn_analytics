@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { ActionButton, Card } from '..';
 import { CustomerMeta } from './CustomerMeta';
 import { CustomerOrderSnapshot } from './CustomerOrderSnapshot';
@@ -9,7 +10,7 @@ interface CustomerComparisonPanelProps {
     executingMerge: boolean;
     loadingPreview: boolean;
     mergePreview: CustomerMergePreview | null;
-    onMerge: () => void;
+    onMerge: (markTargetVerified?: boolean) => void;
 }
 
 export function CustomerComparisonPanel({
@@ -19,6 +20,31 @@ export function CustomerComparisonPanel({
     mergePreview,
     onMerge,
 }: CustomerComparisonPanelProps) {
+    const [showVerificationChoice, setShowVerificationChoice] = useState(false);
+
+    useEffect(() => {
+        setShowVerificationChoice(false);
+    }, [
+        mergePreview?.source_customer.customer_id,
+        mergePreview?.target_customer.customer_id,
+    ]);
+
+    const handleMergeClick = () => {
+        if (!mergePreview) {
+            return;
+        }
+        if (mergePreview.requires_verification_selection) {
+            setShowVerificationChoice(true);
+            return;
+        }
+        onMerge();
+    };
+
+    const submitMergeChoice = (markTargetVerified: boolean) => {
+        setShowVerificationChoice(false);
+        onMerge(markTargetVerified);
+    };
+
     return (
         <div className="customer-identity-card-compact">
             <Card
@@ -29,7 +55,7 @@ export function CustomerComparisonPanel({
                             variant="primary"
                             size="small"
                             className="customer-identity-merge-button"
-                            onClick={onMerge}
+                            onClick={handleMergeClick}
                             disabled={executingMerge || loadingPreview}
                         >
                             {executingMerge ? 'Merging...' : 'Merge Selected Pair'}
@@ -53,6 +79,12 @@ export function CustomerComparisonPanel({
                                 Model: {mergePreview.model_name || 'basic_duplicate_knn_v1'}
                             </div>
                         </div>
+
+                        {mergePreview.requires_verification_selection && (
+                            <div className="customer-identity-policy-note">
+                                Both selected customers are unverified. When you merge them, you will be asked whether the surviving target should also be marked verified.
+                            </div>
+                        )}
 
                         <div className="customer-identity-preview-grid">
                             <div className="customer-identity-panel">
@@ -111,6 +143,47 @@ export function CustomerComparisonPanel({
                     </div>
                 )}
             </Card>
+
+            {showVerificationChoice && mergePreview && (
+                <div className="customer-identity-modal-backdrop" onClick={() => setShowVerificationChoice(false)}>
+                    <div className="customer-identity-modal-card" onClick={(event) => event.stopPropagation()}>
+                        <div className="customer-identity-title">Mark merged customer as verified?</div>
+                        <div className="customer-identity-copy">
+                            Both accounts are currently unverified. Choose whether the surviving target,
+                            {' '}
+                            {mergePreview.target_customer.name},
+                            {' '}
+                            should become verified as part of this merge.
+                        </div>
+                        <div className="customer-identity-modal-actions">
+                            <ActionButton
+                                variant="ghost"
+                                size="small"
+                                onClick={() => setShowVerificationChoice(false)}
+                                disabled={executingMerge}
+                            >
+                                Cancel
+                            </ActionButton>
+                            <ActionButton
+                                variant="secondary"
+                                size="small"
+                                onClick={() => submitMergeChoice(false)}
+                                disabled={executingMerge}
+                            >
+                                Merge Only
+                            </ActionButton>
+                            <ActionButton
+                                variant="primary"
+                                size="small"
+                                onClick={() => submitMergeChoice(true)}
+                                disabled={executingMerge}
+                            >
+                                Merge + Verify
+                            </ActionButton>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -55,16 +55,42 @@ def copy_customer_addresses_to_target(conn, source_customer_id: str, target_cust
     return {"copied_count": copied_count, "inserted_address_ids": inserted_address_ids}
 
 
+def evaluate_customer_merge_policy(source_is_verified: bool, target_is_verified: bool):
+    source_verified = bool(source_is_verified)
+    target_verified = bool(target_is_verified)
+
+    if source_verified and not target_verified:
+        return {
+            "status": "error",
+            "message": "Verified customers cannot be merged into an unverified target customer.",
+        }
+
+    if source_verified and target_verified:
+        merge_rule = "verified_pair"
+    elif target_verified:
+        merge_rule = "into_verified_target"
+    else:
+        merge_rule = "unverified_pair"
+
+    requires_verification_selection = not source_verified and not target_verified
+    return {
+        "status": "ok",
+        "merge_rule": merge_rule,
+        "requires_verification_selection": requires_verification_selection,
+        "can_mark_target_verified": requires_verification_selection,
+    }
+
+
 def fetch_customer_mergeable_fields(conn, customer_id: str):
     row = conn.execute(
         """
-        SELECT phone, address, gstin
+        SELECT phone, address, gstin, is_verified
         FROM customers
         WHERE customer_id = ?
         """,
         (customer_id,),
     ).fetchone()
-    return dict(row) if row else {"phone": None, "address": None, "gstin": None}
+    return dict(row) if row else {"phone": None, "address": None, "gstin": None, "is_verified": 0}
 
 
 def recompute_customer_aggregates(conn, customer_id: str) -> None:

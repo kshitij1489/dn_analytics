@@ -29,6 +29,9 @@ export interface CustomerMergePreview {
     reasons: string[];
     score?: number | null;
     model_name?: string | null;
+    merge_rule: string;
+    requires_verification_selection: boolean;
+    can_mark_target_verified: boolean;
 }
 
 export interface CustomerMergePreviewOrderItem {
@@ -62,6 +65,7 @@ export interface CustomerMergeRequestPayload {
     similarity_score?: number;
     model_name?: string;
     reasons?: string[];
+    mark_target_verified?: boolean;
 }
 
 export interface CustomerMergeHistoryEntry {

@@ -17,7 +17,7 @@ interface CustomerSimilaritySectionProps {
     searchQuery: string;
     selectedSuggestion: CustomerSimilarityCandidate | null;
     similarSuggestions: CustomerSimilarityCandidate[];
-    onMerge: () => void;
+    onMerge: (markTargetVerified?: boolean) => void;
     onModeChange: (mode: 'suggestions' | 'search') => void;
     onRefresh: () => void;
     onSearchQueryChange: (value: string) => void;

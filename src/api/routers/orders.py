@@ -118,6 +118,7 @@ def execute_customer_merge(req: CustomerMergeRequest, conn=Depends(get_db)):
         similarity_score=req.similarity_score,
         model_name=req.model_name,
         reasons=req.reasons,
+        mark_target_verified=req.mark_target_verified,
     )
     if res.get("status") == "error":
         raise HTTPException(400, res["message"])

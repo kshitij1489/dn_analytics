@@ -176,7 +176,7 @@ export function useSimilarityQueue(
         void loadMergePreview(request);
     }, [activeMergeRequest, activeSection, loadMergePreview, selectedSuggestion]);
 
-    const handleMerge = useCallback(async () => {
+    const handleMerge = useCallback(async (markTargetVerified?: boolean) => {
         if (!activeMergeRequest || !mergePreview) {
             return;
         }
@@ -187,6 +187,7 @@ export function useSimilarityQueue(
             similarity_score: activeMergeRequest.similarity_score ?? mergePreview.score ?? undefined,
             model_name: activeMergeRequest.model_name ?? mergePreview.model_name ?? undefined,
             reasons: activeMergeRequest.reasons?.length ? activeMergeRequest.reasons : mergePreview.reasons,
+            mark_target_verified: markTargetVerified,
         };
 
         setExecutingMerge(true);
@@ -196,7 +197,9 @@ export function useSimilarityQueue(
             await Promise.all([refreshSimilarSuggestions(), loadMergeHistory()]);
             setPopup({
                 type: 'success',
-                message: `Merged ${mergePreview.source_customer.name} into ${mergePreview.target_customer.name}.`,
+                message: markTargetVerified
+                    ? `Merged ${mergePreview.source_customer.name} into ${mergePreview.target_customer.name} and marked the target as verified.`
+                    : `Merged ${mergePreview.source_customer.name} into ${mergePreview.target_customer.name}.`,
             });
         } catch (error: any) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });

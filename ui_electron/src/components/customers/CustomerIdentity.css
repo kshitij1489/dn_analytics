@@ -216,6 +216,16 @@
     gap: 18px;
 }
 
+.customer-identity-policy-note {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(245, 158, 11, 0.24);
+    background: rgba(245, 158, 11, 0.1);
+    color: #b45309;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
 .customer-identity-preview-header {
     display: flex;
     gap: 12px;
@@ -316,6 +326,35 @@
 .customer-identity-metric-value {
     font-size: 20px;
     font-weight: 700;
+}
+
+.customer-identity-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.customer-identity-modal-card {
+    width: min(460px, 100%);
+    display: grid;
+    gap: 14px;
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    box-shadow: var(--shadow);
+}
+
+.customer-identity-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .customer-identity-reason-list {
