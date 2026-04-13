@@ -1,249 +1,535 @@
-# Dachnona / Cloud Sync: Gap Analysis & Multi-User Collaboration Plan
+# Dachnona / Cloud Sync: Reviewed Gap Analysis & Collaboration Plan
 
-**Audience:** Engineers extending the Dachnona backend (`db1-prod-dachnona.store`, `desktop-analytics-sync` APIs) and the Electron analytics client.  
-**Date:** April 2026  
-**Scope:** What the client already pushes/pulls, what is **not** replicated (including parent-stream / merge-related state), multi-operator safety, and a phased plan to make cross-machine sync reliable.
-
----
-
-## 1. Terminology
-
-| Name | Role in this repo |
-|------|-------------------|
-| **Upstream / “parent” stream** | PetPooja (or JSON replay) order events consumed by `services/load_orders.py` / `sync_database` — the source of `orders`, `order_items`, `customers`, etc. |
-| **Dachnona** | Hosted services under `*.dachnona.store`: e.g. PetPooja webhook proxy (`/webhooks/petpooja/...`) and the **desktop analytics sync** base URL configured as `cloud_sync_url` (documented paths under `/desktop-analytics-sync/...`). |
-| **Local brain (menu)** | `data/id_maps_backup.json` + `data/cluster_state_backup.json`, produced by `export_to_backups()` and used by `perform_seeding()` and `menu_bootstrap_shipper`. |
-| **Local merge journals** | SQLite tables `merge_history` (menu item merges) and `customer_merge_history` (customer merges). |
+**Audience:** Engineers working on the Dachnona cloud APIs and this analytics client.  
+**Date:** April 13, 2026  
+**Status:** Reviewed against the current repo implementation, not just the earlier Cursor analysis.  
+**Primary goal:** Make customer merges portable across machines without inventing a one-off sync path that diverges from the existing push/pull patterns.
 
 ---
 
-## 2. What the client already syncs with the cloud
+## 1. Executive Summary
 
-### 2.1 Push (client → Dachnona)
+The repo currently has **three different sync flows**, and they should not be conflated:
 
-Orchestrated by `src/core/client_learning_shipper.py` (`run_all`), invoked on a timer from `src/core/services/cloud_sync_scheduler.py` (~5 minutes) when `cloud_sync_url` / API key are set, and manually via `POST /operations/client-learning` (see `src/api/routers/operations.py`).
+| Flow | Direction | Current entry point | Purpose |
+|------|-----------|---------------------|---------|
+| **Upstream order sync** | Remote -> local | `POST /api/sync/run` -> `src/core/services/sync_service.py` | Pull PetPooja/order stream data into local SQLite. |
+| **Cloud push** | Local -> Dachnona | `src/core/services/cloud_sync_scheduler.py` and `POST /api/sync/client-learning` | Push telemetry, menu bootstrap, forecasts, and conversations to the cloud. |
+| **Cloud pull** | Dachnona -> local | `POST /api/forecast/pull-from-cloud` | Pull forecast bootstrap only. |
 
-| Payload | Source | Notes |
-|---------|--------|--------|
-| Errors | Error shipper | Crash / error records. |
-| Learning | `ai_logs`, `ai_feedback` (+ Tier 3 aggregates, cache stats) | Rows with `uploaded_at IS NULL` are sent then marked uploaded. |
-| Menu bootstrap | **Files only**: `id_maps_backup.json`, `cluster_state_backup.json` | **Not** a live SQL dump of all menu tables. |
-| Forecasts | `forecast_cache`, `item_forecast_cache`, `volume_forecast_cache`, backtest tables | Unsent rows (`uploaded_at IS NULL`), then marked. |
-| Conversations | `ai_conversations` / `ai_messages` | Async cycle in scheduler. |
+The customer merge problem is **not** an upstream PetPooja sync issue. It is a **cloud replication gap**:
 
-Attribution: `uploaded_by` is taken from **`app_users` with `is_active = 1 LIMIT 1`** — effectively a **single** “current” operator per database file.
+- `customer_merge_history` is stored locally in SQLite.
+- New incoming orders correctly honor that local merge history.
+- But no current cloud push/pull path replicates those merges to another machine.
 
-### 2.2 Pull (cloud → client)
+The earlier analysis was directionally right on that point, but it missed two important implementation realities:
 
-| Area | Mechanism | Where |
-|------|------------|--------|
-| Forecast cache | `GET .../forecasts/bootstrap` | `src/core/forecast_bootstrap.py`, `POST /forecast/pull-from-cloud` |
-| Menu bootstrap | **No implemented client pull in this repo** | `scripts/test_server_connection.py` probes `GET .../menu-bootstrap/latest`, but nothing applies that response to SQLite or JSON backups. |
+1. **Pulling raw `customer_merge_history` rows is not enough.** Another machine must apply the same data mutations as the local merge flow, not just insert history rows.
+2. **Local numeric IDs are not a safe cloud contract.** `customer_id`, `order_id`, and `address_id` are local SQLite values and can differ across machines.
 
-Order ingestion from the parent stream remains **local**: `sync_database` / `load_orders` write directly to SQLite; there is no “pull orders from Dachnona” path in the analytics app (the PetPooja proxy is for **triggering** upstream sync, not for merging operator edits).
+Because your main pain is customer merge divergence, the highest-value next step is:
 
----
-
-## 3. Parent stream vs local merge / menu state
-
-### 3.1 Customer merges and upstream orders
-
-**Local behavior is correct *if* `customer_merge_history` exists on that machine.**
-
-`services/load_orders.py` defines `resolve_active_customer_target()` so that when an order references a customer identity that was previously merged **as a source**, new rows resolve to the **target** customer before insert/update.
-
-**Gap:** `customer_merge_history` (and the full suggestion/undo payload in `suggestion_context`, `moved_order_ids`, etc.) is **never** uploaded in the menu-bootstrap or learning payloads. Another desktop that only pulls forecasts (or nothing) **will not** apply the same resolution unless it receives that history (or a derived “canonical customer map”) from the cloud.
-
-**Risk:** Two machines ingest the same upstream stream; machine A merges customers; machine B never sees `customer_merge_history` → B can attach new orders to the **old** source customer row, diverging from A’s analytics and from any reporting keyed by `customer_id`.
-
-### 3.2 Menu merges and upstream order items
-
-Menu resolution for new orders goes through `OrderItemCluster` (`services/clustering_service.py`), which reads **`menu_item_variants` (+ `menu_items`)** in SQLite. Those relationships are **reflected** in `cluster_state_backup.json` / `id_maps_backup.json` when `export_to_backups()` runs (after merges, `utils/menu_utils.py` calls `export_to_backups`).
-
-**What the JSON backups do *not* include**
-
-- `merge_history` rows (audit trail, undo payloads, variant-merge details).
-- Full richness of `menu_items` (e.g. counters, `suggestion_id`, flags) beyond what export reads for id maps.
-- Any ad-hoc rows that exist only in DB and were not re-exported.
-
-**Gap:** Pushing menu bootstrap helps **cold start / clustering** on another install **only after** the cloud stores the latest JSON and the other client **implements pull + apply** (today: **no pull**). Without pull, operators still fork.
-
-### 3.3 Similarity / merge eligibility (customer)
-
-`fetch_active_similarity_population` and merge preview use `active_customer_filter()` (`src/core/queries/customer_query_utils.py`), which excludes customers that appear as **`source_customer_id` in `customer_merge_history` with `undone_at IS NULL`**.
-
-That logic is **entirely local**. If merge history is missing on a clone, merged sources can reappear in duplicate detection — bad UX and risk of double-merge attempts (mitigated partly by DB unique index on active source merges **per database**).
+1. Add **customer merge event push** into the existing cloud push pipeline.
+2. Add **customer merge pull/apply** as a feature-specific cloud pull path, similar to forecast bootstrap.
+3. Treat menu bootstrap pull as a secondary track, not the first fix for this problem.
 
 ---
 
-## 4. Multi-user / multi-machine reality check
+## 2. What Exists Today in Code
 
-### 4.1 Current model
+### 2.1 Upstream Order Sync
 
-- One SQLite file per deployment is assumed for writes; cloud sync is **append / snapshot upload**, not a CRDT or transactional sync protocol.
-- **`app_users`**: one active row used for `uploaded_by`. Multiple humans on different machines are not first-class — you get **last writer** on shared DB, or **forked** databases if each machine has its own file.
+| Item | Implementation |
+|------|----------------|
+| Manual API | `POST /api/sync/run` in `src/api/routers/operations.py` |
+| Worker | `sync_database()` in `src/core/services/sync_service.py` |
+| Remote source | `fetch_stream_raw(..., endpoint="orders")` |
+| Local effects | Writes `orders`, `order_items`, `customers`, related tables; exports menu backups after new orders |
 
-### 4.2 Concurrent operations (same DB file)
+This path is for **PetPooja/order ingestion**, not for Dachnona collaboration.
 
-If several processes ever share one DB (unusual but possible):
+### 2.2 Cloud Push
 
-- Menu merges and customer merges use transactions but **no distributed lock** with the cloud.
-- Background shipper can upload **partial** JSON if another transaction is mid-merge (rare race).
+| Item | Implementation |
+|------|----------------|
+| Background loop | `src/core/services/cloud_sync_scheduler.py` |
+| Scheduler cadence | Every 300 seconds |
+| Base config | `system_config.cloud_sync_url` and `system_config.cloud_sync_api_key` via `src/core/config/cloud_sync_config.py` |
+| Main orchestrator | `src/core/client_learning_shipper.py::run_all()` |
+| Manual API | `POST /api/sync/client-learning` |
 
-### 4.3 Conflict handling today
+The scheduler currently pushes:
 
-**There is no explicit conflict model** for:
+- Errors
+- Learning payloads
+- Menu bootstrap JSON
+- Forecast caches/backtests
+- Conversations
 
-- Two different menu merges affecting overlapping raw keys.
-- Two customer merges with incompatible graphs (e.g. chain vs star).
-- Forecast / training: multiple `full_retrain` jobs — mitigated only by `forecast_training_status` skipping cloud sync while training, not by merging model artifacts on the server.
+Important detail:
 
-The cloud ingest tables described in `docs/FORECASTING_AND_SYNC.md` use `UNIQUE(..., employee_id)` for forecasts — that assumes **employee-scoped** rows, not a single global merged state per store.
+- `POST /api/sync/client-learning` only runs the `run_all()` bundle.
+- **Conversations are pushed separately** by `services/sync_conversations.py`.
+- So there is no single manual "push everything to cloud" route today.
 
----
+### 2.3 Cloud Pull
 
-## 5. Summary table: replication vs merge / functionality
+Only one real cloud pull path exists in the repo today:
 
-| Artifact | Pushed to cloud? | Pulled by client? | If missing on machine B |
-|----------|------------------|-------------------|-------------------------|
-| `id_maps_backup.json` / `cluster_state_backup.json` | Yes (when shipper runs & files exist) | **No** | B’s clustering diverges from A. |
-| `merge_history` | **No** | **No** | No undo / audit parity; harder to debug lineage. |
-| `customer_merge_history` | **No** | **No** | **New orders may attach to pre-merge customers** on B. |
-| `customer_addresses` | Only indirectly if merged into target before export N/A addresses live in DB only | **No** | Address books diverge. |
-| Forecast caches | Yes (unsent rows) | Yes (bootstrap) | Mostly covered for **forecasts only**. |
-| Trained model binaries / LightGBM pickles | Out of scope of current shippers | **No** in generic sync | Each machine trains locally unless you add artifact sync. |
+| Item | Implementation |
+|------|----------------|
+| Manual API | `POST /api/forecast/pull-from-cloud` |
+| Logic | `src/core/forecast_bootstrap.py` |
+| Data pulled | Revenue, item, and volume forecasts + backtests |
 
----
+There is **no implemented client pull** for:
 
-## 6. Dachnona server: do they need to update DB, models, and APIs?
+- menu bootstrap
+- customer merge history
+- menu merge history
+- conversations
+- learning/error payloads
 
-**Short answer:**  
-- **If Dachnona only keeps doing what the client already sends today** (errors, learning, menu JSON snapshot ingest, forecast ingest, conversations) and you do **not** add merge replication or menu pull — they mainly need their **existing** ingest tables and handlers to match `docs/FORECASTING_AND_SYNC.md` (and any drift you have already agreed with them). **No new tables are strictly required for that baseline**, beyond whatever they already created for those endpoints.  
-- **If you implement this plan** (versioned menu bootstrap for pull, merge-event sync, multi-device attribution, raw payload archive) — **yes: the Dachnona team must add or extend PostgreSQL tables, backend models (e.g. Django), serializers, migrations, and HTTP routes.** The analytics client cannot “cater” new tables on the server; the server must define persistence and APIs.
-
-### 6.1 What stays “server as-is” (baseline)
-
-| Client feature | Dachnona change? |
-|----------------|------------------|
-| Current `POST .../menu-bootstrap/ingest` with `{ id_maps, cluster_state, uploaded_by? }` | **None**, if their DB already stores each snapshot (even as a single JSONB row per upload). Optional: add `content_hash`, `received_at`, store key for dedup/analytics. |
-| Current learning / errors / forecast ingest | **None**, if implemented per existing spec; otherwise align models to the spec. |
-
-### 6.2 What **requires** Dachnona DB + model + API updates
-
-These are **not** representable by the current menu-bootstrap JSON alone; the server must own new contracts and storage.
-
-| Need | **PostgreSQL / storage** | **Models / domain layer** | **API** |
-|------|---------------------------|---------------------------|---------|
-| **Pull menu state for other machines** | Table(s) for **versioned** menu bootstrap blobs per tenant (e.g. `store_id`, `id_maps`, `cluster_state`, `created_at`, `content_hash`, optional `uploaded_by` JSON). | ORM models + admin/query helpers to resolve “latest” and optionally history. | Stable **`GET /desktop-analytics-sync/menu-bootstrap/latest`** (and optionally `?since=cursor` or ETag). Must match what the client will call after Phase B. |
-| **Customer merge replication** | Tables mirroring (or normalizing) `customer_merge_history`: source/target IDs, `merged_at`, `undone_at`, `similarity_score`, `model_name`, JSON blobs for `suggestion_context`, snapshots, `moved_order_ids`, etc. | Django models, validation (no duplicate active source per store), idempotency keys. | **`POST .../customer-merge-events/ingest`** (or equivalent) + **`GET .../customer-merge-events`** (or delta) for pull. |
-| **Menu merge audit replication** | Tables mirroring `merge_history`: `source_id`, `target_id`, `affected_order_items` JSON, `merged_at`, undo metadata if you add server-side undo. | Same as above. | **`POST .../menu-merge-events/ingest`** + optional GET/delta for pull. |
-| **Conflict handling** | Tables or columns for **merge conflict** records, tombstones, or reconciliation status. | State machine or service layer enforcing policies in §8. | Responses with **409** + machine-readable conflict body (recommended in §7). |
-| **Forensic / “store everything”** | Optional `ingest_raw_payload` (or object storage pointer + metadata table). | Model for audit row linked to endpoint + tenant + hash. | No new public route required if internal only; optional admin export API. |
-| **Multi-operator / multi-device** | Extend ingest rows with `device_id`, `install_id`, `schema_version` (columns or JSONB). | Model field updates + migrations on **all** ingest tables that should be auditable. | Document required headers or JSON fields; validate in view layer. |
-
-### 6.3 Who does what (split of work)
-
-| Layer | Owner |
-|-------|--------|
-| **New columns / tables / migrations on Dachnona Postgres** | **Dachnona backend team** |
-| **Django (or framework) models, serializers, admin, validation** | **Dachnona backend team** |
-| **New or changed REST routes, auth, rate limits** | **Dachnona backend team** |
-| **Client shipper + pull logic + UI** to send/receive new payloads | **Analytics repo** (this project) |
-
-### 6.4 Alignment with recent client-side table changes
-
-Any **new or renamed fields** on the client in SQLite (e.g. extra columns on `customer_merge_history`, richer `merge_history` JSON, new attribution fields) only reach the cloud **if** the client is updated to POST them. Once the client does, **Dachnona must update their ingest models and DB columns** (or JSON schema documentation) to accept and persist those fields — otherwise data is dropped at the boundary. Treat **payload schema** as a shared contract: version it (`schema_version` in body or header) so server migrations can lag safely.
+`scripts/test_server_connection.py` probes `GET /desktop-analytics-sync/menu-bootstrap/latest`, but that is only a connectivity test. No production code consumes that response.
 
 ---
 
-## 7. Recommendations for the Dachnona backend (“store all information”)
+## 3. What Actually Replicates Today
 
-To align the **server** with what operators need for parity:
+| Artifact | Push to cloud? | Pull from cloud? | Notes |
+|----------|----------------|------------------|-------|
+| Error logs | Yes | No | Uploaded from JSONL files; files are truncated/deleted on success. |
+| `ai_logs`, `ai_feedback` | Yes | No | Rows with `uploaded_at IS NULL` are pushed and then marked. |
+| Tier 3 learning payloads | Yes | No | Cache stats, aggregates, schema hash, and incorrect cache entries are posted every run when URL is configured. |
+| Menu bootstrap JSON | Yes | No | File snapshot only: `id_maps_backup.json` + `cluster_state_backup.json`. No local `uploaded_at`; same snapshot can be re-posted every cycle. |
+| Forecast caches/backtests | Yes | Yes | Push uses `uploaded_at`; pull uses forecast bootstrap endpoint. |
+| Conversations | Yes | No | `synced_at` based push-only flow. |
+| `customer_merge_history` | No | No | Main customer collaboration gap. |
+| `merge_history` | No | No | Menu audit/history gap. |
+| `customer_addresses` | No direct sync | No | Only local DB state today. |
 
-1. **Persist full ingest payloads** (raw JSON body + `uploaded_by` + device/install id + schema version), not only normalized columns — enables replay and forensic recovery.
-2. **Version menu bootstrap blobs** per `store_id` / `restaurant_id` with `updated_at`, `content_hash`, and **optional** `parent_stream_cursor` at time of export.
-3. **Add authoritative merge journals** (or materialized views) on the server:
-   - **Menu:** sequence of merges (source UUID → target UUID, variant mapping, actor, timestamp).
-   - **Customer:** same, plus optional link to upstream identity keys used by clients.
-4. **Define conflict policies** (see §8) and return **409 / structured conflicts** when ingest ordering violates invariants.
+`uploaded_by` attribution comes from `app_users WHERE is_active = 1 LIMIT 1`, but the current user model is effectively a singleton:
 
----
+- `GET /api/config/users` returns `LIMIT 1`
+- `POST /api/config/users` deletes all rows and re-inserts one row
 
-## 8. Conflict scenarios to design for
-
-| Scenario | Example | Suggested policy |
-|----------|---------|------------------|
-| Duplicate merge | A→B merged twice | Idempotent: second request no-ops; server stores merge_idempotency_key. |
-| Fork merge | A→B on device 1, A→C on device 2 | Reject or require manual resolution; surface both in admin UI. |
-| Merge then upstream “revives” source | Old `customer_id` in payload after merge | Client already resolves via `resolve_active_customer_target`; server should **canonicalize** IDs on ingest if it ever replays orders. |
-| Menu merge + new item with old raw name | Re-clustering | Last bootstrap wins **per key** with vector clock, or server-side three-way merge (high effort). |
-| Forecast | Two employees upload same date | Already `UNIQUE(..., employee_id)` — clarify whether analytics should **aggregate** or **pick primary** per store. |
+That is workable for single-device attribution, not for strong multi-operator provenance.
 
 ---
 
-## 9. Phased implementation plan
+## 4. Customer Merge Behavior Today
 
-### Phase A — Inventory & contracts (short)
+### 4.1 What Works Locally
 
-- [ ] Document **store / restaurant** identifier on every ingest payload (today some paths only send `uploaded_by`).
-- [ ] List **all** SQLite tables that influence operator-visible truth; mark push/pull/never.
-- [ ] Align `FORECASTING_AND_SYNC.md` with actual Dachnona Django models (including any new tables).
-- [ ] **Dachnona:** confirm which of §6.2 items they will ship first (menu latest vs merge-events vs audit).
+The local customer merge flow is coherent.
 
-### Phase B — Client pull for menu bootstrap (high value, medium effort)
+`src/core/queries/customer_merge_queries.py::merge_customers()` does all of this:
 
-- [ ] **Dachnona:** implement/version **`GET .../menu-bootstrap/latest`** (and DB backing) per §6.2 if not already production-complete beyond the test script probe.
-- [ ] Implement `fetch_menu_bootstrap(conn, endpoint, auth)` mirroring `forecast_bootstrap`:
-  - GET latest (or since `cursor`) from `/desktop-analytics-sync/menu-bootstrap/latest`.
-  - Write JSON to `data/` **or** apply directly to `menu_items` / `variants` / `menu_item_variants` with clear precedence rules.
-- [ ] Add API route e.g. `POST /operations/pull-menu-bootstrap` and UI control (“Pull menu state from cloud”).
-- [ ] After successful pull, optionally **re-run** `export_to_backups` so local files match DB.
+- validates source/target via preview logic
+- copies structured addresses to the target customer
+- merges target customer fields
+- moves existing `orders.customer_id` from source -> target
+- records audit/history in `customer_merge_history`
+- recomputes aggregates for both customers
 
-### Phase C — Replicate merge journals (high value for correctness)
+Future order ingest also respects local merges:
 
-- [ ] **Dachnona:** add **merge-event** ingest + pull APIs and **Postgres tables/models** per §6.2 (cannot be client-only).
-- [ ] Extend ingest API (or add `/desktop-analytics-sync/merge-events/ingest`) for **append-only** `merge_history` + `customer_merge_history` events (JSON rows).
-- [ ] On pull, apply events in `merged_at` order; detect cycles / double-source using DB constraints + server validation.
-- [ ] Keep SQLite unique index semantics aligned with server rules (`idx_customer_merge_history_active_source`).
+- `services/load_orders.py::resolve_active_customer_target()` follows active merge chains
+- `get_or_create_customer()` calls it before updating or returning a customer
 
-### Phase D — Multi-operator identity
+Duplicate detection also respects local merge state:
 
-- [ ] Replace `LIMIT 1` on `app_users` with explicit **session / device** selection in the UI, or store `device_id` + `employee_id` in `system_config`.
-- [ ] Pass **both** to every shipper payload for auditing.
-- [ ] **Dachnona:** extend ingest schemas and DB columns to persist `device_id` / `install_id` / `schema_version` (§6.2).
+- `active_customer_filter()` excludes customers that are active merge sources
 
-### Phase E — Training / model artifacts (optional)
+So the local machine behaves correctly **if it has the merge history**.
 
-- [ ] If “train models” must be shared: define blob storage (S3/GCS) + manifest in Dachnona; **do not** stuff large binaries through JSON ingest.
+### 4.2 Why Another Machine Diverges
+
+`customer_merge_history` is not part of any existing push/pull channel.
+
+That means machine B can have:
+
+- the same upstream orders
+- the same customers table shape
+- the same customer UI
+
+but still lack the merge decisions made on machine A.
+
+Result:
+
+- merged source customers can reappear in similarity suggestions on B
+- new orders on B can keep attaching to the pre-merge customer
+- customer KPIs, profiles, and merge history diverge across operators
+
+### 4.3 Important Gap Missing from the Earlier Analysis
+
+Replicating the raw history row is **not enough**.
+
+If machine B already ingested orders before it learns about a merge, then a proper pull/apply flow must do more than insert into `customer_merge_history`. It must also perform the equivalent of the local merge side effects:
+
+- move existing `orders.customer_id`
+- merge customer fields onto the target
+- copy structured addresses
+- recompute customer aggregates
+
+Otherwise machine B will have the history row but still keep the wrong analytics state.
+
+### 4.4 Local IDs Are Not a Safe Cloud Contract
+
+This is the biggest design risk for customer merge sync.
+
+The current table stores local SQLite identifiers:
+
+- `source_customer_id`
+- `target_customer_id`
+- `moved_order_ids`
+- address IDs inside undo context
+
+Those values are not guaranteed to be portable across machines.
+
+Reasons:
+
+- `customer_id` is an autoincrement SQLite key
+- `order_id` is an autoincrement SQLite key
+- `address_id` is an autoincrement SQLite key
+- anonymous customer identity keys are generated with random UUIDs
+
+So a cloud API that blindly ships `customer_merge_history` rows between machines is brittle. The cloud contract needs **portable locators**, not only local row IDs.
+
+Recommended portable fields for customer merge events:
+
+- `remote_event_id` or idempotency key
+- store/tenant identifier
+- source and target customer snapshots
+- source and target stable identity locators where available
+  - phone hash
+  - name + address hash
+  - existing `customer_identity_key` when it is deterministic
+- merge metadata
+  - `merged_at`
+  - `undone_at`
+  - `similarity_score`
+  - `model_name`
+  - `suggestion_context`
+- optional portable order refs if needed for undo
+  - `petpooja_order_id`
+  - `event_id`
+  - `stream_id`
+
+The receiving client should resolve those portable locators to its local `customer_id` values before applying the merge.
 
 ---
 
-## 10. Quick answers to the original questions
+## 5. Menu Bootstrap and Menu Merge Reality
 
-1. **What must change for Dachnona to “store all the information”?**  
-   Extend ingest beyond forecasts/learning/menu JSON/errors: at minimum **merge journals + versioning metadata**, ideally **raw payload archive** per upload.
+### 5.1 What the Snapshot Contains
 
-2. **Are we missing parent or parent-table data that breaks merge / DB / behavior?**  
-   The **parent order stream** is unchanged; the gap is **replicating local merge state** (`customer_merge_history`, and audit `merge_history`) to other clients. Without that, **customer** identity resolution on other machines is the highest-risk divergence.
+`scripts/seed_from_backups.py::export_to_backups()` exports:
 
-3. **Safe push/pull for multiple users?**  
-   Push exists for several channels; **pull is largely missing for menu**; **merge state is not synced**; **attribution assumes one active app user**. This is not yet a safe multi-master collaboration story.
+- `id_maps_backup.json`
+- `cluster_state_backup.json`
 
-4. **Do we track conflicts of multiple merges?**  
-   **No** — only local constraints (e.g. unique active source in `customer_merge_history`) and application rules in preview APIs. There is **no** cross-device conflict ledger.
+Those files primarily represent:
+
+- menu item IDs and names
+- variant IDs and names
+- item type IDs
+- mapping state keyed by `order_item_id`
+
+This is useful, but it is **not** a full menu-state database export.
+
+### 5.2 What It Does Not Contain
+
+The current menu bootstrap snapshot does **not** fully preserve:
+
+- `merge_history`
+- `order_item_addons` remaps
+- menu counters and all operational flags
+- `suggestion_id` and other richer menu metadata
+- an explicit authoritative audit trail of menu merges
+
+### 5.3 What `perform_seeding()` Actually Restores
+
+This matters a lot for any future menu pull feature.
+
+`perform_seeding()` restores only:
+
+- `menu_items`
+- `variants`
+- `menu_item_variants`
+
+It does **not** rewrite:
+
+- `order_items`
+- `order_item_addons`
+- `merge_history`
+
+That means menu bootstrap pull is good for:
+
+- a fresh install
+- an empty DB before order replay
+- helping future clustering start closer to the desired state
+
+But it is **not** a complete reconciliation strategy for an already-populated database.
+
+So if you later add menu pull, do not assume:
+
+`GET latest snapshot` -> `perform_seeding()` -> "all menu analytics now match"
+
+That is not true with the current code.
+
+### 5.4 What This Means for Priority
+
+Because your immediate pain is customer merge divergence, **customer merge sync should be built first**.
+
+Menu bootstrap pull is still useful, but it does not solve the customer merge problem and it is only a partial menu-state reconciliation path anyway.
 
 ---
 
-## 11. Related code references (for implementers)
+## 6. Confirmed Bugs and Gaps in the Existing Sync APIs
 
-- Menu export / seed: `scripts/seed_from_backups.py` (`export_to_backups`, `perform_seeding`).
-- Menu bootstrap upload: `src/core/menu_bootstrap_shipper.py`.
-- Shipper orchestration: `src/core/client_learning_shipper.py`.
-- Scheduler: `src/core/services/cloud_sync_scheduler.py`.
-- Customer merge on ingest: `services/load_orders.py` (`resolve_active_customer_target`).
-- Customer merge writes: `src/core/queries/customer_merge_queries.py`.
-- API sync spec (partial): `docs/FORECASTING_AND_SYNC.md` Part 2.
+### 6.1 Confirmed and Fixed in This Review
+
+During this review I found a real upgrade-path sync bug in startup migrations:
+
+- older startup code only backfilled forecast `uploaded_at` on some backtest tables
+- volume forecast/backtest sync on upgraded databases could silently skip rows if the column was missing
+
+This is now fixed in:
+
+- `src/api/main.py`
+
+Startup now attempts to add `uploaded_at` to all forecast cache/backtest tables.
+
+### 6.2 Confirmed Existing Gaps Still Present
+
+1. **No customer merge push/pull path**
+   - This is the main collaboration gap for the new customer page.
+
+2. **No menu bootstrap pull implementation**
+   - The repo only has a connectivity probe script for `menu-bootstrap/latest`.
+
+3. **No manual conversations push endpoint**
+   - Conversations are scheduled, but not included in `POST /api/sync/client-learning`.
+
+4. **Menu bootstrap is fire-and-forget**
+   - No local `uploaded_at`
+   - No content hash
+   - No dedupe
+   - No change detection
+
+5. **Single-user attribution model**
+   - `app_users` behaves like a singleton, which is weak for multi-device auditability.
+
+6. **Customer merge payload fields are local-machine-oriented**
+   - Good for local undo
+   - Unsafe as a direct cloud replication contract
 
 ---
 
-*End of document.*
+## 7. Recommended Customer Merge Sync Design
+
+This section is the practical answer to "how do we make this new API consistent with the existing app?"
+
+### 7.1 Stay Consistent with Existing Patterns
+
+Use the same split the app already uses:
+
+- **Push** goes into the existing scheduler/orchestrator path.
+- **Pull** is a feature-specific manual API, similar to forecast bootstrap.
+
+Recommended client structure:
+
+| Concern | Recommended place |
+|---------|-------------------|
+| Customer merge push shipper | New module, e.g. `src/core/customer_merge_shipper.py` |
+| Push orchestration | Add to `src/core/client_learning_shipper.py::run_all()` |
+| Background scheduling | Reuse `src/core/services/cloud_sync_scheduler.py` |
+| Manual pull API | Add customer-merge-specific route, e.g. in `src/api/routers/orders.py` |
+| Pull/apply logic | New module, e.g. `src/core/customer_merge_sync.py` |
+
+### 7.2 Recommended Push Behavior
+
+Add a customer merge shipper that selects merge events not yet uploaded.
+
+Two implementation options:
+
+| Option | Notes |
+|--------|-------|
+| Add `uploaded_at` to `customer_merge_history` | Simple, but undo events need special handling because the row changes after initial upload. |
+| Add a dedicated outbound event log/state table | Cleaner for append-only sync and future conflict handling. |
+
+For consistency with the rest of the app, I would prefer:
+
+- append-only merge events
+- explicit event IDs
+- idempotent ingest on the server
+
+At minimum, each pushed event should include:
+
+- `remote_event_id`
+- `schema_version`
+- `uploaded_by`
+- optional `device_id` / `install_id`
+- source/target portable locators
+- snapshots
+- merge metadata
+- undo metadata if applicable
+
+### 7.3 Recommended Pull Behavior
+
+Mirror the forecast pull pattern, but do not make it generic too early.
+
+Recommended manual API shape:
+
+- `POST /api/orders/customers/merge/pull-from-cloud`
+
+Why this shape:
+
+- Forecast pull is feature-specific, not under `/api/sync`
+- Customer merges are owned by the customer feature
+- This keeps feature code near the customer router and customer queries
+
+The pull path should:
+
+1. request merge events from the server using a cursor
+2. resolve cloud locators to local customer rows
+3. apply the merge or undo with deterministic local mutations
+4. store the remote cursor locally, likely in `system_config`
+5. mark applied remote events idempotently
+
+### 7.4 Do Not Reuse `merge_customers()` Blindly for Remote Events
+
+Local interactive merge and remote event replay are related, but not identical.
+
+For remote replay, you likely want a dedicated function such as:
+
+- `apply_customer_merge_event(...)`
+- `apply_customer_merge_undo_event(...)`
+
+Reasons:
+
+- remote apply must be idempotent
+- remote apply must tolerate already-moved local data
+- remote apply may need to resolve customers by portable keys, not by local IDs
+- remote apply should preserve the original event metadata
+
+### 7.5 Server Contract Needed from Dachnona
+
+Minimum server-side features:
+
+- ingest endpoint for customer merge events
+- delta pull endpoint for customer merge events
+- idempotent event handling
+- stable cursor or `updated_after`
+- store/tenant scoping
+
+Suggested endpoints:
+
+- `POST /desktop-analytics-sync/customer-merges/ingest`
+- `GET /desktop-analytics-sync/customer-merges`
+
+or one generic merge-events family if the server prefers that.
+
+---
+
+## 8. What the Dachnona Backend Must Add
+
+If the server only keeps the current baseline endpoints, it can continue storing:
+
+- errors
+- learning payloads
+- menu bootstrap snapshots
+- forecasts
+- conversations
+
+But to solve the customer merge collaboration problem, Dachnona needs new persistence and APIs for merge events.
+
+| Need | Why it is required |
+|------|--------------------|
+| Customer merge event table(s) | Current client never pushes this state today. |
+| Idempotency key / `remote_event_id` | Required so repeated uploads do not duplicate merge actions. |
+| Delta pull API | Required so another machine can learn about merges after they happen. |
+| Tenant/store scoping | Required so events do not mix across restaurants/stores. |
+| Optional raw payload archive | Very useful for debugging and replay. |
+
+For customer merges specifically, the server should not normalize away too much too early. Keeping the raw payload is valuable because the local client logic is richer than just `source_id -> target_id`.
+
+---
+
+## 9. Priority Plan
+
+The previous version prioritized menu bootstrap pull first. For your stated goal, that is the wrong order.
+
+### Phase 1 - Customer Merge Push
+
+- add client-side customer merge shipper
+- add server ingest endpoint/table
+- integrate push into `client_learning_shipper.run_all()`
+- include result in `POST /api/sync/client-learning`
+
+### Phase 2 - Customer Merge Pull and Apply
+
+- add server delta endpoint
+- add client manual pull route
+- add local cursor storage
+- implement deterministic apply/undo logic for remote events
+
+### Phase 3 - Multi-Device Attribution
+
+- add `device_id` / `install_id`
+- stop treating `app_users` as sufficient multi-device identity
+- send both employee identity and device identity with merge events
+
+### Phase 4 - Menu Pull, If Still Needed
+
+- implement `menu-bootstrap/latest` consumption
+- decide whether snapshot apply is only for fresh installs or also for populated DBs
+- if populated DB parity matters, extend apply logic beyond `perform_seeding()`
+
+### Phase 5 - Optional Menu Merge Event Sync
+
+- only after deciding whether menu bootstrap snapshots are enough
+- if not enough, add explicit menu merge event ingest/pull
+
+---
+
+## 10. Quick Answers to the Original Questions
+
+1. **Why does customer merge stay local today?**  
+   Because `customer_merge_history` is only stored in local SQLite and is not part of any current cloud push/pull flow.
+
+2. **Is this missing from the routine sync/push/pull path?**  
+   Yes. Current cloud push covers errors, learning, menu bootstrap, forecasts, and conversations. Current cloud pull covers forecasts only.
+
+3. **Will menu bootstrap pull solve the customer merge problem?**  
+   No. Customer merges need their own replicated event/apply path.
+
+4. **What should be built first?**  
+   Customer merge event push + pull/apply, integrated into the existing scheduler and shipper architecture.
+
+5. **What is the biggest technical risk if we do this naively?**  
+   Using local SQLite IDs as if they were portable cloud identifiers.
+
+---
+
+## 11. Code References
+
+- Upstream sync: `src/core/services/sync_service.py`
+- Manual upstream sync API: `src/api/routers/operations.py`
+- Scheduler: `src/core/services/cloud_sync_scheduler.py`
+- Cloud push orchestrator: `src/core/client_learning_shipper.py`
+- Learning shipper: `src/core/learning_shipper.py`
+- Menu bootstrap shipper: `src/core/menu_bootstrap_shipper.py`
+- Forecast shipper: `src/core/forecast_shipper.py`
+- Forecast pull: `src/core/forecast_bootstrap.py`
+- Conversations sync: `services/sync_conversations.py`
+- Customer merge writes: `src/core/queries/customer_merge_queries.py`
+- Customer merge history schema: `database/schema_sqlite.sql`
+- Customer merge behavior on ingest: `services/load_orders.py`
+- Menu backup export/seed: `scripts/seed_from_backups.py`
+
+---
+
+*End of reviewed plan.*

@@ -157,7 +157,7 @@ function startPythonParams(dbPath) {
 
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 1400,
+        width: 1500,
         height: 900,
         backgroundColor: '#1a1a1a',
         webPreferences: {

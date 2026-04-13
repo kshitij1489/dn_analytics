@@ -131,8 +131,18 @@ def startup_db_check():
                 except Exception:
                     conn.rollback()
                     pass  # Column already exists
-            # Migration: forecast cloud sync uploaded_at on backtest caches
-            for table in ["revenue_backtest_cache", "item_backtest_cache"]:
+            # Migration: forecast cloud sync uploaded_at on forecast + backtest caches
+            # Older installs may have forecast tables without this column, which would
+            # silently disable cloud push for those tables because the shippers catch
+            # the missing-column read error and return empty batches.
+            for table in [
+                "forecast_cache",
+                "item_forecast_cache",
+                "volume_forecast_cache",
+                "revenue_backtest_cache",
+                "item_backtest_cache",
+                "volume_backtest_cache",
+            ]:
                 try:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN uploaded_at TEXT;")
                     conn.commit()
