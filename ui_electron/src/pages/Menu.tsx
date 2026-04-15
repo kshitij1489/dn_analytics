@@ -370,7 +370,8 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
     const [pageSize, setPageSize] = useState(50);
     const [loading, setLoading] = useState(false);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
-    const [sortDesc, setSortDesc] = useState(true);
+    const [sortKey, setSortKey] = useState<(typeof SUMMARY_PERIOD_KEYS)[number]>('lifetime');
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const requestAsOfDate = useBackendBusinessDate ? '' : asOfDate;
     const trimmedSearchInput = searchInput.trim();
 
@@ -395,7 +396,8 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
                     page,
                     page_size: pageSize,
                     name_search: search.trim() || undefined,
-                    sort_desc: sortDesc,
+                    sort_by: sortKey,
+                    sort_desc: sortDirection === 'desc',
                 });
                 setTableData(res.data.data);
                 setTotal(res.data.total);
@@ -412,7 +414,22 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
             }
         };
         void load();
-    }, [subMode, requestAsOfDate, page, pageSize, search, sortDesc, lastDbSync, useBackendBusinessDate]);
+    }, [subMode, requestAsOfDate, page, pageSize, search, sortKey, sortDirection, lastDbSync, useBackendBusinessDate]);
+
+    const handleSummarySort = (key: (typeof SUMMARY_PERIOD_KEYS)[number]) => {
+        if (sortKey === key) {
+            setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+            setSortKey(key);
+            setSortDirection('desc');
+        }
+        setPage(1);
+    };
+
+    const renderSummarySortIcon = (key: (typeof SUMMARY_PERIOD_KEYS)[number]) => {
+        if (sortKey !== key) return <span style={{ opacity: 0.3 }}> ⇅</span>;
+        return <span>{sortDirection === 'asc' ? ' ↑' : ' ↓'}</span>;
+    };
 
     const exportRows = () => {
         const headers =
@@ -532,21 +549,6 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
                                 >
                                     Use current
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setSortDesc(s => !s)}
-                                    style={{
-                                        padding: '8px 12px',
-                                        borderRadius: '8px',
-                                        border: '1px solid var(--border-color)',
-                                        background: 'var(--input-bg)',
-                                        color: 'var(--text-color)',
-                                        cursor: 'pointer',
-                                        fontSize: '12px',
-                                    }}
-                                >
-                                    Lifetime: {sortDesc ? 'high → low' : 'low → high'}
-                                </button>
                             </div>
                         </div>
                     )}
@@ -560,8 +562,13 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
                                     <th style={{ minWidth: '88px' }}>Unit</th>
                                 )}
                                 {SUMMARY_PERIOD_KEYS.map(k => (
-                                    <th key={k} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                    <th
+                                        key={k}
+                                        style={{ textAlign: 'right', whiteSpace: 'nowrap' }}
+                                        onClick={() => handleSummarySort(k)}
+                                    >
                                         {SUMMARY_PERIOD_LABELS[k]}
+                                        {renderSummarySortIcon(k)}
                                     </th>
                                 ))}
                             </tr>
@@ -2258,7 +2265,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Main Page ---
 
 export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
-    const [activeTab, setActiveTab] = useState<'summary' | 'items' | 'variants' | 'matrix' | 'resolutions'>('items');
+    const [activeTab, setActiveTab] = useState<'summary' | 'items' | 'variants' | 'matrix' | 'resolutions'>('summary');
 
     const menuTabs = [
         { id: 'summary' as const, label: '📊 Summary' },

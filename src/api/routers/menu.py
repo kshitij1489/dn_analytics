@@ -104,7 +104,11 @@ def get_menu_summary(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     name_search: Optional[str] = None,
-    sort_desc: bool = Query(True, description="Sort by lifetime column descending when true."),
+    sort_by: str = Query(
+        "lifetime",
+        description="Rollup column to sort by: day_1, day_2, day_3, day_5, day_7, day_14, month_1, month_2, lifetime.",
+    ),
+    sort_desc: bool = Query(True, description="Descending when true."),
     conn=Depends(get_db),
 ):
     """Rolling quantity or unit-volume totals by menu item (Menu → Summary)."""
@@ -118,6 +122,7 @@ def get_menu_summary(
         page=page,
         page_size=page_size,
         name_search=name_search,
+        sort_by=sort_by,
         sort_desc=sort_desc,
     )
     if err:

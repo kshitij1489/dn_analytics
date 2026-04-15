@@ -463,6 +463,21 @@ def _menu_summary_norm_unit_sql() -> str:
     """
 
 
+_MENU_SUMMARY_SORT_COLUMNS = frozenset(
+    {
+        "day_1",
+        "day_2",
+        "day_3",
+        "day_5",
+        "day_7",
+        "day_14",
+        "month_1",
+        "month_2",
+        "lifetime",
+    }
+)
+
+
 def fetch_menu_summary_rollups(
     conn,
     mode: str,
@@ -470,6 +485,7 @@ def fetch_menu_summary_rollups(
     page: int = 1,
     page_size: int = 50,
     name_search: Optional[str] = None,
+    sort_by: str = "lifetime",
     sort_desc: bool = True,
 ):
     """
@@ -587,13 +603,14 @@ def fetch_menu_summary_rollups(
         inner_params = measure_params + search_params
 
         sort_dir = "DESC" if sort_desc else "ASC"
+        safe_sort_col = sort_by if sort_by in _MENU_SUMMARY_SORT_COLUMNS else "lifetime"
         offset = (page - 1) * page_size
 
         count_sql = f"SELECT COUNT(*) FROM ({inner_query}) AS agg"
         count_cursor = conn.execute(count_sql, inner_params)
         total_count = count_cursor.fetchone()[0]
 
-        data_sql = f"{inner_query} ORDER BY lifetime {sort_dir} LIMIT ? OFFSET ?"
+        data_sql = f"{inner_query} ORDER BY {safe_sort_col} {sort_dir} LIMIT ? OFFSET ?"
         data_params = inner_params + [page_size, offset]
         cursor = conn.execute(data_sql, data_params)
         return pd.DataFrame([dict(row) for row in cursor.fetchall()]), total_count, None

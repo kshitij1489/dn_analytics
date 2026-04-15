@@ -97,6 +97,7 @@ export const endpoints = {
             page?: number;
             page_size?: number;
             name_search?: string;
+            sort_by?: string;
             sort_desc?: boolean;
         }) => api.get('/menu/summary', { params }),
         itemsView: (params?: any) => api.get('/menu/items-view', { params }),
