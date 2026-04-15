@@ -1,28 +1,12 @@
 import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { endpoints } from '../api';
-import { ErrorPopup } from '../components';
+import { CollapsibleCard, ErrorPopup, TabButton } from '../components';
 import type { PopupMessage } from '../components';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
 
 // --- Shared Components ---
-
-const CollapsibleCard = ({ children, title, defaultCollapsed = false }: { children: React.ReactNode, title: string, defaultCollapsed?: boolean }) => {
-    const [collapsed, setCollapsed] = useState(defaultCollapsed);
-    return (
-        <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', marginBottom: '20px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
-            <div
-                onClick={() => setCollapsed(!collapsed)}
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: collapsed ? 0 : '15px' }}
-            >
-                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>{title}</h3>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '1.2em' }}>{collapsed ? '+' : '−'}</span>
-            </div>
-            {!collapsed && children}
-        </div>
-    );
-};
 
 const Card = ({ children, title }: { children: React.ReactNode, title: string }) => (
     <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', marginBottom: '20px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
@@ -122,6 +106,7 @@ interface MatrixRow {
     delivery_eligible: boolean;
     menu_item_id: string;
     variant_id: string;
+    mapping_count: number;
 }
 
 const getApiErrorMessage = (error: unknown): string => {
@@ -333,19 +318,337 @@ function ResizableTableWrapper({
     );
 }
 
+const SUMMARY_PERIOD_KEYS = [
+    'day_1',
+    'day_2',
+    'day_3',
+    'day_5',
+    'day_7',
+    'day_14',
+    'month_1',
+    'month_2',
+    'lifetime',
+] as const;
+
+const SUMMARY_PERIOD_LABELS: Record<(typeof SUMMARY_PERIOD_KEYS)[number], string> = {
+    day_1: '1-day',
+    day_2: '2-day',
+    day_3: '3-day',
+    day_5: '5-day',
+    day_7: '7-day',
+    day_14: '14-day',
+    month_1: '1-Month',
+    month_2: '2-Month',
+    lifetime: 'LifeTime',
+};
+
+const SEARCH_IDLE_DELAY_MS = 1500;
+
+function formatSummaryNumber(value: unknown, volume: boolean): string {
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(n)) return '—';
+    if (volume) {
+        if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+        return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+    return Math.round(n).toLocaleString();
+}
+
+// --- Summary Tab (rolling windows) ---
+
+function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
+    const localToday = formatDateInputValue(new Date());
+    const [subMode, setSubMode] = useState<'volume' | 'quantity'>('volume');
+    const [useBackendBusinessDate, setUseBackendBusinessDate] = useState(true);
+    const [asOfDate, setAsOfDate] = useState('');
+    const [pickerMaxDate, setPickerMaxDate] = useState(localToday);
+    const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
+    const [tableData, setTableData] = useState<Record<string, unknown>[]>([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(50);
+    const [loading, setLoading] = useState(false);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
+    const [sortDesc, setSortDesc] = useState(true);
+    const requestAsOfDate = useBackendBusinessDate ? '' : asOfDate;
+    const trimmedSearchInput = searchInput.trim();
+
+    useEffect(() => {
+        if (trimmedSearchInput === search) return;
+
+        const timeoutId = window.setTimeout(() => {
+            setSearch(trimmedSearchInput);
+            setPage(1);
+        }, SEARCH_IDLE_DELAY_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [trimmedSearchInput, search]);
+
+    useEffect(() => {
+        const load = async () => {
+            setLoading(true);
+            try {
+                const res = await endpoints.menu.summary({
+                    mode: subMode,
+                    as_of_date: requestAsOfDate || undefined,
+                    page,
+                    page_size: pageSize,
+                    name_search: search.trim() || undefined,
+                    sort_desc: sortDesc,
+                });
+                setTableData(res.data.data);
+                setTotal(res.data.total);
+                if (typeof res.data.as_of_date === 'string' && res.data.as_of_date) {
+                    setPickerMaxDate(prev => (prev === res.data.as_of_date ? prev : res.data.as_of_date));
+                    if (useBackendBusinessDate) {
+                        setAsOfDate(prev => (prev === res.data.as_of_date ? prev : res.data.as_of_date));
+                    }
+                }
+            } catch (error) {
+                setPopup({ type: 'error', message: getApiErrorMessage(error) });
+            } finally {
+                setLoading(false);
+            }
+        };
+        void load();
+    }, [subMode, requestAsOfDate, page, pageSize, search, sortDesc, lastDbSync, useBackendBusinessDate]);
+
+    const exportRows = () => {
+        const headers =
+            subMode === 'volume'
+                ? ['menu_item_id', 'name', 'unit', ...SUMMARY_PERIOD_KEYS]
+                : ['menu_item_id', 'name', ...SUMMARY_PERIOD_KEYS];
+        exportToCSV(tableData, `menu_summary_${subMode}`, [...headers]);
+    };
+
+    return (
+        <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
+            <p style={{ marginTop: 0, marginBottom: '16px', color: 'var(--text-secondary)', maxWidth: '900px' }}>
+                {subMode === 'quantity' ? (
+                    <>
+                        Quantity uses the same line dedupe rules as Menu Items: each order line and add-on line counts once;
+                        the cell is the sum of <strong>quantity</strong> (not distinct orders).
+                    </>
+                ) : (
+                    <>
+                        Volume is <strong>variant value × quantity</strong> for each line, grouped by normalized unit (ML, GMS,
+                        PIECES, or other/UNKNOWN). The same menu item appearing on multiple rows with different units usually
+                        indicates variant mapping noise to clean up in Variants / Resolutions.
+                    </>
+                )}
+            </p>
+            <div
+                className="segmented-control"
+                style={{
+                    width: 'fit-content',
+                    maxWidth: '100%',
+                    flexWrap: 'wrap',
+                    marginBottom: '20px',
+                }}
+            >
+                {(
+                    [
+                        { id: 'volume' as const, label: 'Volume' },
+                        { id: 'quantity' as const, label: 'Quantity' },
+                    ]
+                ).map((t) => (
+                    <TabButton
+                        key={t.id}
+                        active={subMode === t.id}
+                        onClick={() => {
+                            setSubMode(t.id);
+                            setPage(1);
+                        }}
+                        variant="segmented"
+                    >
+                        {t.label}
+                    </TabButton>
+                ))}
+            </div>
+            {loading ? (
+                <div>Loading...</div>
+            ) : (
+                <ResizableTableWrapper
+                    defaultHeight={560}
+                    headerContent={(
+                        <div
+                            style={{
+                                width: '100%',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: '12px',
+                                flexWrap: 'wrap',
+                            }}
+                        >
+                            <input
+                                placeholder="Search name..."
+                                value={searchInput}
+                                onChange={e => setSearchInput(e.target.value)}
+                                style={{
+                                    padding: '8px',
+                                    width: '280px',
+                                    background: 'var(--input-bg)',
+                                    color: 'var(--text-color)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '4px',
+                                }}
+                            />
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <label style={dateRangeLabelStyle}>
+                                    Through (business date):
+                                    <input
+                                        type="date"
+                                        value={asOfDate}
+                                        max={pickerMaxDate || localToday}
+                                        onChange={e => {
+                                            setUseBackendBusinessDate(false);
+                                            setAsOfDate(e.target.value);
+                                            setPage(1);
+                                        }}
+                                        style={dateRangeInputStyle}
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setUseBackendBusinessDate(true);
+                                        setAsOfDate(pickerMaxDate || localToday);
+                                        setPage(1);
+                                    }}
+                                    disabled={useBackendBusinessDate}
+                                    style={{
+                                        padding: '8px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        cursor: useBackendBusinessDate ? 'default' : 'pointer',
+                                        fontSize: '12px',
+                                        opacity: useBackendBusinessDate ? 0.65 : 1,
+                                    }}
+                                >
+                                    Use current
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSortDesc(s => !s)}
+                                    style={{
+                                        padding: '8px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--input-bg)',
+                                        color: 'var(--text-color)',
+                                        cursor: 'pointer',
+                                        fontSize: '12px',
+                                    }}
+                                >
+                                    Lifetime: {sortDesc ? 'high → low' : 'low → high'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    onExportCSV={exportRows}
+                >
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th style={{ minWidth: '200px' }}>Menu Item</th>
+                                {subMode === 'volume' && (
+                                    <th style={{ minWidth: '88px' }}>Unit</th>
+                                )}
+                                {SUMMARY_PERIOD_KEYS.map(k => (
+                                    <th key={k} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        {SUMMARY_PERIOD_LABELS[k]}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {tableData.map((row, i) => (
+                                <tr key={i}>
+                                    <td>{String(row.name ?? '')}</td>
+                                    {subMode === 'volume' && (
+                                        <td style={{ fontWeight: 500 }}>{String(row.unit ?? '')}</td>
+                                    )}
+                                    {SUMMARY_PERIOD_KEYS.map(k => (
+                                        <td key={k} style={{ textAlign: 'right' }}>
+                                            {formatSummaryNumber(row[k], subMode === 'volume')}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </ResizableTableWrapper>
+            )}
+            <div style={{ marginTop: '10px', display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <select
+                        value={pageSize}
+                        onChange={e => {
+                            setPageSize(Number(e.target.value));
+                            setPage(1);
+                        }}
+                        style={{
+                            padding: '5px',
+                            background: 'var(--input-bg)',
+                            color: 'var(--text-color)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '4px',
+                        }}
+                    >
+                        <option value={20}>20 per page</option>
+                        <option value={25}>25 per page</option>
+                        <option value={50}>50 per page</option>
+                        <option value={100}>100 per page</option>
+                        <option value={200}>200 per page</option>
+                    </select>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                        Showing {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} of {total}
+                    </span>
+                </div>
+                <div>
+                    <button
+                        type="button"
+                        disabled={page <= 1}
+                        onClick={() => setPage(p => p - 1)}
+                        style={{
+                            marginRight: '5px',
+                            padding: '5px 10px',
+                            cursor: page <= 1 ? 'not-allowed' : 'pointer',
+                        }}
+                    >
+                        &lt; Prev
+                    </button>
+                    <span>
+                        Page {page} of {Math.max(1, Math.ceil(total / pageSize))}
+                    </span>
+                    <button
+                        type="button"
+                        disabled={page >= Math.ceil(total / pageSize)}
+                        onClick={() => setPage(p => p + 1)}
+                        style={{
+                            marginLeft: '5px',
+                            padding: '5px 10px',
+                            cursor: page >= Math.ceil(total / pageSize) ? 'not-allowed' : 'pointer',
+                        }}
+                    >
+                        Next &gt;
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // --- Menu Items Tab ---
 
 function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const defaultStartDate = '2025-01-01';
     const today = formatDateInputValue(new Date());
-
-    // State for Merge Tool
-    const [itemsList, setItemsList] = useState<any[]>([]);
-    const [sourceId, setSourceId] = useState('');
-    const [targetId, setTargetId] = useState('');
-    const [mergeHistory, setMergeHistory] = useState<any[]>([]);
-    const [loadingMerge, setLoadingMerge] = useState(false);
-    const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     // State for Table
     const [tableData, setTableData] = useState<any[]>([]);
@@ -355,32 +658,26 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [total, setTotal] = useState(0);
     const [loadingTable, setLoadingTable] = useState(false);
+    const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [startDate, setStartDate] = useState(defaultStartDate);
     const [endDate, setEndDate] = useState(today);
+    const trimmedSearchInput = searchInput.trim();
 
     useEffect(() => {
-        loadDropdowns();
-        loadHistory();
-    }, []);
+        if (trimmedSearchInput === search) return;
+
+        const timeoutId = window.setTimeout(() => {
+            setSearch(trimmedSearchInput);
+            setPage(1);
+        }, SEARCH_IDLE_DELAY_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [trimmedSearchInput, search]);
 
     useEffect(() => {
         loadTable();
     }, [page, search, pageSize, sortKey, sortDirection, startDate, endDate, lastDbSync]);
-
-    const loadDropdowns = async () => {
-        try {
-            const res = await endpoints.menu.list();
-            setItemsList(res.data);
-        } catch (e) { console.error(e); }
-    };
-
-    const loadHistory = async () => {
-        try {
-            const res = await endpoints.menu.mergeHistory();
-            setMergeHistory(res.data);
-        } catch (e) { console.error(e); }
-    };
 
     const loadTable = async () => {
         setLoadingTable(true);
@@ -399,35 +696,6 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
             setTotal(res.data.total);
         } catch (e) { console.error(e); }
         finally { setLoadingTable(false); }
-    };
-
-    const handleMerge = async () => {
-        if (!sourceId || !targetId) { setPopup({ type: 'error', message: "Select both items" }); return; }
-        if (sourceId === targetId) { setPopup({ type: 'error', message: "Cannot merge same item" }); return; }
-        if (!confirm("Are you sure? Source item will be deleted.")) return;
-
-        setLoadingMerge(true);
-        try {
-            await endpoints.menu.merge({ source_id: sourceId, target_id: targetId });
-            setPopup({ type: 'success', message: "Merged successfully" });
-            setSourceId(''); setTargetId('');
-            loadDropdowns();
-            loadHistory();
-            loadTable();
-        } catch (e: any) {
-            setPopup({ type: 'error', message: e.response?.data?.detail || e.message });
-        } finally {
-            setLoadingMerge(false);
-        }
-    };
-
-    const handleUndo = async (mergeId: number) => {
-        if (!confirm("Undo this merge?")) return;
-        try {
-            await endpoints.menu.undoMerge({ merge_id: mergeId });
-            loadHistory();
-            loadTable();
-        } catch (e: any) { setPopup({ type: 'error', message: e.response?.data?.detail || e.message }); }
     };
 
     const handleSort = (key: string) => {
@@ -463,53 +731,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 
     return (
         <div>
-            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                <CollapsibleCard title="🛠️ Merge Menu Items" defaultCollapsed={true}>
-                    <p style={{ fontSize: '0.9em', color: '#ccc' }}>Merge a duplicate item (Source) into a canonical item (Target).</p>
-                    <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
-                        <select
-                            value={sourceId}
-                            onChange={e => setSourceId(e.target.value)}
-                            style={{ padding: '8px', background: '#333', color: 'white', border: '1px solid #555' }}
-                        >
-                            <option value="">Select Source (To Delete)</option>
-                            {itemsList.map(i => <option key={i.menu_item_id} value={i.menu_item_id}>{i.name} ({i.type})</option>)}
-                        </select>
-                        <select
-                            value={targetId}
-                            onChange={e => setTargetId(e.target.value)}
-                            style={{ padding: '8px', background: '#333', color: 'white', border: '1px solid #555' }}
-                        >
-                            <option value="">Select Target (To Keep)</option>
-                            {itemsList.filter(i => i.menu_item_id !== sourceId).map(i => <option key={i.menu_item_id} value={i.menu_item_id}>{i.name} ({i.type})</option>)}
-                        </select>
-                        <button
-                            onClick={handleMerge}
-                            disabled={loadingMerge}
-                            style={{ padding: '10px', background: '#d93025', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '4px' }}
-                        >
-                            {loadingMerge ? "Merging..." : "Merge Items"}
-                        </button>
-                    </div>
-                </CollapsibleCard>
-
-                <CollapsibleCard title="⏳ Merge History" defaultCollapsed={true}>
-                    <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                        {mergeHistory.length === 0 && <span style={{ color: '#888' }}>No history</span>}
-                        {mergeHistory.map(h => (
-                            <div key={h.merge_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #333' }}>
-                                <div style={{ fontSize: '0.9em' }}>
-                                    <span style={{ color: '#ff8888' }}>{h.source_name}</span> → <span style={{ color: '#88ff88' }}>{h.target_name}</span>
-                                    {renderVariantAssignments(h.variant_assignments, true)}
-                                    <div style={{ fontSize: '0.8em', color: '#888' }}>{new Date(h.merged_at).toLocaleString()}</div>
-                                </div>
-                                <button onClick={() => handleUndo(h.merge_id)} style={{ fontSize: '0.8em', background: '#444', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }}>Undo</button>
-                            </div>
-                        ))}
-                    </div>
-                </CollapsibleCard>
-            </div>
+            <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+                Item-level analytics stay here. Use <b style={{ color: 'var(--text-color)' }}>Menu Matrix</b> to merge or consolidate specific menu item + variant pairs.
+            </p>
 
             {/* Menu Items Table Container */}
             <div style={{ marginTop: '20px' }}>
@@ -519,8 +743,8 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                             <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                                 <input
                                     placeholder="Search Name..."
-                                    value={search}
-                                    onChange={e => { setSearch(e.target.value); setPage(1); }}
+                                    value={searchInput}
+                                    onChange={e => setSearchInput(e.target.value)}
                                     style={{ padding: '8px', width: '300px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
                                 />
                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -723,11 +947,16 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [items, setItems] = useState<MenuLookupItem[]>([]);
     const [variants, setVariants] = useState<VariantOption[]>([]);
     const [matrixData, setMatrixData] = useState<MatrixRow[]>([]);
+    const [mergeHistory, setMergeHistory] = useState<MergeHistoryEntry[]>([]);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
-    const [selectedMenuItemId, setSelectedMenuItemId] = useState('');
-    const [currentVariantId, setCurrentVariantId] = useState('');
-    const [newVariantId, setNewVariantId] = useState('');
-    const [updating, setUpdating] = useState(false);
+    const [sourceMenuItemId, setSourceMenuItemId] = useState('');
+    const [sourceVariantId, setSourceVariantId] = useState('');
+    const [targetMenuItemId, setTargetMenuItemId] = useState('');
+    const [targetVariantId, setTargetVariantId] = useState('');
+    const [mergePreview, setMergePreview] = useState<MergePreview | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [merging, setMerging] = useState(false);
+    const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -737,87 +966,151 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [search, setSearch] = useState('');
 
     useEffect(() => {
-        void loadMatrix();
-        void loadLists();
+        void refreshData();
     }, [lastDbSync]);
 
-    const loadLists = async () => {
+    useEffect(() => {
+        if (!sourceMenuItemId || !sourceVariantId || !targetMenuItemId) {
+            setMergePreview(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadPreview = async () => {
+            setPreviewLoading(true);
+            try {
+                const res = await endpoints.menu.mergePreview({
+                    source_id: sourceMenuItemId,
+                    target_id: targetMenuItemId,
+                    source_variant_id: sourceVariantId,
+                });
+                if (!cancelled) {
+                    setMergePreview(res.data);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setMergePreview(null);
+                    setPopup({ type: 'error', message: getApiErrorMessage(error) });
+                }
+            } finally {
+                if (!cancelled) {
+                    setPreviewLoading(false);
+                }
+            }
+        };
+
+        void loadPreview();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [sourceMenuItemId, sourceVariantId, targetMenuItemId]);
+
+    const refreshData = async () => {
         try {
-            const [itemsRes, variantsRes] = await Promise.all([
+            const [itemsRes, variantsRes, matrixRes, historyRes] = await Promise.all([
                 endpoints.menu.list(),
                 endpoints.menu.variantsList(),
+                endpoints.menu.matrix(),
+                endpoints.menu.mergeHistory(),
             ]);
             setItems(itemsRes.data);
             setVariants(variantsRes.data);
+            setMatrixData(matrixRes.data);
+            setMergeHistory(historyRes.data);
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         }
     };
 
-    const loadMatrix = async () => {
-        try {
-            const res = await endpoints.menu.matrix();
-            setMatrixData(res.data);
-        } catch (error) {
-            setPopup({ type: 'error', message: getApiErrorMessage(error) });
-        }
-    };
+    const getItemVariantOptions = (menuItemId: string) => (
+        matrixData
+            .filter(row => row.menu_item_id === menuItemId)
+            .map(row => ({
+                variant_id: row.variant_id,
+                variant_name: row.variant_name,
+                count: row.mapping_count,
+            }))
+            .sort((a, b) => a.variant_name.localeCompare(b.variant_name))
+    );
 
-    const handlePrefill = (row: MatrixRow) => {
-        setSelectedMenuItemId(row.menu_item_id);
-        setCurrentVariantId(row.variant_id);
-        setNewVariantId('');
-    };
-
-    const handleUpdateVariantMapping = async () => {
-        if (!selectedMenuItemId || !currentVariantId || !newVariantId) {
-            setPopup({ type: 'error', message: 'Select a menu item, current variant, and new variant before saving.' });
+    const handlePrefill = (row: MatrixRow, side: 'source' | 'target') => {
+        if (side === 'source') {
+            setSourceMenuItemId(row.menu_item_id);
+            setSourceVariantId(row.variant_id);
             return;
         }
-        if (currentVariantId === newVariantId) {
-            setPopup({ type: 'error', message: 'Current and new variant cannot be the same.' });
+        setTargetMenuItemId(row.menu_item_id);
+        setTargetVariantId(row.variant_id);
+    };
+
+    const handleMerge = async () => {
+        if (!sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId) {
+            setPopup({ type: 'error', message: 'Select source item + variant and target item + variant before merging.' });
+            return;
+        }
+        if (sourceMenuItemId === targetMenuItemId && sourceVariantId === targetVariantId) {
+            setPopup({ type: 'error', message: 'Source and target pair cannot be identical.' });
             return;
         }
 
         try {
-            setUpdating(true);
-            const res = await endpoints.menu.updateVariantMapping({
-                menu_item_id: selectedMenuItemId,
-                current_variant_id: currentVariantId,
-                new_variant_id: newVariantId,
+            setMerging(true);
+            const res = await endpoints.menu.resolve({
+                source_menu_item_id: sourceMenuItemId,
+                source_variant_id: sourceVariantId,
+                target_menu_item_id: targetMenuItemId,
+                target_variant_id: targetVariantId,
             });
-            setPopup({ type: 'success', message: res.data.message || 'Variant mapping updated successfully.' });
-            setCurrentVariantId('');
-            setNewVariantId('');
-            await loadMatrix();
+            setPopup({ type: 'success', message: res.data.message || 'Menu item + variant merged successfully.' });
+            setSourceMenuItemId('');
+            setSourceVariantId('');
+            setTargetMenuItemId('');
+            setTargetVariantId('');
+            setMergePreview(null);
+            await refreshData();
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         } finally {
-            setUpdating(false);
+            setMerging(false);
         }
     };
 
-    const currentVariantOptions = selectedMenuItemId
-        ? Object.values(
-            matrixData.reduce((acc, row) => {
-                if (row.menu_item_id !== selectedMenuItemId) return acc;
-                const existing = acc[row.variant_id];
-                if (existing) {
-                    existing.count += 1;
-                    return acc;
-                }
-                acc[row.variant_id] = {
-                    variant_id: row.variant_id,
-                    variant_name: row.variant_name,
-                    count: 1,
-                };
-                return acc;
-            }, {} as Record<string, { variant_id: string; variant_name: string; count: number }>)
-        ).sort((a, b) => a.variant_name.localeCompare(b.variant_name))
-        : [];
+    const handleUndo = async (mergeId: number) => {
+        if (!window.confirm('Undo this merge?')) return;
 
-    const selectedItem = items.find(item => item.menu_item_id === selectedMenuItemId);
-    const selectedCurrentVariant = currentVariantOptions.find(variant => variant.variant_id === currentVariantId);
+        setUndoingMergeId(mergeId);
+        try {
+            await endpoints.menu.undoMerge({ merge_id: mergeId });
+            setPopup({ type: 'success', message: 'Merge undone successfully.' });
+            await refreshData();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUndoingMergeId(null);
+        }
+    };
+
+    const matrixBackedMenuItemIds = new Set(matrixData.map(row => row.menu_item_id));
+    const sourceSelectableItems = items.filter(item => matrixBackedMenuItemIds.has(item.menu_item_id));
+    const sourceVariantOptions = sourceMenuItemId ? getItemVariantOptions(sourceMenuItemId) : [];
+    const targetCurrentVariantOptions = targetMenuItemId ? getItemVariantOptions(targetMenuItemId) : [];
+    const targetCurrentVariantIds = new Set(targetCurrentVariantOptions.map(variant => variant.variant_id));
+    const selectedSourceItem = items.find(item => item.menu_item_id === sourceMenuItemId);
+    const selectedTargetItem = items.find(item => item.menu_item_id === targetMenuItemId);
+    const selectedSourceVariant = sourceVariantOptions.find(variant => variant.variant_id === sourceVariantId);
+    const selectedTargetVariant = variants.find(variant => variant.variant_id === targetVariantId)
+        || targetCurrentVariantOptions.find(variant => variant.variant_id === targetVariantId);
+    const selectedTargetVariantLabel = selectedTargetVariant
+        ? ('name' in selectedTargetVariant ? selectedTargetVariant.name : selectedTargetVariant.variant_name)
+        : '';
+    const isSameExactPair = (
+        Boolean(sourceMenuItemId) &&
+        sourceMenuItemId === targetMenuItemId &&
+        Boolean(sourceVariantId) &&
+        sourceVariantId === targetVariantId
+    );
     const normalizedSearch = search.trim().toLowerCase();
     const filteredMatrixData = matrixData.filter(row =>
         row.name.toLowerCase().includes(normalizedSearch)
@@ -869,97 +1162,236 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         }
     }, [page, totalPages]);
 
+    useEffect(() => {
+        if (sourceMenuItemId && !matrixData.some(row => row.menu_item_id === sourceMenuItemId)) {
+            setSourceMenuItemId('');
+            setSourceVariantId('');
+        }
+    }, [sourceMenuItemId, matrixData]);
+
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
-            <Card title="Update Menu Variant Mapping">
-                <p style={{ marginTop: 0, marginBottom: '15px', color: 'var(--text-secondary)' }}>
-                    Updates cluster mappings, historical order rows, addon rows, local backup files, and clears volume forecast cache because variant units can change downstream calculations.
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Menu Item</span>
-                        <select
-                            value={selectedMenuItemId}
-                            onChange={e => {
-                                setSelectedMenuItemId(e.target.value);
-                                setCurrentVariantId('');
-                                setNewVariantId('');
-                            }}
-                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
-                        >
-                            <option value="">Select menu item</option>
-                            {items.map(item => (
-                                <option key={item.menu_item_id} value={item.menu_item_id}>
-                                    {item.name} ({item.type})
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Current Variant</span>
-                        <select
-                            value={currentVariantId}
-                            onChange={e => setCurrentVariantId(e.target.value)}
-                            disabled={!selectedMenuItemId}
-                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
-                        >
-                            <option value="">Select current variant</option>
-                            {currentVariantOptions.map(variant => (
-                                <option key={variant.variant_id} value={variant.variant_id}>
-                                    {variant.variant_name} ({variant.count} cluster mappings)
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>New Variant</span>
-                        <select
-                            value={newVariantId}
-                            onChange={e => setNewVariantId(e.target.value)}
-                            disabled={!currentVariantId}
-                            style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
-                        >
-                            <option value="">Select new variant</option>
-                            {variants
-                                .filter(variant => variant.variant_id !== currentVariantId)
-                                .map(variant => (
-                                    <option key={variant.variant_id} value={variant.variant_id}>
-                                        {variant.name}
-                                    </option>
-                                ))}
-                        </select>
-                    </label>
-                </div>
-                {selectedItem && selectedCurrentVariant && (
-                    <div style={{ marginTop: '15px', padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
-                        Updating <b style={{ color: 'var(--text-color)' }}>{selectedItem.name}</b> from{' '}
-                        <b style={{ color: 'var(--text-color)' }}>{selectedCurrentVariant.variant_name}</b> across{' '}
-                        <b style={{ color: 'var(--text-color)' }}>{selectedCurrentVariant.count}</b> cluster mappings that currently match this pair.
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.45fr) minmax(300px, 1fr)', gap: '20px' }}>
+                <CollapsibleCard title="Merge Menu Item + Variant" defaultCollapsed>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Source Menu Item</span>
+                                <select
+                                    value={sourceMenuItemId}
+                                    onChange={e => {
+                                        setSourceMenuItemId(e.target.value);
+                                        setSourceVariantId('');
+                                    }}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select source menu item</option>
+                                    {sourceSelectableItems.map(item => (
+                                        <option key={item.menu_item_id} value={item.menu_item_id}>
+                                            {item.name} ({item.type})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Source Variant</span>
+                                <select
+                                    value={sourceVariantId}
+                                    onChange={e => setSourceVariantId(e.target.value)}
+                                    disabled={!sourceMenuItemId}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select source variant</option>
+                                    {sourceVariantOptions.map(variant => (
+                                        <option key={variant.variant_id} value={variant.variant_id}>
+                                            {variant.variant_name} ({variant.count} cluster mappings)
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Menu Item</span>
+                                <select
+                                    value={targetMenuItemId}
+                                    onChange={e => {
+                                        setTargetMenuItemId(e.target.value);
+                                        setTargetVariantId('');
+                                    }}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select target menu item</option>
+                                    {items.map(item => (
+                                        <option key={item.menu_item_id} value={item.menu_item_id}>
+                                            {item.name} ({item.type})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Variant</span>
+                                <select
+                                    value={targetVariantId}
+                                    onChange={e => setTargetVariantId(e.target.value)}
+                                    disabled={!targetMenuItemId}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select target variant</option>
+                                    {targetCurrentVariantOptions.length > 0 && (
+                                        <optgroup label="Current target variants">
+                                            {targetCurrentVariantOptions.map(variant => (
+                                                <option key={variant.variant_id} value={variant.variant_id}>
+                                                    {variant.variant_name} ({variant.count} current mappings)
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    <optgroup label="All variants">
+                                        {variants
+                                            .filter(variant => !targetCurrentVariantIds.has(variant.variant_id))
+                                            .map(variant => (
+                                                <option key={variant.variant_id} value={variant.variant_id}>
+                                                    {variant.name}
+                                                </option>
+                                            ))}
+                                    </optgroup>
+                                </select>
+                            </label>
+                        </div>
                     </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
-                    <button
-                        onClick={handleUpdateVariantMapping}
-                        disabled={updating || !selectedMenuItemId || !currentVariantId || !newVariantId}
-                        style={{
-                            background: 'var(--accent-color)',
-                            color: 'white',
-                            border: 'none',
-                            padding: '8px 14px',
-                            cursor: updating ? 'not-allowed' : 'pointer',
-                            opacity: updating ? 0.7 : 1,
-                        }}
-                    >
-                        {updating ? 'Updating...' : 'Update Mapping'}
-                    </button>
-                </div>
-            </Card>
+
+                    {(selectedSourceItem || selectedTargetItem) && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', marginTop: '15px' }}>
+                            <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
+                                <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#EF4444', marginBottom: '6px' }}>Source</div>
+                                {selectedSourceItem ? (
+                                    <>
+                                        <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedSourceItem.name}</div>
+                                        <div>{selectedSourceItem.type}</div>
+                                        <div>{selectedSourceVariant ? selectedSourceVariant.variant_name : 'Select a source variant'}</div>
+                                    </>
+                                ) : (
+                                    <div>Select a source menu item + variant.</div>
+                                )}
+                            </div>
+                            <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
+                                <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#10B981', marginBottom: '6px' }}>Target</div>
+                                {selectedTargetItem ? (
+                                    <>
+                                        <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedTargetItem.name}</div>
+                                        <div>{selectedTargetItem.type}</div>
+                                        <div>{selectedTargetVariantLabel || 'Select a target variant'}</div>
+                                    </>
+                                ) : (
+                                    <div>Select a target menu item + variant.</div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {(previewLoading || mergePreview) && (
+                        <div style={{ marginTop: '15px', padding: '14px', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                            {previewLoading ? (
+                                <div style={{ color: 'var(--text-secondary)' }}>Loading merge preview...</div>
+                            ) : mergePreview ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>
+                                        {mergePreview.source.name} ({mergePreview.source.type}) → {mergePreview.target.name} ({mergePreview.target.type})
+                                    </div>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                        This will relink {mergePreview.stats.order_items_relinked} order items, {mergePreview.stats.addon_items_relinked} addon rows, and {mergePreview.stats.mappings_updated} cluster mappings for the selected source variant.
+                                    </div>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                        Selected source-variant totals: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
+                                    </div>
+                                    {sourceMenuItemId === targetMenuItemId ? (
+                                        <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
+                                            Source and target item are the same. This will consolidate the selected source variant into the selected target variant inside one menu item.
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
+                                            Other variants on the source item will remain separate unless you merge them too.
+                                        </div>
+                                    )}
+                                </div>
+                            ) : null}
+                        </div>
+                    )}
+
+                    {isSameExactPair && (
+                        <div style={{ marginTop: '12px', color: '#F59E0B', fontSize: '0.9em' }}>
+                            Source and target pair are identical. Choose a different target variant or target item.
+                        </div>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
+                        <button
+                            onClick={() => void handleMerge()}
+                            disabled={merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair}
+                            style={{
+                                background: '#2563EB',
+                                color: 'white',
+                                border: 'none',
+                                padding: '10px 16px',
+                                cursor: merging ? 'not-allowed' : 'pointer',
+                                opacity: merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair ? 0.7 : 1,
+                                borderRadius: '8px',
+                                fontWeight: 700,
+                            }}
+                        >
+                            {merging ? 'Merging...' : 'Merge Selected Pair'}
+                        </button>
+                    </div>
+                </CollapsibleCard>
+
+                <CollapsibleCard title="Recent Merge History" defaultCollapsed>
+                    {mergeHistory.length === 0 ? (
+                        <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No recent merges to undo.</p>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '420px', overflowY: 'auto' }}>
+                            {mergeHistory.map(entry => (
+                                <div
+                                    key={entry.merge_id}
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        gap: '12px',
+                                        padding: '10px 0',
+                                        borderBottom: '1px solid var(--border-color)',
+                                    }}
+                                >
+                                    <div>
+                                        <div style={{ color: 'var(--text-color)' }}>
+                                            <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
+                                            {' → '}
+                                            <span style={{ color: '#10B981' }}>{entry.target_name || 'Deleted target'}</span>
+                                        </div>
+                                        {renderVariantAssignments(entry.variant_assignments)}
+                                        <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                                            {new Date(entry.merged_at).toLocaleString()}
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => handleUndo(entry.merge_id)}
+                                        disabled={undoingMergeId === entry.merge_id}
+                                        style={{ padding: '8px 14px', background: '#444', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+                                    >
+                                        {undoingMergeId === entry.merge_id ? 'Undoing...' : 'Undo'}
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </CollapsibleCard>
+            </div>
 
             {/* Menu Matrix Table Container */}
             <div style={{ marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '15px', flexWrap: 'wrap' }}>
-                    <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Menu Matrix ({matrixData.length} entries)</h3>
+                    <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Menu Matrix ({matrixData.length} unique pairs)</h3>
                     <input
                         placeholder="Search Name..."
                         value={search}
@@ -976,6 +1408,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
+                                <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
                                 <th className="text-right" onClick={() => handleSort('price')}>Price{renderSortIcon('price')}</th>
                                 <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>
                                 <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>
@@ -986,23 +1419,39 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                             {displayData.map((r, i) => (
                                 <tr key={i}>
                                     <td>
-                                        <button
-                                            onClick={() => handlePrefill(r)}
-                                            style={{
-                                                background: 'transparent',
-                                                color: 'var(--accent-color)',
-                                                border: '1px solid var(--accent-color)',
-                                                padding: '4px 8px',
-                                                borderRadius: '6px',
-                                                cursor: 'pointer',
-                                            }}
-                                        >
-                                            Use
-                                        </button>
+                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                            <button
+                                                onClick={() => handlePrefill(r, 'source')}
+                                                style={{
+                                                    background: sourceMenuItemId === r.menu_item_id && sourceVariantId === r.variant_id ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                                                    color: '#EF4444',
+                                                    border: '1px solid rgba(239, 68, 68, 0.45)',
+                                                    padding: '4px 8px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                Source
+                                            </button>
+                                            <button
+                                                onClick={() => handlePrefill(r, 'target')}
+                                                style={{
+                                                    background: targetMenuItemId === r.menu_item_id && targetVariantId === r.variant_id ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                                                    color: '#10B981',
+                                                    border: '1px solid rgba(16, 185, 129, 0.45)',
+                                                    padding: '4px 8px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                Target
+                                            </button>
+                                        </div>
                                     </td>
                                     <td>{r.name}</td>
                                     <td>{r.type}</td>
                                     <td>{r.variant_name}</td>
+                                    <td className="text-center">{r.mapping_count}</td>
                                     <td className="text-right">₹{r.price}</td>
                                     <td className="text-center">{r.is_active ? "✅" : "❌"}</td>
                                     <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>
@@ -1447,7 +1896,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                     </Card>
                 ))
             )}
-            <Card title="Recent Merge History">
+            <CollapsibleCard title="Recent Merge History" defaultCollapsed>
                 {mergeHistory.length === 0 ? (
                     <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No recent merges to undo.</p>
                 ) : (
@@ -1486,7 +1935,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                         ))}
                     </div>
                 )}
-            </Card>
+            </CollapsibleCard>
             {modalItem && (
                 <div
                     onClick={closeResolutionModal}
@@ -1809,38 +2258,33 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Main Page ---
 
 export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
-    const [activeTab, setActiveTab] = useState<'items' | 'variants' | 'matrix' | 'resolutions'>('items');
+    const [activeTab, setActiveTab] = useState<'summary' | 'items' | 'variants' | 'matrix' | 'resolutions'>('items');
+
+    const menuTabs = [
+        { id: 'summary' as const, label: '📊 Summary' },
+        { id: 'items' as const, label: '📋 Menu Items' },
+        { id: 'variants' as const, label: '📏 Variants' },
+        { id: 'matrix' as const, label: '🕸️ Menu Matrix' },
+        { id: 'resolutions' as const, label: '✨ Resolutions' },
+    ];
 
     return (
         <div className="page-container" style={{ padding: '20px', fontFamily: 'Inter, sans-serif' }}>
-            <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'white', padding: '5px', borderRadius: '30px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-                {[
-                    { id: 'items', label: '📋 Menu Items' },
-                    { id: 'variants', label: '📏 Variants' },
-                    { id: 'matrix', label: '🕸️ Menu Matrix' },
-                    { id: 'resolutions', label: '✨ Resolutions' }
-                ].map(tab => (
-                    <button
+            <div className="segmented-control segmented-page-tabs" style={{ marginBottom: '20px' }}>
+                {menuTabs.map((tab) => (
+                    <TabButton
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as any)}
-                        style={{
-                            flex: 1,
-                            padding: '12px',
-                            background: activeTab === tab.id ? '#3B82F6' : 'transparent',
-                            border: 'none',
-                            color: activeTab === tab.id ? 'white' : 'black',
-                            cursor: 'pointer',
-                            borderRadius: '25px',
-                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                            fontWeight: activeTab === tab.id ? 600 : 500,
-                            boxShadow: activeTab === tab.id ? '0 2px 5px rgba(96, 165, 250, 0.4)' : 'none'
-                        }}
+                        active={activeTab === tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        variant="segmented"
+                        size="large"
                     >
                         {tab.label}
-                    </button>
+                    </TabButton>
                 ))}
             </div>
 
+            {activeTab === 'summary' && <SummaryTab lastDbSync={lastDbSync} />}
             {activeTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
             {activeTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
             {activeTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} />}

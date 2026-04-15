@@ -10,6 +10,7 @@ import json
 from src.core.queries import menu_queries, table_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
+from src.core.utils.business_date import get_current_business_date
 from src.api.models import (
     MergeRequest,
     UndoMergeRequest,
@@ -92,6 +93,37 @@ def get_menu_types(conn=Depends(get_db)):
 
 
 # --- Paginated View Endpoints ---
+
+@router.get("/summary")
+def get_menu_summary(
+    mode: str = Query("quantity", description="'volume' or 'quantity'"),
+    as_of_date: Optional[str] = Query(
+        None,
+        description="Business date (YYYY-MM-DD) that ends each rolling window; defaults to current business date.",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    name_search: Optional[str] = None,
+    sort_desc: bool = Query(True, description="Sort by lifetime column descending when true."),
+    conn=Depends(get_db),
+):
+    """Rolling quantity or unit-volume totals by menu item (Menu → Summary)."""
+    if mode not in ("volume", "quantity"):
+        raise HTTPException(status_code=400, detail="mode must be 'volume' or 'quantity'")
+    end_bd = as_of_date or get_current_business_date()
+    df, count, err = menu_queries.fetch_menu_summary_rollups(
+        conn,
+        mode=mode,
+        as_of_date=end_bd,
+        page=page,
+        page_size=page_size,
+        name_search=name_search,
+        sort_desc=sort_desc,
+    )
+    if err:
+        raise HTTPException(status_code=500, detail=err)
+    return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size, "as_of_date": end_bd}
+
 
 @router.get("/items-view")
 def get_menu_items_view(

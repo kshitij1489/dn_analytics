@@ -258,15 +258,18 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
         return name.strip(), variant
     
     # Piece counts
-    if re.search(r'\(2\s*pc[s]?\)', name_lower) or '(2pcs)' in name_lower:
+    two_piece_pattern = r'[\(\[]\s*2\s*(?:pc|pcs|piece|pieces)\s*[\)\]]'
+    one_piece_pattern = r'[\(\[]\s*1\s*(?:pc|pcs|piece|pieces)\s*[\)\]]'
+
+    if re.search(two_piece_pattern, name, flags=re.IGNORECASE):
         variant = '2_PIECES'
-        name = re.sub(r'\s*\(2\s*pc[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(rf'\s*{two_piece_pattern}', '', name, flags=re.IGNORECASE)
         name = re.sub(r'Dessert$', '', name).strip()  # Remove "Dessert" suffix
         return name.strip(), variant
     
-    if re.search(r'\(1\s*pc[s]?\)', name_lower) or '(1pcs)' in name_lower or '(1pc)' in name_lower:
+    if re.search(one_piece_pattern, name, flags=re.IGNORECASE):
         variant = '1_PIECE'
-        name = re.sub(r'\s*\(1\s*pc[s]?\)', '', name, flags=re.IGNORECASE)
+        name = re.sub(rf'\s*{one_piece_pattern}', '', name, flags=re.IGNORECASE)
         name = re.sub(r'Dessert$', '', name).strip()
         return name.strip(), variant
     
@@ -404,6 +407,9 @@ def normalize_name(name: str) -> str:
     
     # Clean up extra whitespace
     name = re.sub(r'\s+', ' ', name).strip()
+
+    if re.fullmatch(r'(?:Butter\s+)?Waffle Cone(?:s)?', name, flags=re.IGNORECASE):
+        name = 'Butter Waffle Cones'
     
     return name
 

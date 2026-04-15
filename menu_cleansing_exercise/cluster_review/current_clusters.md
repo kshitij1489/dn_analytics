@@ -1,19 +1,8 @@
 # Current Cluster Review
 
-Generated at: 2026-04-11 10:28:48 UTC
+Generated at: 2026-04-15 18:01:45 UTC
 
 Each section shows the current parent cluster, child cluster, source item IDs, and raw names observed on order rows/addons.
-
-## 3 Flavors In One Tub Combo [Combo] :: 1_PIECE
-- menu_item_id: fc297634-f3c1-5338-be48-6f97c5a7eda8
-- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 1 total, 1 verified
-- rows: 2 item rows, 0 addon rows
-- source item ids: 1297923934
-- raw names: 3 Flavors In One Tub Combo
-- historical merged source clusters: (none)
-
-  - source_item_id=1297923934 [item] item_rows=2 addon_rows=0 raw_names=3 Flavors In One Tub Combo
 
 ## 400 Pidge/Porter Delivery Charges [Extra] :: 1_PIECE
 - menu_item_id: 44e6d9e4-0f2c-5d7d-836e-f56cd159da98
@@ -41,12 +30,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 6da65f92-f7f1-54ba-ac3d-9055901159e6
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 49 item rows, 0 addon rows
+- rows: 52 item rows, 0 addon rows
 - source item ids: 1288318311
 - raw names: Affogato
 - historical merged source clusters: (none)
 
-  - source_item_id=1288318311 [item] item_rows=49 addon_rows=0 raw_names=Affogato
+  - source_item_id=1288318311 [item] item_rows=52 addon_rows=0 raw_names=Affogato
 
 ## Alphonso Mango Ice Cream [Ice Cream] :: PERFECT_PLENTY_200GMS
 - menu_item_id: 332c5870-4847-510b-b78f-9e880ddca033
@@ -92,52 +81,16 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1291692108 [item] item_rows=4 addon_rows=0 raw_names=Assorted Cookie Duo ( Dark Chocolate (1pc) + Choco Chip (1pc) )
 
-## Banoffee Ice Cream [Ice Cream] :: 1_PIECE
-- menu_item_id: 4ea8d0a8-f4a7-5ba2-8d04-dae39188c24a
-- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 2 total, 2 verified
-- rows: 0 item rows, 0 addon rows
-- source item ids: 2dada6d8-2592-57a0-8543-564b6bbe294e | 7449dbb6-75ef-5e31-a0ab-a84c75401451
-- raw names: (none)
-- historical merged source clusters: Banoffee (60gm) | Banoffee Ice Cream | Banoffee Sample | Eggless Banoffee Ice Cream
-
-  - source_item_id=2dada6d8-2592-57a0-8543-564b6bbe294e [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=7449dbb6-75ef-5e31-a0ab-a84c75401451 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Banoffee Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
-- menu_item_id: 4ea8d0a8-f4a7-5ba2-8d04-dae39188c24a
-- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 3 total, 3 verified
-- rows: 12 item rows, 35 addon rows
-- source item ids: 1285047341 | 54290380 | f7fb56db-3163-5a15-9911-53d5732f081a
-- raw names: Banoffee (60gm) | Banoffee Ice Cream (Junior Scoop (60gm)) | Eggless Banoffee Ice Cream (Junior Scoop) | Eggless Banoffee Ice Cream Small Scoop
-- historical merged source clusters: Banoffee (60gm) | Banoffee Ice Cream | Banoffee Sample | Eggless Banoffee Ice Cream
-
-  - source_item_id=1285047341 [item] item_rows=12 addon_rows=0 raw_names=Banoffee Ice Cream (Junior Scoop (60gm)) | Eggless Banoffee Ice Cream (Junior Scoop)
-  - source_item_id=54290380 [addon] item_rows=0 addon_rows=35 raw_names=Banoffee (60gm) | Eggless Banoffee Ice Cream Small Scoop
-  - source_item_id=f7fb56db-3163-5a15-9911-53d5732f081a [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Banoffee Ice Cream [Ice Cream] :: MINI_TUB_160GMS
-- menu_item_id: 4ea8d0a8-f4a7-5ba2-8d04-dae39188c24a
-- variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
-- mappings: 1 total, 1 verified
-- rows: 0 item rows, 0 addon rows
-- source item ids: a8ae68f7-1613-5128-b1c9-f7b5316e0301
-- raw names: (none)
-- historical merged source clusters: Banoffee (60gm) | Banoffee Ice Cream | Banoffee Sample | Eggless Banoffee Ice Cream
-
-  - source_item_id=a8ae68f7-1613-5128-b1c9-f7b5316e0301 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
 ## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 46 item rows, 0 addon rows
+- rows: 47 item rows, 0 addon rows
 - source item ids: 1282581600
 - raw names: Bean-to-Bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Family Tub (725ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (500gms)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (700ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (725ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (500gms)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (700ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
 
-  - source_item_id=1282581600 [item] item_rows=46 addon_rows=0 raw_names=Bean-to-Bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Family Tub (725ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (500gms)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (700ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (725ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (500gms)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (700ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (725ml))
+  - source_item_id=1282581600 [item] item_rows=47 addon_rows=0 raw_names=Bean-to-Bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Family Tub (725ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Family Feast (725ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (500gms)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (700ml)) | Bean-to-bar Chocolate Dark Ice Cream (Family Tub (725ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (500gms)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (700ml)) | Bean-to-bar Dark Chocolate Ice Cream (Family Tub (725ml))
 
 ## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
@@ -153,27 +106,16 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
   - source_item_id=9573530c-eca5-5587-9419-99c507ca4e6c [unknown] item_rows=0 addon_rows=0 raw_names=(none)
   - source_item_id=e4cff3cf-a673-5e7b-b738-ceff5b991c12 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
-## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: MINI_TUB_160GMS
-- menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
-- variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
-- mappings: 1 total, 1 verified
-- rows: 0 item rows, 0 addon rows
-- source item ids: ec266dc7-6bf0-5eaa-b2ee-ee36f7ce272f
-- raw names: (none)
-- historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
-
-  - source_item_id=ec266dc7-6bf0-5eaa-b2ee-ee36f7ce272f [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
 ## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 9 total, 9 verified
-- rows: 163 item rows, 121 addon rows
+- rows: 170 item rows, 121 addon rows
 - source item ids: 1284985218 | 51217617 | 51217635 | 51217674 | 51492582 | 51975424 | 51975446 | 51975447 | 52700809
 - raw names: Bean-to-bar 70% Dark Chocolate Ice Cream 200ml | Bean-to-bar Chocolate 70% Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (160gms)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Dark Chocolate Ice Cream (Mini Tub (160gms))
 - historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
 
-  - source_item_id=1284985218 [item] item_rows=163 addon_rows=0 raw_names=Bean-to-bar Chocolate 70% Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (160gms)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Dark Chocolate Ice Cream (Mini Tub (160gms))
+  - source_item_id=1284985218 [item] item_rows=170 addon_rows=0 raw_names=Bean-to-bar Chocolate 70% Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (160gms)) | Bean-to-bar Chocolate Dark Ice Cream (Mini tub (200ml)) | Bean-to-bar Dark Chocolate Ice Cream (Mini Tub (160gms))
   - source_item_id=51217617 [addon] item_rows=0 addon_rows=5 raw_names=Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
   - source_item_id=51217635 [addon] item_rows=0 addon_rows=42 raw_names=Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
   - source_item_id=51217674 [addon] item_rows=0 addon_rows=1 raw_names=Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
@@ -183,122 +125,106 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
   - source_item_id=51975447 [addon] item_rows=0 addon_rows=8 raw_names=Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
   - source_item_id=52700809 [addon] item_rows=0 addon_rows=1 raw_names=Bean-to-bar 70% Dark Chocolate Ice Cream 200ml
 
-## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: PERFECT_PLENTY_300ML
-- menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
-- variant_id: c6438ece-1c0e-5db1-860f-27f45090a616
-- mappings: 1 total, 1 verified
-- rows: 281 item rows, 0 addon rows
-- source item ids: 1282581599
-- raw names: Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (200gms)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (325ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (220gms)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (300ml)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (300ml))
-- historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
-
-  - source_item_id=1282581599 [item] item_rows=281 addon_rows=0 raw_names=Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (200gms)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (325ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (220gms)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (300ml)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (300ml))
-
 ## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 97 item rows, 0 addon rows
+- rows: 102 item rows, 0 addon rows
 - source item ids: 1284985219
 - raw names: Bean-to-bar Chocolate 70% Dark Ice Cream (Regular Scoop) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop (120gm)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop)
 - historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
 
-  - source_item_id=1284985219 [item] item_rows=97 addon_rows=0 raw_names=Bean-to-bar Chocolate 70% Dark Ice Cream (Regular Scoop) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop (120gm)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop)
+  - source_item_id=1284985219 [item] item_rows=102 addon_rows=0 raw_names=Bean-to-bar Chocolate 70% Dark Ice Cream (Regular Scoop) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop (120gm)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Scoop)
+
+## Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream] :: REGULAR_TUB_220GMS
+- menu_item_id: 1dc994ab-1d71-5a0e-88e3-2156390b68cd
+- variant_id: e1b8037f-345a-52d6-ae94-cc115490705a
+- mappings: 1 total, 1 verified
+- rows: 284 item rows, 0 addon rows
+- source item ids: 1282581599
+- raw names: Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (200gms)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (325ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (220gms)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (300ml)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (300ml))
+- historical merged source clusters: Bean-to-Bar 70% Dark Chocolate Ice Cream | Bean-to-Bar Dark Chocolate (60gm)
+
+  - source_item_id=1282581599 [item] item_rows=284 addon_rows=0 raw_names=Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (200gms)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (325ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (220gms)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (300ml)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (300ml))
 
 ## Boston Cream Pie [Dessert] :: 1_PIECE
 - menu_item_id: 25fff5d0-1eed-5d67-beed-b1574ab25922
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 33 item rows, 0 addon rows
+- rows: 35 item rows, 0 addon rows
 - source item ids: 1285806508
 - raw names: Boston Cream Pie(1pcs)
 - historical merged source clusters: (none)
 
-  - source_item_id=1285806508 [item] item_rows=33 addon_rows=0 raw_names=Boston Cream Pie(1pcs)
+  - source_item_id=1285806508 [item] item_rows=35 addon_rows=0 raw_names=Boston Cream Pie(1pcs)
 
 ## Boston Cream Pie [Dessert] :: 2_PIECES
 - menu_item_id: 25fff5d0-1eed-5d67-beed-b1574ab25922
 - variant_id: 5f354550-0f38-58c3-ad16-97672a66817d
 - mappings: 1 total, 1 verified
-- rows: 999 item rows, 0 addon rows
+- rows: 1018 item rows, 0 addon rows
 - source item ids: 1285527847
 - raw names: Boston Cream Pie Dessert(2pcs) | Boston Cream Piec(2pcs)
 - historical merged source clusters: (none)
 
-  - source_item_id=1285527847 [item] item_rows=999 addon_rows=0 raw_names=Boston Cream Pie Dessert(2pcs) | Boston Cream Piec(2pcs)
+  - source_item_id=1285527847 [item] item_rows=1018 addon_rows=0 raw_names=Boston Cream Pie Dessert(2pcs) | Boston Cream Piec(2pcs)
 
 ## Brownie Cheesecake [Dessert] :: 1_PIECE
 - menu_item_id: 01998c43-6128-522f-bc5d-0c76a744a546
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 259 item rows, 0 addon rows
+- rows: 265 item rows, 0 addon rows
 - source item ids: 1293402169
 - raw names: Brownie Cheesecake
 - historical merged source clusters: (none)
 
-  - source_item_id=1293402169 [item] item_rows=259 addon_rows=0 raw_names=Brownie Cheesecake
+  - source_item_id=1293402169 [item] item_rows=265 addon_rows=0 raw_names=Brownie Cheesecake
+
+## Butter Waffle Cone [2 Pieces] [Extra] :: 1_PIECE
+- menu_item_id: 98ada5cf-2346-5469-8dd8-d5c7563310ad
+- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 0 addon rows
+- source item ids: f6a4c580-c0e1-58d7-9f51-413650c33215
+- raw names: (none)
+- historical merged source clusters: (none)
+
+  - source_item_id=f6a4c580-c0e1-58d7-9f51-413650c33215 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Butter Waffle Cones [Extra] :: 1_PIECE
 - menu_item_id: ea85deb5-d9a0-5db9-8ff0-5452fc2e9c2b
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 1 total, 1 verified
-- rows: 82 item rows, 0 addon rows
-- source item ids: 1293080163
-- raw names: Butter Waffle Cones (1pcs)
-- historical merged source clusters: Butter Waffle Cone | Butter Waffle Cone [2 Pieces]
+- mappings: 2 total, 2 verified
+- rows: 89 item rows, 566 addon rows
+- source item ids: 1293080163 | fdcc6ba9-aaa3-555a-9993-8d4c8302b9ec
+- raw names: Butter Waffle Cones (1pcs) | Waffle Cone
+- historical merged source clusters: Butter Waffle Cone | Butter Waffle Cone [2 Pieces] | Mapping audit: Butter Waffle Cones — 1_PIECE | Mapping audit: Butter Waffle Cones — 2_PIECES | Waffle Cone
 
-  - source_item_id=1293080163 [item] item_rows=82 addon_rows=0 raw_names=Butter Waffle Cones (1pcs)
+  - source_item_id=1293080163 [item+addon] item_rows=89 addon_rows=566 raw_names=Butter Waffle Cones (1pcs) | Waffle Cone
+  - source_item_id=fdcc6ba9-aaa3-555a-9993-8d4c8302b9ec [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Butter Waffle Cones [Extra] :: 2_PIECES
 - menu_item_id: ea85deb5-d9a0-5db9-8ff0-5452fc2e9c2b
 - variant_id: 5f354550-0f38-58c3-ad16-97672a66817d
-- mappings: 5 total, 5 verified
+- mappings: 2 total, 2 verified
 - rows: 33 item rows, 16 addon rows
-- source item ids: 1293079875 | 59023334 | 59023335 | d212bd81-115b-5b7a-8c95-cdcce01175ab | f6a4c580-c0e1-58d7-9f51-413650c33215
+- source item ids: 1293079875 | 59023334
 - raw names: Butter Waffle Cone (2pcs) | Butter Waffle Cones (2pcs)
-- historical merged source clusters: Butter Waffle Cone | Butter Waffle Cone [2 Pieces]
+- historical merged source clusters: Butter Waffle Cone | Butter Waffle Cone [2 Pieces] | Mapping audit: Butter Waffle Cones — 1_PIECE | Mapping audit: Butter Waffle Cones — 2_PIECES | Waffle Cone
 
   - source_item_id=1293079875 [item] item_rows=33 addon_rows=0 raw_names=Butter Waffle Cones (2pcs)
-  - source_item_id=59023334 [addon] item_rows=0 addon_rows=12 raw_names=Butter Waffle Cone (2pcs)
-  - source_item_id=59023335 [addon] item_rows=0 addon_rows=4 raw_names=Butter Waffle Cone (2pcs)
-  - source_item_id=d212bd81-115b-5b7a-8c95-cdcce01175ab [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=f6a4c580-c0e1-58d7-9f51-413650c33215 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Cakes & Cookies [Dessert] :: MINI_TUB_160GMS
-- menu_item_id: 133c4ce6-68b7-564a-b8b4-4b1c34aec328
-- variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
-- mappings: 1 total, 1 verified
-- rows: 0 item rows, 0 addon rows
-- source item ids: 621b7988-0a4a-581f-8ab6-50ded78a25ea
-- raw names: (none)
-- historical merged source clusters: (none)
-
-  - source_item_id=621b7988-0a4a-581f-8ab6-50ded78a25ea [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Cakes & Cookies [Dessert] :: MINI_TUB_200ML
-- menu_item_id: 133c4ce6-68b7-564a-b8b4-4b1c34aec328
-- variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
-- mappings: 4 total, 4 verified
-- rows: 0 item rows, 12 addon rows
-- source item ids: 54126524 | 54126526 | 54126527 | 54126528
-- raw names: Cakes & Cookies 200ml | Cakes &amp; Cookies 200ml
-- historical merged source clusters: (none)
-
-  - source_item_id=54126524 [addon] item_rows=0 addon_rows=1 raw_names=Cakes &amp; Cookies 200ml
-  - source_item_id=54126526 [addon] item_rows=0 addon_rows=1 raw_names=Cakes &amp; Cookies 200ml
-  - source_item_id=54126527 [addon] item_rows=0 addon_rows=7 raw_names=Cakes & Cookies 200ml
-  - source_item_id=54126528 [addon] item_rows=0 addon_rows=3 raw_names=Cakes & Cookies 200ml
+  - source_item_id=59023334 [addon] item_rows=0 addon_rows=16 raw_names=Butter Waffle Cone (2pcs)
 
 ## Cakes & Cookies Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 11 item rows, 0 addon rows
+- rows: 12 item rows, 0 addon rows
 - source item ids: 1284468074
 - raw names: Cakes & Cookies Ice Cream (Family Feast (725ml)) | Cakes & Cookies Ice Cream (Family Tub (500gms)) | Cakes & Cookies Ice Cream (Family Tub (700ml)) | Cakes & Cookies Ice Cream (Family Tub (725ml))
-- historical merged source clusters: Cakes & Cookies (60gm)
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
-  - source_item_id=1284468074 [item] item_rows=11 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Family Feast (725ml)) | Cakes & Cookies Ice Cream (Family Tub (500gms)) | Cakes & Cookies Ice Cream (Family Tub (700ml)) | Cakes & Cookies Ice Cream (Family Tub (725ml))
+  - source_item_id=1284468074 [item] item_rows=12 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Family Feast (725ml)) | Cakes & Cookies Ice Cream (Family Tub (500gms)) | Cakes & Cookies Ice Cream (Family Tub (700ml)) | Cakes & Cookies Ice Cream (Family Tub (725ml))
 
 ## Cakes & Cookies Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
@@ -307,7 +233,7 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - rows: 1 item rows, 7 addon rows
 - source item ids: 1285047260 | 54290390 | 54cd3566-30c3-59e4-a2b1-42f203939b3e | dd5c22ae-5d52-54d8-b217-151793655371 | f815fb8f-86fc-50eb-a3ef-2103aea2cc37
 - raw names: Cakes & Cookies Ice Cream (Junior Scoop) | Cakes &amp; Cookies Ice Cream Small Scoop
-- historical merged source clusters: Cakes & Cookies (60gm)
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
   - source_item_id=1285047260 [item] item_rows=1 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Junior Scoop)
   - source_item_id=54290390 [addon] item_rows=0 addon_rows=7 raw_names=Cakes &amp; Cookies Ice Cream Small Scoop
@@ -318,38 +244,43 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Cakes & Cookies Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
-- mappings: 1 total, 1 verified
+- mappings: 2 total, 2 verified
 - rows: 0 item rows, 0 addon rows
-- source item ids: 51affd2f-8c4c-54d8-ba3d-2ab6c9d0caa6
+- source item ids: 51affd2f-8c4c-54d8-ba3d-2ab6c9d0caa6 | 621b7988-0a4a-581f-8ab6-50ded78a25ea
 - raw names: (none)
-- historical merged source clusters: Cakes & Cookies (60gm)
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
   - source_item_id=51affd2f-8c4c-54d8-ba3d-2ab6c9d0caa6 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=621b7988-0a4a-581f-8ab6-50ded78a25ea [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Cakes & Cookies Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
-- mappings: 4 total, 4 verified
-- rows: 86 item rows, 25 addon rows
-- source item ids: 1284985095 | 52320263 | 52320277 | 52320278
-- raw names: Cakes & Cookies Ice Cream (Mini Tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (200ml)) | Cakes & Cookies Ice Cream 200ml | Cakes &amp; Cookies Ice Cream (Mini Tub (160gms)) | Cakes &amp; Cookies Ice Cream 200ml
-- historical merged source clusters: Cakes & Cookies (60gm)
+- mappings: 8 total, 8 verified
+- rows: 88 item rows, 37 addon rows
+- source item ids: 1284985095 | 52320263 | 52320277 | 52320278 | 54126524 | 54126526 | 54126527 | 54126528
+- raw names: Cakes & Cookies 200ml | Cakes & Cookies Ice Cream (Mini Tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (200ml)) | Cakes & Cookies Ice Cream 200ml | Cakes &amp; Cookies 200ml | Cakes &amp; Cookies Ice Cream (Mini Tub (160gms)) | Cakes &amp; Cookies Ice Cream 200ml
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
-  - source_item_id=1284985095 [item] item_rows=86 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Mini Tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (200ml)) | Cakes &amp; Cookies Ice Cream (Mini Tub (160gms))
+  - source_item_id=1284985095 [item] item_rows=88 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Mini Tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (160gms)) | Cakes & Cookies Ice Cream (Mini tub (200ml)) | Cakes &amp; Cookies Ice Cream (Mini Tub (160gms))
   - source_item_id=52320263 [addon] item_rows=0 addon_rows=1 raw_names=Cakes &amp; Cookies Ice Cream 200ml
   - source_item_id=52320277 [addon] item_rows=0 addon_rows=21 raw_names=Cakes & Cookies Ice Cream 200ml
   - source_item_id=52320278 [addon] item_rows=0 addon_rows=3 raw_names=Cakes & Cookies Ice Cream 200ml
+  - source_item_id=54126524 [addon] item_rows=0 addon_rows=1 raw_names=Cakes &amp; Cookies 200ml
+  - source_item_id=54126526 [addon] item_rows=0 addon_rows=1 raw_names=Cakes &amp; Cookies 200ml
+  - source_item_id=54126527 [addon] item_rows=0 addon_rows=7 raw_names=Cakes & Cookies 200ml
+  - source_item_id=54126528 [addon] item_rows=0 addon_rows=3 raw_names=Cakes & Cookies 200ml
 
 ## Cakes & Cookies Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 86 item rows, 0 addon rows
+- rows: 92 item rows, 0 addon rows
 - source item ids: 1284985096
 - raw names: Cakes & Cookies Ice Cream (Regular Scoop (120gm)) | Cakes & Cookies Ice Cream (Regular Scoop)
-- historical merged source clusters: Cakes & Cookies (60gm)
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
-  - source_item_id=1284985096 [item] item_rows=86 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Regular Scoop (120gm)) | Cakes & Cookies Ice Cream (Regular Scoop)
+  - source_item_id=1284985096 [item] item_rows=92 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Regular Scoop (120gm)) | Cakes & Cookies Ice Cream (Regular Scoop)
 
 ## Cakes & Cookies Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 2cc74902-f399-55c4-a9e9-af2bb86163d9
@@ -358,7 +289,7 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - rows: 80 item rows, 0 addon rows
 - source item ids: 1284468073
 - raw names: Cakes & Cookies Ice Cream (Perfect Plenty (300ml)) | Cakes & Cookies Ice Cream (Regular Tub (220gms)) | Cakes & Cookies Ice Cream (Regular Tub (300ml)) | Cakes &amp; Cookies Ice Cream (Regular Tub (300ml))
-- historical merged source clusters: Cakes & Cookies (60gm)
+- historical merged source clusters: Cakes & Cookies | Cakes & Cookies (60gm)
 
   - source_item_id=1284468073 [item] item_rows=80 addon_rows=0 raw_names=Cakes & Cookies Ice Cream (Perfect Plenty (300ml)) | Cakes & Cookies Ice Cream (Regular Tub (220gms)) | Cakes & Cookies Ice Cream (Regular Tub (300ml)) | Cakes &amp; Cookies Ice Cream (Regular Tub (300ml))
 
@@ -366,12 +297,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 2fecdeca-c347-5e68-821a-891a1f4337fa
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 37 item rows, 0 addon rows
+- rows: 39 item rows, 0 addon rows
 - source item ids: 1296937112
 - raw names: Cappuccino
 - historical merged source clusters: (none)
 
-  - source_item_id=1296937112 [item] item_rows=37 addon_rows=0 raw_names=Cappuccino
+  - source_item_id=1296937112 [item] item_rows=39 addon_rows=0 raw_names=Cappuccino
 
 ## Cherry & Chocolate [Ice Cream] :: 1_PIECE
 - menu_item_id: 72b87507-42d3-5388-ab9c-75ec31d90f99
@@ -500,56 +431,45 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 5a377961-e86b-5b56-b56d-4879b9b584af
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 490 item rows, 0 addon rows
+- rows: 516 item rows, 0 addon rows
 - source item ids: 1296733826
 - raw names: Brownie & Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Brownie & Vanilla Ice Cream With Fudge Sauce. It's Classic ! | Brownie &amp; Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Classic Brownie & Ice Cream With Fudge Sauce | Classic Brownie & Vanilla Ice Cream With Fudge Sauce | Classic Brownie &amp; Vanilla Ice Cream With Fudge Sauce
 - historical merged source clusters: (none)
 
-  - source_item_id=1296733826 [item] item_rows=490 addon_rows=0 raw_names=Brownie & Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Brownie & Vanilla Ice Cream With Fudge Sauce. It's Classic ! | Brownie &amp; Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Classic Brownie & Ice Cream With Fudge Sauce | Classic Brownie & Vanilla Ice Cream With Fudge Sauce | Classic Brownie &amp; Vanilla Ice Cream With Fudge Sauce
+  - source_item_id=1296733826 [item] item_rows=516 addon_rows=0 raw_names=Brownie & Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Brownie & Vanilla Ice Cream With Fudge Sauce. It's Classic ! | Brownie &amp; Vanilla Ice Cream With Fudge Sauce. It's A Classic ! | Classic Brownie & Ice Cream With Fudge Sauce | Classic Brownie & Vanilla Ice Cream With Fudge Sauce | Classic Brownie &amp; Vanilla Ice Cream With Fudge Sauce
 
 ## Classic Chocolate Lamington [Dessert] :: 1_PIECE
 - menu_item_id: 5cab9534-dbff-5d1c-8651-f3aec8a41284
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 31 item rows, 0 addon rows
+- rows: 33 item rows, 0 addon rows
 - source item ids: 1285806723
 - raw names: Classic Chocolate Lamington (1pcs)
 - historical merged source clusters: (none)
 
-  - source_item_id=1285806723 [item] item_rows=31 addon_rows=0 raw_names=Classic Chocolate Lamington (1pcs)
+  - source_item_id=1285806723 [item] item_rows=33 addon_rows=0 raw_names=Classic Chocolate Lamington (1pcs)
 
 ## Classic Chocolate Lamington [Dessert] :: 2_PIECES
 - menu_item_id: 5cab9534-dbff-5d1c-8651-f3aec8a41284
 - variant_id: 5f354550-0f38-58c3-ad16-97672a66817d
 - mappings: 1 total, 1 verified
-- rows: 803 item rows, 0 addon rows
+- rows: 818 item rows, 0 addon rows
 - source item ids: 1285254017
 - raw names: Classic Chocolate Lamington (2pcs)
 - historical merged source clusters: (none)
 
-  - source_item_id=1285254017 [item] item_rows=803 addon_rows=0 raw_names=Classic Chocolate Lamington (2pcs)
-
-## Classic Night & Day Duo [Combo] :: DUO_200ML_200ML
-- menu_item_id: d609df8c-8704-5b71-aa69-ea0e25af9b94
-- variant_id: d755256f-e108-56e3-b125-be7736f091af
-- mappings: 1 total, 1 verified
-- rows: 2 item rows, 0 addon rows
-- source item ids: 1284128671
-- raw names: Classic Night & Day Duo Ice Creams (200ml+200ml) | Classic Night &amp; Day Duo
-- historical merged source clusters: (none)
-
-  - source_item_id=1284128671 [item] item_rows=2 addon_rows=0 raw_names=Classic Night & Day Duo Ice Creams (200ml+200ml) | Classic Night &amp; Day Duo
+  - source_item_id=1285254017 [item] item_rows=818 addon_rows=0 raw_names=Classic Chocolate Lamington (2pcs)
 
 ## Classic Tiramisu [Dessert] :: 1_PIECE
 - menu_item_id: 64ac2ffe-d208-510b-88a9-1df149047218
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 2050 item rows, 0 addon rows
+- rows: 2094 item rows, 0 addon rows
 - source item ids: 1283777806
 - raw names: Classic Tiramisu
 - historical merged source clusters: (none)
 
-  - source_item_id=1283777806 [item] item_rows=2050 addon_rows=0 raw_names=Classic Tiramisu
+  - source_item_id=1283777806 [item] item_rows=2094 addon_rows=0 raw_names=Classic Tiramisu
 
 ## Coconut & Pineapple [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 9d84af2f-7d38-53d7-9c66-cd95853bdf44
@@ -574,43 +494,51 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1297192453 [item] item_rows=42 addon_rows=0 raw_names=Coffee Banana Cheesecake
 
+## Coffee Mascarpone [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: af4a5711-e1b4-5418-b2cb-b87a62903ee8
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 2 total, 2 verified
+- rows: 0 item rows, 13 addon rows
+- source item ids: 03993ebd-77e2-5d35-80f4-26bf37737865 | 54290615
+- raw names: Coffee Mascarpone (60gm) | Coffee Mascarpone Small Scoop
+- historical merged source clusters: (none)
+
+  - source_item_id=03993ebd-77e2-5d35-80f4-26bf37737865 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=54290615 [addon] item_rows=0 addon_rows=13 raw_names=Coffee Mascarpone (60gm) | Coffee Mascarpone Small Scoop
+
 ## Coffee Mascarpone Ice Cream [Ice Cream] :: 1_PIECE
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 3 total, 3 verified
-- rows: 0 item rows, 3 addon rows
-- source item ids: 61458678 | 61458686 | 757b19ec-686b-5d75-aee5-8e69c50a41e7
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 1 addon rows
+- source item ids: 61458686
 - raw names: Coffee Mascarpone | For The Coffee & Chocolate Purist
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=61458678 [addon] item_rows=0 addon_rows=2 raw_names=Coffee Mascarpone | For The Coffee & Chocolate Purist
   - source_item_id=61458686 [addon] item_rows=0 addon_rows=1 raw_names=Coffee Mascarpone | For The Coffee & Chocolate Purist
-  - source_item_id=757b19ec-686b-5d75-aee5-8e69c50a41e7 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Coffee Mascarpone Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 39 item rows, 0 addon rows
+- rows: 41 item rows, 0 addon rows
 - source item ids: 1282581615
 - raw names: Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Coffee Mascarpone Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=1282581615 [item] item_rows=39 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Coffee Mascarpone Ice Cream (Family Tub (725ml))
+  - source_item_id=1282581615 [item] item_rows=41 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Coffee Mascarpone Ice Cream (Family Tub (725ml))
 
 ## Coffee Mascarpone Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 4 total, 4 verified
-- rows: 11 item rows, 13 addon rows
-- source item ids: 03993ebd-77e2-5d35-80f4-26bf37737865 | 1285048012 | 2a373e6d-15af-593c-b34b-0a999a41b01d | 54290615
-- raw names: Coffee Mascarpone (60gm) | Coffee Mascarpone Ice Cream (Junior Scoop (60gm)) | Coffee Mascarpone Ice Cream (Junior Scoop) | Coffee Mascarpone Small Scoop
+- mappings: 2 total, 2 verified
+- rows: 12 item rows, 0 addon rows
+- source item ids: 1285048012 | 2a373e6d-15af-593c-b34b-0a999a41b01d
+- raw names: Coffee Mascarpone Ice Cream (Junior Scoop (60gm)) | Coffee Mascarpone Ice Cream (Junior Scoop)
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=03993ebd-77e2-5d35-80f4-26bf37737865 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=1285048012 [item] item_rows=11 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Junior Scoop (60gm)) | Coffee Mascarpone Ice Cream (Junior Scoop)
+  - source_item_id=1285048012 [item] item_rows=12 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Junior Scoop (60gm)) | Coffee Mascarpone Ice Cream (Junior Scoop)
   - source_item_id=2a373e6d-15af-593c-b34b-0a999a41b01d [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=54290615 [addon] item_rows=0 addon_rows=13 raw_names=Coffee Mascarpone (60gm) | Coffee Mascarpone Small Scoop
 
 ## Coffee Mascarpone Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
@@ -627,12 +555,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 11 total, 11 verified
-- rows: 186 item rows, 124 addon rows
+- rows: 191 item rows, 124 addon rows
 - source item ids: 1284985281 | 51215000 | 51217611 | 51217623 | 51492576 | 51975429 | 51975460 | 51975461 | 51975462 | 52320274 | 52700803
 - raw names: Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (200ml)) | Coffee Mascarpone Ice Cream 200ml
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=1284985281 [item] item_rows=186 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985281 [item] item_rows=191 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Coffee Mascarpone Ice Cream (Mini tub (200ml))
   - source_item_id=51215000 [addon] item_rows=0 addon_rows=3 raw_names=Coffee Mascarpone Ice Cream 200ml
   - source_item_id=51217611 [addon] item_rows=0 addon_rows=6 raw_names=Coffee Mascarpone Ice Cream 200ml
   - source_item_id=51217623 [addon] item_rows=0 addon_rows=52 raw_names=Coffee Mascarpone Ice Cream 200ml
@@ -648,23 +576,35 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 210 item rows, 0 addon rows
+- rows: 226 item rows, 0 addon rows
 - source item ids: 1284985282
 - raw names: Coffee Mascarpone Ice Cream (Regular Scoop (120gm)) | Coffee Mascarpone Ice Cream (Regular Scoop)
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=1284985282 [item] item_rows=210 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Regular Scoop (120gm)) | Coffee Mascarpone Ice Cream (Regular Scoop)
+  - source_item_id=1284985282 [item] item_rows=226 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Regular Scoop (120gm)) | Coffee Mascarpone Ice Cream (Regular Scoop)
 
 ## Coffee Mascarpone Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 1b1a56f0-7e0a-5f7c-93b7-9543004db816
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 196 item rows, 0 addon rows
+- rows: 199 item rows, 0 addon rows
 - source item ids: 1282581614
 - raw names: Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Coffee Mascarpone Ice Cream (Perfect Plenty) | Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Coffee Mascarpone Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Coffee Mascarpone | Coffee Mascarpone (60gm) | Coffee Mascarpone | For The Coffee & Chocolate Purist | Eggless Coffee Mascarpone Ice Cream
 
-  - source_item_id=1282581614 [item] item_rows=196 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Coffee Mascarpone Ice Cream (Perfect Plenty) | Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Coffee Mascarpone Ice Cream (Regular Tub (300ml))
+  - source_item_id=1282581614 [item] item_rows=199 addon_rows=0 raw_names=Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Coffee Mascarpone Ice Cream (Perfect Plenty) | Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Coffee Mascarpone Ice Cream (Regular Tub (300ml))
+
+## Coffee Mascarpone | For The Coffee & Chocolate Purist [Ice Cream] :: 1_PIECE
+- menu_item_id: 10e288fe-c6d9-5c1e-a666-1fd239695e11
+- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
+- mappings: 2 total, 2 verified
+- rows: 0 item rows, 2 addon rows
+- source item ids: 61458678 | 757b19ec-686b-5d75-aee5-8e69c50a41e7
+- raw names: Coffee Mascarpone | For The Coffee & Chocolate Purist
+- historical merged source clusters: (none)
+
+  - source_item_id=61458678 [addon] item_rows=0 addon_rows=2 raw_names=Coffee Mascarpone | For The Coffee & Chocolate Purist
+  - source_item_id=757b19ec-686b-5d75-aee5-8e69c50a41e7 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Cream Cheese Fruit Medley Cake [Dessert] :: 1_PIECE
 - menu_item_id: c674e969-50c1-534c-ad57-84a5b83cc6bf
@@ -680,26 +620,14 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Cup [Extra] :: 1_PIECE
 - menu_item_id: be5401e4-e641-5142-b743-26d27541553c
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 3 total, 3 verified
-- rows: 0 item rows, 923 addon rows
-- source item ids: 53392899 | 53392904 | de96c525-38d4-5c89-8b33-5ce6e90ba934
+- mappings: 2 total, 2 verified
+- rows: 0 item rows, 927 addon rows
+- source item ids: 53392899 | de96c525-38d4-5c89-8b33-5ce6e90ba934
 - raw names: Cup
-- historical merged source clusters: (none)
+- historical merged source clusters: Mapping audit: Cup — 1_PIECE
 
-  - source_item_id=53392899 [addon] item_rows=0 addon_rows=920 raw_names=Cup
-  - source_item_id=53392904 [addon] item_rows=0 addon_rows=3 raw_names=Cup
+  - source_item_id=53392899 [addon] item_rows=0 addon_rows=927 raw_names=Cup
   - source_item_id=de96c525-38d4-5c89-8b33-5ce6e90ba934 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Curious Creations Duo [Combo] :: DUO_200ML_200ML
-- menu_item_id: bd0be7e2-46da-5ed3-a2f4-39be12038220
-- variant_id: d755256f-e108-56e3-b125-be7736f091af
-- mappings: 1 total, 1 verified
-- rows: 2 item rows, 0 addon rows
-- source item ids: 1284128670
-- raw names: Curious Creations Duo | Curious Creations Duo Ice Creams (200ml+200ml)
-- historical merged source clusters: (none)
-
-  - source_item_id=1284128670 [item] item_rows=2 addon_rows=0 raw_names=Curious Creations Duo | Curious Creations Duo Ice Creams (200ml+200ml)
 
 ## Custom Cake 800gm [Ice Cream] :: 1_PIECE
 - menu_item_id: 17fcf174-95f4-5390-b1fe-969195a9eb65
@@ -745,6 +673,19 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1291691127 [item] item_rows=5 addon_rows=0 raw_names=Dark Double Chocolate Cookie(2pcs)
 
+## Dates & Chocolate [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: 4eb61886-91d1-5648-96e8-a6f662ff1683
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 3 total, 3 verified
+- rows: 0 item rows, 3 addon rows
+- source item ids: 56834951 | 6005f98a-c60d-5970-b7b8-777a0d65dc68 | df782908-9b29-5d93-acfb-af15eb5227c1
+- raw names: Dates & Chocolate (60gm) | Dates &amp; Chocolate Small Scoop
+- historical merged source clusters: (none)
+
+  - source_item_id=56834951 [addon] item_rows=0 addon_rows=3 raw_names=Dates & Chocolate (60gm) | Dates &amp; Chocolate Small Scoop
+  - source_item_id=6005f98a-c60d-5970-b7b8-777a0d65dc68 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=df782908-9b29-5d93-acfb-af15eb5227c1 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+
 ## Dates & Chocolate [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 4eb61886-91d1-5648-96e8-a6f662ff1683
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
@@ -773,61 +714,58 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 8e0cabbe-2605-5acd-a13f-bc142df0d168
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 12 item rows, 0 addon rows
+- rows: 14 item rows, 0 addon rows
 - source item ids: 1289809870
 - raw names: Dates & Chocolate (Family Tub (500gms)) | Dates & Chocolate Eggless (Family Tub (700ml)) | Dates & Chocolate Eggless (Family Tub (725ml))
 - historical merged source clusters: Dates & Chocolate | Dates & Chocolate (60gm)
 
-  - source_item_id=1289809870 [item] item_rows=12 addon_rows=0 raw_names=Dates & Chocolate (Family Tub (500gms)) | Dates & Chocolate Eggless (Family Tub (700ml)) | Dates & Chocolate Eggless (Family Tub (725ml))
+  - source_item_id=1289809870 [item] item_rows=14 addon_rows=0 raw_names=Dates & Chocolate (Family Tub (500gms)) | Dates & Chocolate Eggless (Family Tub (700ml)) | Dates & Chocolate Eggless (Family Tub (725ml))
 
 ## Dates & Chocolate Eggless [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 8e0cabbe-2605-5acd-a13f-bc142df0d168
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 5 total, 5 verified
-- rows: 2 item rows, 3 addon rows
-- source item ids: 1289809866 | 56834951 | 6005f98a-c60d-5970-b7b8-777a0d65dc68 | c9d049da-8236-56d0-8d35-077162841386 | df782908-9b29-5d93-acfb-af15eb5227c1
-- raw names: Dates & Chocolate (60gm) | Dates & Chocolate (Junior Scoop (60gm)) | Dates & Chocolate Eggless (Junior Scoop) | Dates &amp; Chocolate Small Scoop
+- mappings: 2 total, 2 verified
+- rows: 3 item rows, 0 addon rows
+- source item ids: 1289809866 | c9d049da-8236-56d0-8d35-077162841386
+- raw names: Dates & Chocolate (Junior Scoop (60gm)) | Dates & Chocolate Eggless (Junior Scoop)
 - historical merged source clusters: Dates & Chocolate | Dates & Chocolate (60gm)
 
-  - source_item_id=1289809866 [item] item_rows=2 addon_rows=0 raw_names=Dates & Chocolate (Junior Scoop (60gm)) | Dates & Chocolate Eggless (Junior Scoop)
-  - source_item_id=56834951 [addon] item_rows=0 addon_rows=3 raw_names=Dates & Chocolate (60gm) | Dates &amp; Chocolate Small Scoop
-  - source_item_id=6005f98a-c60d-5970-b7b8-777a0d65dc68 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=1289809866 [item] item_rows=3 addon_rows=0 raw_names=Dates & Chocolate (Junior Scoop (60gm)) | Dates & Chocolate Eggless (Junior Scoop)
   - source_item_id=c9d049da-8236-56d0-8d35-077162841386 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=df782908-9b29-5d93-acfb-af15eb5227c1 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Dates & Chocolate Eggless [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 8e0cabbe-2605-5acd-a13f-bc142df0d168
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 2 total, 2 verified
-- rows: 137 item rows, 1 addon rows
+- rows: 152 item rows, 1 addon rows
 - source item ids: 1289809868 | 56834923
 - raw names: Dates & Chocolate (Mini Tub (160gms)) | Dates & Chocolate (Mini tub (160gms)) | Dates & Chocolate 200ml (eggless) | Dates & Chocolate Eggless (Mini tub (200ml)) | Dates &amp; Chocolate (Mini Tub (160gms))
 - historical merged source clusters: Dates & Chocolate | Dates & Chocolate (60gm)
 
-  - source_item_id=1289809868 [item] item_rows=137 addon_rows=0 raw_names=Dates & Chocolate (Mini Tub (160gms)) | Dates & Chocolate (Mini tub (160gms)) | Dates & Chocolate Eggless (Mini tub (200ml)) | Dates &amp; Chocolate (Mini Tub (160gms))
+  - source_item_id=1289809868 [item] item_rows=152 addon_rows=0 raw_names=Dates & Chocolate (Mini Tub (160gms)) | Dates & Chocolate (Mini tub (160gms)) | Dates & Chocolate Eggless (Mini tub (200ml)) | Dates &amp; Chocolate (Mini Tub (160gms))
   - source_item_id=56834923 [addon] item_rows=0 addon_rows=1 raw_names=Dates & Chocolate 200ml (eggless)
 
 ## Dates & Chocolate Eggless [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 8e0cabbe-2605-5acd-a13f-bc142df0d168
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 66 item rows, 0 addon rows
+- rows: 71 item rows, 0 addon rows
 - source item ids: 1289809867
 - raw names: Dates & Chocolate (Regular Scoop (120gm)) | Dates & Chocolate Eggless (Regular Scoop)
 - historical merged source clusters: Dates & Chocolate | Dates & Chocolate (60gm)
 
-  - source_item_id=1289809867 [item] item_rows=66 addon_rows=0 raw_names=Dates & Chocolate (Regular Scoop (120gm)) | Dates & Chocolate Eggless (Regular Scoop)
+  - source_item_id=1289809867 [item] item_rows=71 addon_rows=0 raw_names=Dates & Chocolate (Regular Scoop (120gm)) | Dates & Chocolate Eggless (Regular Scoop)
 
 ## Dates & Chocolate Eggless [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 8e0cabbe-2605-5acd-a13f-bc142df0d168
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 108 item rows, 0 addon rows
+- rows: 110 item rows, 0 addon rows
 - source item ids: 1289809869
 - raw names: Dates & Chocolate (Regular Tub (220gms)) | Dates & Chocolate Eggless (Regular Tub (300ml)) | Dates &amp; Chocolate Eggless (Regular Tub (300ml))
 - historical merged source clusters: Dates & Chocolate | Dates & Chocolate (60gm)
 
-  - source_item_id=1289809869 [item] item_rows=108 addon_rows=0 raw_names=Dates & Chocolate (Regular Tub (220gms)) | Dates & Chocolate Eggless (Regular Tub (300ml)) | Dates &amp; Chocolate Eggless (Regular Tub (300ml))
+  - source_item_id=1289809869 [item] item_rows=110 addon_rows=0 raw_names=Dates & Chocolate (Regular Tub (220gms)) | Dates & Chocolate Eggless (Regular Tub (300ml)) | Dates &amp; Chocolate Eggless (Regular Tub (300ml))
 
 ## Dates Rose & Nuts Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 59f649bb-a890-5d32-9f7a-3a686599b0ec
@@ -845,23 +783,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 59f649bb-a890-5d32-9f7a-3a686599b0ec
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
 - mappings: 1 total, 1 verified
-- rows: 35 item rows, 0 addon rows
+- rows: 42 item rows, 0 addon rows
 - source item ids: 1296472641
 - raw names: Dates Rose & Nuts Ice Cream (Mini Tub (160gms)) | Dates Rose & Nuts Ice Cream (Mini tub (160gms)) | Dates Rose &amp; Nuts Ice Cream (Mini Tub (160gms))
 - historical merged source clusters: Dates Rose & Nuts (60gm)
 
-  - source_item_id=1296472641 [item] item_rows=35 addon_rows=0 raw_names=Dates Rose & Nuts Ice Cream (Mini Tub (160gms)) | Dates Rose & Nuts Ice Cream (Mini tub (160gms)) | Dates Rose &amp; Nuts Ice Cream (Mini Tub (160gms))
+  - source_item_id=1296472641 [item] item_rows=42 addon_rows=0 raw_names=Dates Rose & Nuts Ice Cream (Mini Tub (160gms)) | Dates Rose & Nuts Ice Cream (Mini tub (160gms)) | Dates Rose &amp; Nuts Ice Cream (Mini Tub (160gms))
 
 ## Dates Rose & Nuts Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 59f649bb-a890-5d32-9f7a-3a686599b0ec
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 24 item rows, 0 addon rows
+- rows: 27 item rows, 0 addon rows
 - source item ids: 1296472640
 - raw names: Dates Rose & Nuts Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: Dates Rose & Nuts (60gm)
 
-  - source_item_id=1296472640 [item] item_rows=24 addon_rows=0 raw_names=Dates Rose & Nuts Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1296472640 [item] item_rows=27 addon_rows=0 raw_names=Dates Rose & Nuts Ice Cream (Regular Scoop (120gm))
 
 ## Dates Rose & Nuts Ice Cream [Ice Cream] :: REGULAR_TUB_220GMS
 - menu_item_id: 59f649bb-a890-5d32-9f7a-3a686599b0ec
@@ -873,6 +811,19 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - historical merged source clusters: Dates Rose & Nuts (60gm)
 
   - source_item_id=1296472642 [item] item_rows=13 addon_rows=0 raw_names=Dates Rose & Nuts Ice Cream (Regular Tub (220gms))
+
+## Dates With Fig & Orange [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: eb6da8ab-301c-5723-8cc9-696d41ab7917
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 3 total, 3 verified
+- rows: 1 item rows, 3 addon rows
+- source item ids: 1290743837 | 1f23fb59-921c-545d-8b8f-2bba5c62d8ee | 56834952
+- raw names: Dates With Fig & Orange (Junior Scoop (60gm)) | Dates With Fig & Orange Small Scoop | Dates With Fig &amp; Orange Small Scoop
+- historical merged source clusters: (none)
+
+  - source_item_id=1290743837 [item] item_rows=1 addon_rows=0 raw_names=Dates With Fig & Orange (Junior Scoop (60gm))
+  - source_item_id=1f23fb59-921c-545d-8b8f-2bba5c62d8ee [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=56834952 [addon] item_rows=0 addon_rows=3 raw_names=Dates With Fig & Orange Small Scoop | Dates With Fig &amp; Orange Small Scoop
 
 ## Dates With Fig & Orange [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: eb6da8ab-301c-5723-8cc9-696d41ab7917
@@ -913,82 +864,83 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Dates With Fig & Orange Eggless [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 9f65a688-f7d4-54d8-97c1-af3fbb88b929
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 3 total, 3 verified
-- rows: 0 item rows, 3 addon rows
-- source item ids: 1f23fb59-921c-545d-8b8f-2bba5c62d8ee | 56834952 | fcb7118d-b412-53d1-b37e-f2af0910a130
-- raw names: Dates With Fig & Orange Small Scoop | Dates With Fig &amp; Orange Small Scoop
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 0 addon rows
+- source item ids: fcb7118d-b412-53d1-b37e-f2af0910a130
+- raw names: (none)
 - historical merged source clusters: Dates With Fig & Orange | Dates With Fig & Orange (60gm)
 
-  - source_item_id=1f23fb59-921c-545d-8b8f-2bba5c62d8ee [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=56834952 [addon] item_rows=0 addon_rows=3 raw_names=Dates With Fig & Orange Small Scoop | Dates With Fig &amp; Orange Small Scoop
   - source_item_id=fcb7118d-b412-53d1-b37e-f2af0910a130 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Dates With Fig & Orange Eggless [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 9f65a688-f7d4-54d8-97c1-af3fbb88b929
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 2 total, 2 verified
-- rows: 80 item rows, 4 addon rows
+- rows: 84 item rows, 4 addon rows
 - source item ids: 1290743839 | 56834927
 - raw names: Dates With Fig & Orange (Mini Tub (160gms)) | Dates With Fig & Orange (Mini tub (160gms)) | Dates With Fig & Orange 200ml (eggless) | Dates With Fig & Orange Eggless (Mini tub (200ml)) | Dates With Fig &amp; Orange (Mini Tub (160gms))
 - historical merged source clusters: Dates With Fig & Orange | Dates With Fig & Orange (60gm)
 
-  - source_item_id=1290743839 [item] item_rows=80 addon_rows=0 raw_names=Dates With Fig & Orange (Mini Tub (160gms)) | Dates With Fig & Orange (Mini tub (160gms)) | Dates With Fig & Orange Eggless (Mini tub (200ml)) | Dates With Fig &amp; Orange (Mini Tub (160gms))
+  - source_item_id=1290743839 [item] item_rows=84 addon_rows=0 raw_names=Dates With Fig & Orange (Mini Tub (160gms)) | Dates With Fig & Orange (Mini tub (160gms)) | Dates With Fig & Orange Eggless (Mini tub (200ml)) | Dates With Fig &amp; Orange (Mini Tub (160gms))
   - source_item_id=56834927 [addon] item_rows=0 addon_rows=4 raw_names=Dates With Fig & Orange 200ml (eggless)
 
 ## Dates With Fig & Orange Eggless [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 9f65a688-f7d4-54d8-97c1-af3fbb88b929
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 39 item rows, 0 addon rows
+- rows: 43 item rows, 0 addon rows
 - source item ids: 1290743838
 - raw names: Dates With Fig & Orange (Regular Scoop (120gm)) | Dates With Fig & Orange Eggless (Regular Scoop)
 - historical merged source clusters: Dates With Fig & Orange | Dates With Fig & Orange (60gm)
 
-  - source_item_id=1290743838 [item] item_rows=39 addon_rows=0 raw_names=Dates With Fig & Orange (Regular Scoop (120gm)) | Dates With Fig & Orange Eggless (Regular Scoop)
+  - source_item_id=1290743838 [item] item_rows=43 addon_rows=0 raw_names=Dates With Fig & Orange (Regular Scoop (120gm)) | Dates With Fig & Orange Eggless (Regular Scoop)
 
 ## Dates With Fig & Orange Eggless [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 9f65a688-f7d4-54d8-97c1-af3fbb88b929
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 60 item rows, 0 addon rows
+- rows: 62 item rows, 0 addon rows
 - source item ids: 1290743840
 - raw names: Dates With Fig & Orange (Regular Tub (220gms)) | Dates With Fig & Orange Eggless (Regular Tub (300ml)) | Dates With Fig &amp; Orange (Regular Tub (220gms)) | Dates With Fig &amp; Orange Eggless (Regular Tub (300ml))
 - historical merged source clusters: Dates With Fig & Orange | Dates With Fig & Orange (60gm)
 
-  - source_item_id=1290743840 [item] item_rows=60 addon_rows=0 raw_names=Dates With Fig & Orange (Regular Tub (220gms)) | Dates With Fig & Orange Eggless (Regular Tub (300ml)) | Dates With Fig &amp; Orange (Regular Tub (220gms)) | Dates With Fig &amp; Orange Eggless (Regular Tub (300ml))
+  - source_item_id=1290743840 [item] item_rows=62 addon_rows=0 raw_names=Dates With Fig & Orange (Regular Tub (220gms)) | Dates With Fig & Orange Eggless (Regular Tub (300ml)) | Dates With Fig &amp; Orange (Regular Tub (220gms)) | Dates With Fig &amp; Orange Eggless (Regular Tub (300ml))
 
 ## Deconstructed Coffee Tres Leches [Dessert] :: 1_PIECE
 - menu_item_id: 26515b03-bc83-5bb5-89d0-47d9e1563f2e
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 136 item rows, 0 addon rows
+- rows: 150 item rows, 0 addon rows
 - source item ids: 1301792797
 - raw names: Deconstructed Coffee Tres Leches
 - historical merged source clusters: (none)
 
-  - source_item_id=1301792797 [item] item_rows=136 addon_rows=0 raw_names=Deconstructed Coffee Tres Leches
+  - source_item_id=1301792797 [item] item_rows=150 addon_rows=0 raw_names=Deconstructed Coffee Tres Leches
 
 ## Design Family Pack Of 3 Ice Creams [Combo] :: FAMILY_PACK_3X200ML
 - menu_item_id: b580104a-802c-53e7-a986-30d0d5a3110b
 - variant_id: c5bd4518-50da-59ee-b63d-50c4904a9912
-- mappings: 1 total, 1 verified
-- rows: 235 item rows, 0 addon rows
-- source item ids: 1284912158
-- raw names: Design Family Pack Of 3 Ice Creams | Design Family Pack Of 3 Ice Creams (200+200+200 Ml) | Design Family Pack Of 3 Ice Creams (3 Mini Tubs)
-- historical merged source clusters: (none)
+- mappings: 2 total, 2 verified
+- rows: 237 item rows, 0 addon rows
+- source item ids: 1284912158 | 1297923934
+- raw names: 3 Flavors In One Tub Combo | Design Family Pack Of 3 Ice Creams | Design Family Pack Of 3 Ice Creams (200+200+200 Ml) | Design Family Pack Of 3 Ice Creams (3 Mini Tubs)
+- historical merged source clusters: 3 Flavors In One Tub Combo
 
   - source_item_id=1284912158 [item] item_rows=235 addon_rows=0 raw_names=Design Family Pack Of 3 Ice Creams | Design Family Pack Of 3 Ice Creams (200+200+200 Ml) | Design Family Pack Of 3 Ice Creams (3 Mini Tubs)
+  - source_item_id=1297923934 [item] item_rows=2 addon_rows=0 raw_names=3 Flavors In One Tub Combo
 
 ## Design Your Indulgence Duo Ice Creams [Combo] :: DUO_200ML_200ML
 - menu_item_id: 8e51d6be-6df3-533b-9e2f-5970116beb9f
 - variant_id: d755256f-e108-56e3-b125-be7736f091af
-- mappings: 1 total, 1 verified
-- rows: 330 item rows, 0 addon rows
-- source item ids: 1284128668
-- raw names: Design Your Indulgence Duo | Design Your Indulgence Duo Ice Creams (2 Mini Tubs) | Design Your Indulgence Duo Ice Creams (200ml+200ml)
-- historical merged source clusters: (none)
+- mappings: 3 total, 3 verified
+- rows: 334 item rows, 0 addon rows
+- source item ids: 1284128668 | 1284128670 | 1284128671
+- raw names: Classic Night & Day Duo Ice Creams (200ml+200ml) | Classic Night &amp; Day Duo | Curious Creations Duo | Curious Creations Duo Ice Creams (200ml+200ml) | Design Your Indulgence Duo | Design Your Indulgence Duo Ice Creams (2 Mini Tubs) | Design Your Indulgence Duo Ice Creams (200ml+200ml)
+- historical merged source clusters: Classic Night & Day Duo | Curious Creations Duo
 
   - source_item_id=1284128668 [item] item_rows=330 addon_rows=0 raw_names=Design Your Indulgence Duo | Design Your Indulgence Duo Ice Creams (2 Mini Tubs) | Design Your Indulgence Duo Ice Creams (200ml+200ml)
+  - source_item_id=1284128670 [item] item_rows=2 addon_rows=0 raw_names=Curious Creations Duo | Curious Creations Duo Ice Creams (200ml+200ml)
+  - source_item_id=1284128671 [item] item_rows=2 addon_rows=0 raw_names=Classic Night & Day Duo Ice Creams (200ml+200ml) | Classic Night &amp; Day Duo
 
 ## Eggless Alphonso Mango Ice Cream [Ice Cream] :: PERFECT_PLENTY_200GMS
 - menu_item_id: 8f9ae6fa-5ff0-5532-b3fe-4b382c5170f2
@@ -1005,23 +957,36 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 3358e3dc-46e1-5629-9f0b-e685060cf875
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 77 item rows, 0 addon rows
+- rows: 80 item rows, 0 addon rows
 - source item ids: 1282571502
 - raw names: Banoffee Ice Cream (Family Tub (500gms)) | Eggless Banoffee Ice Cream (Family Feast (725ml)) | Eggless Banoffee Ice Cream (Family Tub (700ml)) | Eggless Banoffee Ice Cream (Family Tub (725ml)) | Go Bananas Ice Cream (Family Feast (550gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1282571502 [item] item_rows=77 addon_rows=0 raw_names=Banoffee Ice Cream (Family Tub (500gms)) | Eggless Banoffee Ice Cream (Family Feast (725ml)) | Eggless Banoffee Ice Cream (Family Tub (700ml)) | Eggless Banoffee Ice Cream (Family Tub (725ml)) | Go Bananas Ice Cream (Family Feast (550gms))
+  - source_item_id=1282571502 [item] item_rows=80 addon_rows=0 raw_names=Banoffee Ice Cream (Family Tub (500gms)) | Eggless Banoffee Ice Cream (Family Feast (725ml)) | Eggless Banoffee Ice Cream (Family Tub (700ml)) | Eggless Banoffee Ice Cream (Family Tub (725ml)) | Go Bananas Ice Cream (Family Feast (550gms))
+
+## Eggless Banoffee Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: 3358e3dc-46e1-5629-9f0b-e685060cf875
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 3 total, 3 verified
+- rows: 12 item rows, 35 addon rows
+- source item ids: 1285047341 | 54290380 | f7fb56db-3163-5a15-9911-53d5732f081a
+- raw names: Banoffee (60gm) | Banoffee Ice Cream (Junior Scoop (60gm)) | Eggless Banoffee Ice Cream (Junior Scoop) | Eggless Banoffee Ice Cream Small Scoop
+- historical merged source clusters: (none)
+
+  - source_item_id=1285047341 [item] item_rows=12 addon_rows=0 raw_names=Banoffee Ice Cream (Junior Scoop (60gm)) | Eggless Banoffee Ice Cream (Junior Scoop)
+  - source_item_id=54290380 [addon] item_rows=0 addon_rows=35 raw_names=Banoffee (60gm) | Eggless Banoffee Ice Cream Small Scoop
+  - source_item_id=f7fb56db-3163-5a15-9911-53d5732f081a [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Eggless Banoffee Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 3358e3dc-46e1-5629-9f0b-e685060cf875
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 15 total, 15 verified
-- rows: 314 item rows, 165 addon rows
+- rows: 335 item rows, 165 addon rows
 - source item ids: 1284985205 | 51949297 | 51949303 | 51949304 | 51949325 | 51949327 | 51949328 | 51949339 | 51975422 | 51975439 | 51975440 | 51975441 | 52320267 | 52700805 | 53120319
 - raw names: Banoffee Ice Cream (Mini Tub (160gms)) | Banoffee Ice Cream (Mini tub (160gms)) | Eggless Banoffee Ice Cream (Mini tub (200ml)) | Eggless Banoffee Ice Cream 200ml
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985205 [item] item_rows=314 addon_rows=0 raw_names=Banoffee Ice Cream (Mini Tub (160gms)) | Banoffee Ice Cream (Mini tub (160gms)) | Eggless Banoffee Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985205 [item] item_rows=335 addon_rows=0 raw_names=Banoffee Ice Cream (Mini Tub (160gms)) | Banoffee Ice Cream (Mini tub (160gms)) | Eggless Banoffee Ice Cream (Mini tub (200ml))
   - source_item_id=51949297 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Banoffee Ice Cream 200ml
   - source_item_id=51949303 [addon] item_rows=0 addon_rows=18 raw_names=Eggless Banoffee Ice Cream 200ml
   - source_item_id=51949304 [addon] item_rows=0 addon_rows=4 raw_names=Eggless Banoffee Ice Cream 200ml
@@ -1041,24 +1006,43 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 3358e3dc-46e1-5629-9f0b-e685060cf875
 - variant_id: c6438ece-1c0e-5db1-860f-27f45090a616
 - mappings: 2 total, 2 verified
-- rows: 474 item rows, 0 addon rows
+- rows: 480 item rows, 0 addon rows
 - source item ids: 1282571501 | 8d0eefd7-6cf9-51d9-9341-3c424546c18d
 - raw names: Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Perfect Plenty (300ml)) | Eggless Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Regular Tub (300ml)) | Go Bananas Ice Cream (Perfect Plenty)
 - historical merged source clusters: (none)
 
-  - source_item_id=1282571501 [item] item_rows=474 addon_rows=0 raw_names=Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Perfect Plenty (300ml)) | Eggless Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Regular Tub (300ml)) | Go Bananas Ice Cream (Perfect Plenty)
+  - source_item_id=1282571501 [item] item_rows=480 addon_rows=0 raw_names=Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Perfect Plenty (300ml)) | Eggless Banoffee Ice Cream (Regular Tub (220gms)) | Eggless Banoffee Ice Cream (Regular Tub (300ml)) | Go Bananas Ice Cream (Perfect Plenty)
   - source_item_id=8d0eefd7-6cf9-51d9-9341-3c424546c18d [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Eggless Banoffee Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 3358e3dc-46e1-5629-9f0b-e685060cf875
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 340 item rows, 0 addon rows
+- rows: 360 item rows, 0 addon rows
 - source item ids: 1284985206
 - raw names: Banoffee Ice Cream (Regular Scoop (120gm)) | Eggless Banoffee Ice Cream (Regular Scoop)
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985206 [item] item_rows=340 addon_rows=0 raw_names=Banoffee Ice Cream (Regular Scoop (120gm)) | Eggless Banoffee Ice Cream (Regular Scoop)
+  - source_item_id=1284985206 [item] item_rows=360 addon_rows=0 raw_names=Banoffee Ice Cream (Regular Scoop (120gm)) | Eggless Banoffee Ice Cream (Regular Scoop)
+
+## Eggless Cherry & Chocolate [Ice Cream] :: MINI_TUB_200ML
+- menu_item_id: 7d305ca0-8c47-5a6e-96fe-4ab7835e1268
+- variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
+- mappings: 9 total, 9 verified
+- rows: 0 item rows, 46 addon rows
+- source item ids: 53120309 | 53120312 | 53120313 | 53120322 | 53120323 | 53120324 | 53120326 | 53120327 | 53120328
+- raw names: Eggles Cherry & Chocolate 200ml | Eggles Cherry &amp; Chocolate 200ml | Eggless Cherry & Chocolate 200ml | Eggless Cherry &amp; Chocolate 200ml
+- historical merged source clusters: (none)
+
+  - source_item_id=53120309 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Cherry &amp; Chocolate 200ml
+  - source_item_id=53120312 [addon] item_rows=0 addon_rows=11 raw_names=Eggless Cherry & Chocolate 200ml
+  - source_item_id=53120313 [addon] item_rows=0 addon_rows=6 raw_names=Eggless Cherry & Chocolate 200ml
+  - source_item_id=53120322 [addon] item_rows=0 addon_rows=6 raw_names=Eggless Cherry & Chocolate 200ml
+  - source_item_id=53120323 [addon] item_rows=0 addon_rows=3 raw_names=Eggless Cherry & Chocolate 200ml
+  - source_item_id=53120324 [addon] item_rows=0 addon_rows=1 raw_names=Eggles Cherry &amp; Chocolate 200ml
+  - source_item_id=53120326 [addon] item_rows=0 addon_rows=1 raw_names=Eggles Cherry &amp; Chocolate 200ml
+  - source_item_id=53120327 [addon] item_rows=0 addon_rows=15 raw_names=Eggles Cherry & Chocolate 200ml | Eggless Cherry & Chocolate 200ml
+  - source_item_id=53120328 [addon] item_rows=0 addon_rows=2 raw_names=Eggless Cherry & Chocolate 200ml
 
 ## Eggless Cherry & Chocolate Ice Cream [Ice Cream] :: 1_PIECE
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
@@ -1075,12 +1059,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 29 item rows, 0 addon rows
+- rows: 31 item rows, 0 addon rows
 - source item ids: 1285670454
 - raw names: Cherry & Chocolate Fudge Ice Cream (Family Tub (500gms)) | Eggless Cherry & Chocolate Ice Cream (Family Feast (725ml)) | Eggless Cherry & Chocolate Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Cherry & Chocolate (60gm) | Cherry Chocolate Sample | Eggless Cherry & Chocolate
 
-  - source_item_id=1285670454 [item] item_rows=29 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Family Tub (500gms)) | Eggless Cherry & Chocolate Ice Cream (Family Feast (725ml)) | Eggless Cherry & Chocolate Ice Cream (Family Tub (725ml))
+  - source_item_id=1285670454 [item] item_rows=31 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Family Tub (500gms)) | Eggless Cherry & Chocolate Ice Cream (Family Feast (725ml)) | Eggless Cherry & Chocolate Ice Cream (Family Tub (725ml))
 
 ## Eggless Cherry & Chocolate Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
@@ -1098,44 +1082,35 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Eggless Cherry & Chocolate Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
-- mappings: 10 total, 10 verified
-- rows: 217 item rows, 46 addon rows
-- source item ids: 1285670452 | 53120309 | 53120312 | 53120313 | 53120322 | 53120323 | 53120324 | 53120326 | 53120327 | 53120328
-- raw names: Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)) | Cherry &amp; Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Eggles Cherry & Chocolate 200ml | Eggles Cherry &amp; Chocolate 200ml | Eggless Cherry & Chocolate 200ml | Eggless Cherry & Chocolate Ice Cream (Mini tub (200ml)) | Eggless Cherry &amp; Chocolate 200ml
+- mappings: 1 total, 1 verified
+- rows: 234 item rows, 0 addon rows
+- source item ids: 1285670452
+- raw names: Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)) | Cherry &amp; Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Eggless Cherry & Chocolate Ice Cream (Mini tub (200ml))
 - historical merged source clusters: Cherry & Chocolate (60gm) | Cherry Chocolate Sample | Eggless Cherry & Chocolate
 
-  - source_item_id=1285670452 [item] item_rows=217 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)) | Cherry &amp; Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Eggless Cherry & Chocolate Ice Cream (Mini tub (200ml))
-  - source_item_id=53120309 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Cherry &amp; Chocolate 200ml
-  - source_item_id=53120312 [addon] item_rows=0 addon_rows=11 raw_names=Eggless Cherry & Chocolate 200ml
-  - source_item_id=53120313 [addon] item_rows=0 addon_rows=6 raw_names=Eggless Cherry & Chocolate 200ml
-  - source_item_id=53120322 [addon] item_rows=0 addon_rows=6 raw_names=Eggless Cherry & Chocolate 200ml
-  - source_item_id=53120323 [addon] item_rows=0 addon_rows=3 raw_names=Eggless Cherry & Chocolate 200ml
-  - source_item_id=53120324 [addon] item_rows=0 addon_rows=1 raw_names=Eggles Cherry &amp; Chocolate 200ml
-  - source_item_id=53120326 [addon] item_rows=0 addon_rows=1 raw_names=Eggles Cherry &amp; Chocolate 200ml
-  - source_item_id=53120327 [addon] item_rows=0 addon_rows=15 raw_names=Eggles Cherry & Chocolate 200ml | Eggless Cherry & Chocolate 200ml
-  - source_item_id=53120328 [addon] item_rows=0 addon_rows=2 raw_names=Eggless Cherry & Chocolate 200ml
+  - source_item_id=1285670452 [item] item_rows=234 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Cherry & Chocolate Fudge Ice Cream (Mini tub (160gms)) | Cherry &amp; Chocolate Fudge Ice Cream (Mini Tub (160gms)) | Eggless Cherry & Chocolate Ice Cream (Mini tub (200ml))
 
 ## Eggless Cherry & Chocolate Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 352 item rows, 0 addon rows
+- rows: 370 item rows, 0 addon rows
 - source item ids: 1285670451
 - raw names: Cherry & Chocolate Fudge Ice Cream (Regular Scoop (120gm)) | Eggless Cherry & Chocolate Ice Cream (Regular Scoop)
 - historical merged source clusters: Cherry & Chocolate (60gm) | Cherry Chocolate Sample | Eggless Cherry & Chocolate
 
-  - source_item_id=1285670451 [item] item_rows=352 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Regular Scoop (120gm)) | Eggless Cherry & Chocolate Ice Cream (Regular Scoop)
+  - source_item_id=1285670451 [item] item_rows=370 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Regular Scoop (120gm)) | Eggless Cherry & Chocolate Ice Cream (Regular Scoop)
 
 ## Eggless Cherry & Chocolate Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 9314d919-4b6f-50d1-a1d1-11aa83647a76
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 174 item rows, 0 addon rows
+- rows: 180 item rows, 0 addon rows
 - source item ids: 1285670453
 - raw names: Cherry & Chocolate Fudge Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Cherry & Chocolate (60gm) | Cherry Chocolate Sample | Eggless Cherry & Chocolate
 
-  - source_item_id=1285670453 [item] item_rows=174 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Regular Tub (300ml))
+  - source_item_id=1285670453 [item] item_rows=180 addon_rows=0 raw_names=Cherry & Chocolate Fudge Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (220gms)) | Eggless Cherry & Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Cherry &amp; Chocolate Ice Cream (Regular Tub (300ml))
 
 ## Eggless Chocolate Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 633ca1f4-54fe-5e13-aad0-0998253f7c66
@@ -1163,12 +1138,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 633ca1f4-54fe-5e13-aad0-0998253f7c66
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 6 total, 6 verified
-- rows: 62 item rows, 22 addon rows
+- rows: 67 item rows, 22 addon rows
 - source item ids: 1284985352 | 51217648 | 51217658 | 51492544 | 51949301 | 53120318
 - raw names: Eggless Chocolate Ice Cream (Mini tub (200ml)) | Eggless Chocolate Ice Cream 200ml | Just Chocolate (Andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate (andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini tub (160gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985352 [item] item_rows=62 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Mini tub (200ml)) | Just Chocolate (Andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate (andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini tub (160gms))
+  - source_item_id=1284985352 [item] item_rows=67 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Mini tub (200ml)) | Just Chocolate (Andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate (andra) Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini Tub (160gms)) | Just Chocolate Ice Cream (Mini tub (160gms))
   - source_item_id=51217648 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Chocolate Ice Cream 200ml
   - source_item_id=51217658 [addon] item_rows=0 addon_rows=17 raw_names=Eggless Chocolate Ice Cream 200ml
   - source_item_id=51492544 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Chocolate Ice Cream 200ml
@@ -1179,56 +1154,56 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 633ca1f4-54fe-5e13-aad0-0998253f7c66
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 121 item rows, 0 addon rows
+- rows: 126 item rows, 0 addon rows
 - source item ids: 1284985353
 - raw names: Eggless Chocolate Ice Cream (Regular Scoop) | Just Chocolate Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985353 [item] item_rows=121 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Regular Scoop) | Just Chocolate Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1284985353 [item] item_rows=126 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Regular Scoop) | Just Chocolate Ice Cream (Regular Scoop (120gm))
 
 ## Eggless Chocolate Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 633ca1f4-54fe-5e13-aad0-0998253f7c66
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 176 item rows, 0 addon rows
+- rows: 177 item rows, 0 addon rows
 - source item ids: 1283886195
 - raw names: Eggless Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Chocolate Ice Cream (Perfect Plenty (325ml)) | Eggless Chocolate Ice Cream (Perfect Plenty) | Eggless Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Milk Chocolate (Perfect Plenty) | Just Chocolate (Andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate (andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate Ice Cream (Regular Tub (220gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1283886195 [item] item_rows=176 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Chocolate Ice Cream (Perfect Plenty (325ml)) | Eggless Chocolate Ice Cream (Perfect Plenty) | Eggless Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Milk Chocolate (Perfect Plenty) | Just Chocolate (Andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate (andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate Ice Cream (Regular Tub (220gms))
+  - source_item_id=1283886195 [item] item_rows=177 addon_rows=0 raw_names=Eggless Chocolate Ice Cream (Perfect Plenty (300ml)) | Eggless Chocolate Ice Cream (Perfect Plenty (325ml)) | Eggless Chocolate Ice Cream (Perfect Plenty) | Eggless Chocolate Ice Cream (Regular Tub (300ml)) | Eggless Milk Chocolate (Perfect Plenty) | Just Chocolate (Andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate (andra) Ice Cream (Regular Tub (220gms)) | Just Chocolate Ice Cream (Regular Tub (220gms))
 
 ## Eggless Chocolate Overload [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 09d510e1-6514-5dba-95ea-cfc3639b84e1
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 40 item rows, 0 addon rows
+- rows: 42 item rows, 0 addon rows
 - source item ids: 1287195520
 - raw names: Chocolate Overload (Family Tub (500gms)) | Chocolate Overload Ice Cream (Family Tub (500gms)) | Eggless Chocolate Overload (Family Feast (725ml)) | Eggless Chocolate Overload (Family Tub (500gms)) | Eggless Chocolate Overload (Family Tub (700ml)) | Eggless Chocolate Overload (Family Tub (725ml))
 - historical merged source clusters: (none)
 
-  - source_item_id=1287195520 [item] item_rows=40 addon_rows=0 raw_names=Chocolate Overload (Family Tub (500gms)) | Chocolate Overload Ice Cream (Family Tub (500gms)) | Eggless Chocolate Overload (Family Feast (725ml)) | Eggless Chocolate Overload (Family Tub (500gms)) | Eggless Chocolate Overload (Family Tub (700ml)) | Eggless Chocolate Overload (Family Tub (725ml))
+  - source_item_id=1287195520 [item] item_rows=42 addon_rows=0 raw_names=Chocolate Overload (Family Tub (500gms)) | Chocolate Overload Ice Cream (Family Tub (500gms)) | Eggless Chocolate Overload (Family Feast (725ml)) | Eggless Chocolate Overload (Family Tub (500gms)) | Eggless Chocolate Overload (Family Tub (700ml)) | Eggless Chocolate Overload (Family Tub (725ml))
 
 ## Eggless Chocolate Overload [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 09d510e1-6514-5dba-95ea-cfc3639b84e1
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
 - mappings: 1 total, 1 verified
-- rows: 20 item rows, 0 addon rows
+- rows: 21 item rows, 0 addon rows
 - source item ids: 1287195516
 - raw names: Chocolate Overload Ice Cream (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop)
 - historical merged source clusters: (none)
 
-  - source_item_id=1287195516 [item] item_rows=20 addon_rows=0 raw_names=Chocolate Overload Ice Cream (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop)
+  - source_item_id=1287195516 [item] item_rows=21 addon_rows=0 raw_names=Chocolate Overload Ice Cream (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop (60gm)) | Eggless Chocolate Overload (Junior Scoop)
 
 ## Eggless Chocolate Overload [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 09d510e1-6514-5dba-95ea-cfc3639b84e1
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 8 total, 8 verified
-- rows: 210 item rows, 52 addon rows
+- rows: 221 item rows, 52 addon rows
 - source item ids: 1287195518 | 54012795 | 54012796 | 54012800 | 54012801 | 54012828 | 54012829 | 54012830
 - raw names: Chocolate Overload (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini tub (160gms)) | Eggless Chocolate Overload (Mini Tub (160gms)) | Eggless Chocolate Overload (Mini tub (160gms)) | Eggless Chocolate Overload (Mini tub (200ml)) | Eggless Chocolate Overload 200ml
 - historical merged source clusters: (none)
 
-  - source_item_id=1287195518 [item] item_rows=210 addon_rows=0 raw_names=Chocolate Overload (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini tub (160gms)) | Eggless Chocolate Overload (Mini Tub (160gms)) | Eggless Chocolate Overload (Mini tub (160gms)) | Eggless Chocolate Overload (Mini tub (200ml))
+  - source_item_id=1287195518 [item] item_rows=221 addon_rows=0 raw_names=Chocolate Overload (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini Tub (160gms)) | Chocolate Overload Ice Cream (Mini tub (160gms)) | Eggless Chocolate Overload (Mini Tub (160gms)) | Eggless Chocolate Overload (Mini tub (160gms)) | Eggless Chocolate Overload (Mini tub (200ml))
   - source_item_id=54012795 [addon] item_rows=0 addon_rows=15 raw_names=Eggless Chocolate Overload 200ml
   - source_item_id=54012796 [addon] item_rows=0 addon_rows=6 raw_names=Eggless Chocolate Overload 200ml
   - source_item_id=54012800 [addon] item_rows=0 addon_rows=4 raw_names=Eggless Chocolate Overload 200ml
@@ -1241,23 +1216,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 09d510e1-6514-5dba-95ea-cfc3639b84e1
 - variant_id: c6438ece-1c0e-5db1-860f-27f45090a616
 - mappings: 1 total, 1 verified
-- rows: 183 item rows, 0 addon rows
+- rows: 189 item rows, 0 addon rows
 - source item ids: 1287195519
 - raw names: Chocolate Overload (Regular Tub (220gms)) | Chocolate Overload Ice Cream (Regular Tub (220gms)) | Eggless Chocolate Overload (Perfect Plenty (300ml)) | Eggless Chocolate Overload (Regular Tub (220gms)) | Eggless Chocolate Overload (Regular Tub (300ml))
 - historical merged source clusters: (none)
 
-  - source_item_id=1287195519 [item] item_rows=183 addon_rows=0 raw_names=Chocolate Overload (Regular Tub (220gms)) | Chocolate Overload Ice Cream (Regular Tub (220gms)) | Eggless Chocolate Overload (Perfect Plenty (300ml)) | Eggless Chocolate Overload (Regular Tub (220gms)) | Eggless Chocolate Overload (Regular Tub (300ml))
+  - source_item_id=1287195519 [item] item_rows=189 addon_rows=0 raw_names=Chocolate Overload (Regular Tub (220gms)) | Chocolate Overload Ice Cream (Regular Tub (220gms)) | Eggless Chocolate Overload (Perfect Plenty (300ml)) | Eggless Chocolate Overload (Regular Tub (220gms)) | Eggless Chocolate Overload (Regular Tub (300ml))
 
 ## Eggless Chocolate Overload [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 09d510e1-6514-5dba-95ea-cfc3639b84e1
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 316 item rows, 0 addon rows
+- rows: 328 item rows, 0 addon rows
 - source item ids: 1287195517
 - raw names: Chocolate Overload Ice Cream (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop)
 - historical merged source clusters: (none)
 
-  - source_item_id=1287195517 [item] item_rows=316 addon_rows=0 raw_names=Chocolate Overload Ice Cream (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop)
+  - source_item_id=1287195517 [item] item_rows=328 addon_rows=0 raw_names=Chocolate Overload Ice Cream (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop (120gm)) | Eggless Chocolate Overload (Regular Scoop)
 
 ## Eggless Chocolate Overload Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 03c6d171-50c2-597d-92bb-b039e2384761
@@ -1305,12 +1280,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: b8623fbc-4da8-5c97-afea-180e45592597
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 26 item rows, 0 addon rows
+- rows: 28 item rows, 0 addon rows
 - source item ids: 1288273819
 - raw names: Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (700ml)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Coconut & Pineapple | Coconut & Pineapple (60gm)
 
-  - source_item_id=1288273819 [item] item_rows=26 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (700ml)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (725ml))
+  - source_item_id=1288273819 [item] item_rows=28 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (500gms)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (700ml)) | Eggless Coconut & Pineapple Ice Cream (Family Tub (725ml))
 
 ## Eggless Coconut & Pineapple Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: b8623fbc-4da8-5c97-afea-180e45592597
@@ -1328,45 +1303,45 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: b8623fbc-4da8-5c97-afea-180e45592597
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 1 total, 1 verified
-- rows: 269 item rows, 0 addon rows
+- rows: 294 item rows, 0 addon rows
 - source item ids: 1288273817
 - raw names: Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (200ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut &amp; Pineapple Ice Cream (Navratri) (Mini Tub (200ml))
 - historical merged source clusters: Coconut & Pineapple | Coconut & Pineapple (60gm)
 
-  - source_item_id=1288273817 [item] item_rows=269 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (200ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut &amp; Pineapple Ice Cream (Navratri) (Mini Tub (200ml))
+  - source_item_id=1288273817 [item] item_rows=294 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (160gms)) | Eggless Coconut & Pineapple Ice Cream (Mini tub (200ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Mini Tub (160gms)) | Eggless Coconut &amp; Pineapple Ice Cream (Navratri) (Mini Tub (200ml))
 
 ## Eggless Coconut & Pineapple Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: b8623fbc-4da8-5c97-afea-180e45592597
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 146 item rows, 0 addon rows
+- rows: 155 item rows, 0 addon rows
 - source item ids: 1288273816
 - raw names: Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Scoop)
 - historical merged source clusters: Coconut & Pineapple | Coconut & Pineapple (60gm)
 
-  - source_item_id=1288273816 [item] item_rows=146 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Scoop)
+  - source_item_id=1288273816 [item] item_rows=155 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop (120gm)) | Eggless Coconut & Pineapple Ice Cream (Regular Scoop) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Scoop)
 
 ## Eggless Coconut & Pineapple Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: b8623fbc-4da8-5c97-afea-180e45592597
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 218 item rows, 0 addon rows
+- rows: 224 item rows, 0 addon rows
 - source item ids: 1288273818
 - raw names: Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Coconut &amp; Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (300ml)) | Eggless Coconut & Pineapple Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Coconut & Pineapple | Coconut & Pineapple (60gm)
 
-  - source_item_id=1288273818 [item] item_rows=218 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Coconut &amp; Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (300ml)) | Eggless Coconut & Pineapple Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Tub (300ml))
+  - source_item_id=1288273818 [item] item_rows=224 addon_rows=0 raw_names=Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Coconut &amp; Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (220gms)) | Eggless Coconut & Pineapple Ice Cream (Regular Tub (300ml)) | Eggless Coconut & Pineapple Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Coconut &amp; Pineapple Ice Cream (Regular Tub (300ml))
 
 ## Eggless Coffee Mascarpone Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: c9b75532-8b1c-5a96-bf9d-1bf64d857f5a
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 24 item rows, 0 addon rows
+- rows: 25 item rows, 0 addon rows
 - source item ids: 1283123231
 - raw names: Eggless Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Eggless Coffee Mascarpone Ice Cream (Family Feast) | Eggless Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (725ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Family Tub (725ml))
 - historical merged source clusters: Coffee Mascarpone Ice Cream | Eggless Coffee Mascarpone (60gm)
 
-  - source_item_id=1283123231 [item] item_rows=24 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Eggless Coffee Mascarpone Ice Cream (Family Feast) | Eggless Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (725ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Family Tub (725ml))
+  - source_item_id=1283123231 [item] item_rows=25 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Family Feast (725ml)) | Eggless Coffee Mascarpone Ice Cream (Family Feast) | Eggless Coffee Mascarpone Ice Cream (Family Tub (500gms)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (700ml)) | Eggless Coffee Mascarpone Ice Cream (Family Tub (725ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Family Tub (725ml))
 
 ## Eggless Coffee Mascarpone Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: c9b75532-8b1c-5a96-bf9d-1bf64d857f5a
@@ -1397,12 +1372,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: c9b75532-8b1c-5a96-bf9d-1bf64d857f5a
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 9 total, 9 verified
-- rows: 73 item rows, 69 addon rows
+- rows: 83 item rows, 69 addon rows
 - source item ids: 1284985314 | 51217644 | 51217650 | 51949298 | 51975419 | 51975430 | 51975431 | 51975432 | 52320264
 - raw names: Eggless Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (200ml)) | Eggless Coffee Mascarpone Ice Cream 200ml
 - historical merged source clusters: Coffee Mascarpone Ice Cream | Eggless Coffee Mascarpone (60gm)
 
-  - source_item_id=1284985314 [item] item_rows=73 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985314 [item] item_rows=83 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Mini Tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (160gms)) | Eggless Coffee Mascarpone Ice Cream (Mini tub (200ml))
   - source_item_id=51217644 [addon] item_rows=0 addon_rows=2 raw_names=Eggless Coffee Mascarpone Ice Cream 200ml
   - source_item_id=51217650 [addon] item_rows=0 addon_rows=14 raw_names=Eggless Coffee Mascarpone Ice Cream 200ml
   - source_item_id=51949298 [addon] item_rows=0 addon_rows=12 raw_names=Eggless Coffee Mascarpone Ice Cream 200ml
@@ -1427,12 +1402,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: c9b75532-8b1c-5a96-bf9d-1bf64d857f5a
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 134 item rows, 0 addon rows
+- rows: 136 item rows, 0 addon rows
 - source item ids: 1283123230
 - raw names: Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (200gms)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (300ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Regular Tub (300ml))
 - historical merged source clusters: Coffee Mascarpone Ice Cream | Eggless Coffee Mascarpone (60gm)
 
-  - source_item_id=1283123230 [item] item_rows=134 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (200gms)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (300ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Regular Tub (300ml))
+  - source_item_id=1283123230 [item] item_rows=136 addon_rows=0 raw_names=Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (200gms)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty (300ml)) | Eggless Coffee Mascarpone Ice Cream (Perfect Plenty) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (220gms)) | Eggless Coffee Mascarpone Ice Cream (Regular Tub (300ml)) | Eggless Coffee Mascarpone Ice Cream (navratri) (Regular Tub (300ml))
 
 ## Eggless Design Your Indulgence Duo Ice Creams [Combo] :: DUO_200ML_200ML
 - menu_item_id: 352d7c2f-4f89-5cf1-bfe5-1f0b84cc05bb
@@ -1445,6 +1420,19 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1284128669 [item] item_rows=104 addon_rows=0 raw_names=Eggless Design Your Indulgence Duo | Eggless Design Your Indulgence Duo Ice Creams (200ml+200ml)
 
+## Eggless Fig & Orange [Ice Cream] :: MINI_TUB_200ML
+- menu_item_id: cbae6128-b66a-572e-8e20-a6d3c92f47dd
+- variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
+- mappings: 3 total, 3 verified
+- rows: 0 item rows, 15 addon rows
+- source item ids: 53507744 | 55826298 | 55826299
+- raw names: Eggless Fig & Orange 200ml | Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
+- historical merged source clusters: (none)
+
+  - source_item_id=53507744 [addon] item_rows=0 addon_rows=2 raw_names=Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
+  - source_item_id=55826298 [addon] item_rows=0 addon_rows=8 raw_names=Eggless Fig & Orange 200ml
+  - source_item_id=55826299 [addon] item_rows=0 addon_rows=5 raw_names=Eggless Fig & Orange 200ml
+
 ## Eggless Fig & Orange Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: c49be7fe-2ec3-52b1-8557-dd6485828789
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
@@ -1456,19 +1444,6 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1285041580 [item] item_rows=7 addon_rows=0 raw_names=Eggless Fig Orange Ice Cream (Junior Scoop) | Fig & Orange Ice Cream (Junior Scoop (60gm))
   - source_item_id=5e83a316-9dad-597a-ab5c-5bbccc4a1544 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-
-## Eggless Fig & Orange Ice Cream [Ice Cream] :: MINI_TUB_200ML
-- menu_item_id: c49be7fe-2ec3-52b1-8557-dd6485828789
-- variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
-- mappings: 3 total, 3 verified
-- rows: 0 item rows, 15 addon rows
-- source item ids: 53507744 | 55826298 | 55826299
-- raw names: Eggless Fig & Orange 200ml | Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
-- historical merged source clusters: Eggless Fig & Orange
-
-  - source_item_id=53507744 [addon] item_rows=0 addon_rows=2 raw_names=Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
-  - source_item_id=55826298 [addon] item_rows=0 addon_rows=8 raw_names=Eggless Fig & Orange 200ml
-  - source_item_id=55826299 [addon] item_rows=0 addon_rows=5 raw_names=Eggless Fig & Orange 200ml
 
 ## Eggless Just Chocolate [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: d09315ed-ca80-55d8-9bf6-95b2d11f5627
@@ -1564,12 +1539,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: b232792d-48d5-5c35-ab86-144a6fb1e43d
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
 - mappings: 4 total, 4 verified
-- rows: 12 item rows, 25 addon rows
+- rows: 13 item rows, 25 addon rows
 - source item ids: 1285048068 | 44abde53-30c2-510f-94c7-7d05d26b4ebc | 54290379 | a76f1a7d-0a75-5abb-9433-0c0cdbe9c449
 - raw names: Eggless Paan & Gulkand Ice Cream (Junior Scoop) | Eggless Paan &amp; Gulkand Ice Cream Small Scoop | Paan & Gulkand Ice Cream (Junior Scoop (60gm))
 - historical merged source clusters: (none)
 
-  - source_item_id=1285048068 [item] item_rows=12 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Junior Scoop) | Paan & Gulkand Ice Cream (Junior Scoop (60gm))
+  - source_item_id=1285048068 [item] item_rows=13 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Junior Scoop) | Paan & Gulkand Ice Cream (Junior Scoop (60gm))
   - source_item_id=44abde53-30c2-510f-94c7-7d05d26b4ebc [unknown] item_rows=0 addon_rows=0 raw_names=(none)
   - source_item_id=54290379 [addon] item_rows=0 addon_rows=25 raw_names=Eggless Paan &amp; Gulkand Ice Cream Small Scoop
   - source_item_id=a76f1a7d-0a75-5abb-9433-0c0cdbe9c449 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
@@ -1578,12 +1553,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: b232792d-48d5-5c35-ab86-144a6fb1e43d
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 11 total, 11 verified
-- rows: 143 item rows, 95 addon rows
+- rows: 148 item rows, 95 addon rows
 - source item ids: 1284985325 | 51217614 | 51217629 | 51217645 | 51217652 | 51492579 | 51949299 | 51975421 | 51975436 | 51975437 | 51975438
 - raw names: Eggless Paan & Gulkand Ice Cream (Mini Indulgence (200ml)) | Eggless Paan & Gulkand Ice Cream (Mini tub (200ml)) | Eggless Paan & Gulkand Ice Cream 200ml | Eggless Paan &amp; Gulkand Ice Cream 200ml | Paan & Gulkand Ice Cream (Mini Tub (160gms)) | Paan & Gulkand Ice Cream (Mini tub (160gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985325 [item] item_rows=143 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Mini Indulgence (200ml)) | Eggless Paan & Gulkand Ice Cream (Mini tub (200ml)) | Paan & Gulkand Ice Cream (Mini Tub (160gms)) | Paan & Gulkand Ice Cream (Mini tub (160gms))
+  - source_item_id=1284985325 [item] item_rows=148 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Mini Indulgence (200ml)) | Eggless Paan & Gulkand Ice Cream (Mini tub (200ml)) | Paan & Gulkand Ice Cream (Mini Tub (160gms)) | Paan & Gulkand Ice Cream (Mini tub (160gms))
   - source_item_id=51217614 [addon] item_rows=0 addon_rows=5 raw_names=Eggless Paan &amp; Gulkand Ice Cream 200ml
   - source_item_id=51217629 [addon] item_rows=0 addon_rows=15 raw_names=Eggless Paan & Gulkand Ice Cream 200ml
   - source_item_id=51217645 [addon] item_rows=0 addon_rows=3 raw_names=Eggless Paan &amp; Gulkand Ice Cream 200ml
@@ -1599,58 +1574,68 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: b232792d-48d5-5c35-ab86-144a6fb1e43d
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 185 item rows, 0 addon rows
+- rows: 194 item rows, 0 addon rows
 - source item ids: 1284985326
 - raw names: Eggless Paan & Gulkand Ice Cream (Regular Scoop) | Paan & Gulkand Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985326 [item] item_rows=185 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Regular Scoop) | Paan & Gulkand Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1284985326 [item] item_rows=194 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Regular Scoop) | Paan & Gulkand Ice Cream (Regular Scoop (120gm))
 
 ## Eggless Paan & Gulkand Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: b232792d-48d5-5c35-ab86-144a6fb1e43d
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 194 item rows, 0 addon rows
+- rows: 196 item rows, 0 addon rows
 - source item ids: 1283123364
 - raw names: Eggless Paan & Gulkand Ice Cream (Perfect Plenty (300ml)) | Eggless Paan & Gulkand Ice Cream (Perfect Plenty) | Eggless Paan & Gulkand Ice Cream (Regular Tub (220gms)) | Eggless Paan & Gulkand Ice Cream (Regular Tub (300ml)) | Eggless Paan & Gulkand Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (200gms)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (300ml)) | Paan & Gulkand Ice Cream (Regular Tub (220gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1283123364 [item] item_rows=194 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Perfect Plenty (300ml)) | Eggless Paan & Gulkand Ice Cream (Perfect Plenty) | Eggless Paan & Gulkand Ice Cream (Regular Tub (220gms)) | Eggless Paan & Gulkand Ice Cream (Regular Tub (300ml)) | Eggless Paan & Gulkand Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (200gms)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (300ml)) | Paan & Gulkand Ice Cream (Regular Tub (220gms))
+  - source_item_id=1283123364 [item] item_rows=196 addon_rows=0 raw_names=Eggless Paan & Gulkand Ice Cream (Perfect Plenty (300ml)) | Eggless Paan & Gulkand Ice Cream (Perfect Plenty) | Eggless Paan & Gulkand Ice Cream (Regular Tub (220gms)) | Eggless Paan & Gulkand Ice Cream (Regular Tub (300ml)) | Eggless Paan & Gulkand Ice Cream (navratri) (Regular Tub (300ml)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (200gms)) | Eggless Paan &amp; Gulkand Ice Cream (Perfect Plenty (300ml)) | Paan & Gulkand Ice Cream (Regular Tub (220gms))
+
+## Eggless Strawberry Cream Cheese [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: e908cd70-4990-5653-8a5e-04c187122355
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 2 total, 2 verified
+- rows: 0 item rows, 32 addon rows
+- source item ids: 54290377 | fa24d0c0-4702-50ca-857e-72e45dc10274
+- raw names: Eggless Strawberry Cream Cheese Small Scoop | Strawberry Cream Cheese (60gm)
+- historical merged source clusters: (none)
+
+  - source_item_id=54290377 [addon] item_rows=0 addon_rows=32 raw_names=Eggless Strawberry Cream Cheese Small Scoop | Strawberry Cream Cheese (60gm)
+  - source_item_id=fa24d0c0-4702-50ca-857e-72e45dc10274 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Eggless Strawberry Cream Cheese Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 49 item rows, 0 addon rows
+- rows: 51 item rows, 0 addon rows
 - source item ids: 1283123385
 - raw names: Eggless Strawberry Cream Cheese Ice Cream (Family Feast (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Feast) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (700ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Family Tub (725ml)) | Strawberry Cream Cheese Ice Cream (Family Tub (500gms))
 - historical merged source clusters: Eggless Strawberry Cream Cheese | Strawberry Sample
 
-  - source_item_id=1283123385 [item] item_rows=49 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Family Feast (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Feast) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (700ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Family Tub (725ml)) | Strawberry Cream Cheese Ice Cream (Family Tub (500gms))
+  - source_item_id=1283123385 [item] item_rows=51 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Family Feast (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Feast) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (700ml)) | Eggless Strawberry Cream Cheese Ice Cream (Family Tub (725ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Family Tub (725ml)) | Strawberry Cream Cheese Ice Cream (Family Tub (500gms))
 
 ## Eggless Strawberry Cream Cheese Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 3 total, 3 verified
-- rows: 26 item rows, 32 addon rows
-- source item ids: 1285048082 | 54290377 | fa24d0c0-4702-50ca-857e-72e45dc10274
-- raw names: Eggless Strawberry Cream Cheese Ice Cream (Junior Scoop) | Eggless Strawberry Cream Cheese Small Scoop | Strawberry Cream Cheese (60gm) | Strawberry Cream Cheese Ice Cream (Junior Scoop (60gm))
+- mappings: 1 total, 1 verified
+- rows: 27 item rows, 0 addon rows
+- source item ids: 1285048082
+- raw names: Eggless Strawberry Cream Cheese Ice Cream (Junior Scoop) | Strawberry Cream Cheese Ice Cream (Junior Scoop (60gm))
 - historical merged source clusters: Eggless Strawberry Cream Cheese | Strawberry Sample
 
-  - source_item_id=1285048082 [item] item_rows=26 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Junior Scoop) | Strawberry Cream Cheese Ice Cream (Junior Scoop (60gm))
-  - source_item_id=54290377 [addon] item_rows=0 addon_rows=32 raw_names=Eggless Strawberry Cream Cheese Small Scoop | Strawberry Cream Cheese (60gm)
-  - source_item_id=fa24d0c0-4702-50ca-857e-72e45dc10274 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=1285048082 [item] item_rows=27 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Junior Scoop) | Strawberry Cream Cheese Ice Cream (Junior Scoop (60gm))
 
 ## Eggless Strawberry Cream Cheese Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 13 total, 13 verified
-- rows: 277 item rows, 91 addon rows
+- rows: 299 item rows, 91 addon rows
 - source item ids: 1284985341 | 51217612 | 51217625 | 51217646 | 51217654 | 51492577 | 51949300 | 51975420 | 51975433 | 51975434 | 51975435 | 52320265 | 52700804
 - raw names: Eggless Strawberry Cream Cheese Ice Cream (Mini Indulgence (200ml)) | Eggless Strawberry Cream Cheese Ice Cream (Mini tub (200ml)) | Eggless Strawberry Cream Cheese Ice Cream 200ml | Strawberry Cream Cheese Ice Cream (Mini Tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (160gms))
 - historical merged source clusters: Eggless Strawberry Cream Cheese | Strawberry Sample
 
-  - source_item_id=1284985341 [item] item_rows=277 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Mini Indulgence (200ml)) | Eggless Strawberry Cream Cheese Ice Cream (Mini tub (200ml)) | Strawberry Cream Cheese Ice Cream (Mini Tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (160gms))
+  - source_item_id=1284985341 [item] item_rows=299 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Mini Indulgence (200ml)) | Eggless Strawberry Cream Cheese Ice Cream (Mini tub (200ml)) | Strawberry Cream Cheese Ice Cream (Mini Tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (160gms))
   - source_item_id=51217612 [addon] item_rows=0 addon_rows=11 raw_names=Eggless Strawberry Cream Cheese Ice Cream 200ml
   - source_item_id=51217625 [addon] item_rows=0 addon_rows=15 raw_names=Eggless Strawberry Cream Cheese Ice Cream 200ml
   - source_item_id=51217646 [addon] item_rows=0 addon_rows=1 raw_names=Eggless Strawberry Cream Cheese Ice Cream 200ml
@@ -1668,34 +1653,59 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 313 item rows, 0 addon rows
+- rows: 327 item rows, 0 addon rows
 - source item ids: 1284985342
 - raw names: Eggless Strawberry Cream Cheese Ice Cream (Regular Scoop) | Strawberry Cream Cheese Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: Eggless Strawberry Cream Cheese | Strawberry Sample
 
-  - source_item_id=1284985342 [item] item_rows=313 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Regular Scoop) | Strawberry Cream Cheese Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1284985342 [item] item_rows=327 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Regular Scoop) | Strawberry Cream Cheese Ice Cream (Regular Scoop (120gm))
 
 ## Eggless Strawberry Cream Cheese Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: bb65ae9b-3a09-5e7a-96ec-82aa8beab2e1
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 351 item rows, 0 addon rows
+- rows: 359 item rows, 0 addon rows
 - source item ids: 1283123384
 - raw names: Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (200gms)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty) | Eggless Strawberry Cream Cheese Ice Cream (Regular Tub (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Regular Tub (300ml)) | Strawberry Cream Cheese Ice Cream (Regular Tub (220gms))
 - historical merged source clusters: Eggless Strawberry Cream Cheese | Strawberry Sample
 
-  - source_item_id=1283123384 [item] item_rows=351 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (200gms)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty) | Eggless Strawberry Cream Cheese Ice Cream (Regular Tub (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Regular Tub (300ml)) | Strawberry Cream Cheese Ice Cream (Regular Tub (220gms))
+  - source_item_id=1283123384 [item] item_rows=359 addon_rows=0 raw_names=Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (200gms)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (Perfect Plenty) | Eggless Strawberry Cream Cheese Ice Cream (Regular Tub (300ml)) | Eggless Strawberry Cream Cheese Ice Cream (navratri) (Regular Tub (300ml)) | Strawberry Cream Cheese Ice Cream (Regular Tub (220gms))
 
 ## Employee Dessert ( Any 1 ) [Dessert] :: 1_PIECE
 - menu_item_id: 333fab67-306a-5a00-9e14-488ac4927ab6
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 47 item rows, 0 addon rows
+- rows: 49 item rows, 0 addon rows
 - source item ids: 1292464076
 - raw names: Employee Dessert ( Any 1 )
 - historical merged source clusters: (none)
 
-  - source_item_id=1292464076 [item] item_rows=47 addon_rows=0 raw_names=Employee Dessert ( Any 1 )
+  - source_item_id=1292464076 [item] item_rows=49 addon_rows=0 raw_names=Employee Dessert ( Any 1 )
+
+## Fig & Orange [Ice Cream] :: MINI_TUB_160GMS
+- menu_item_id: 57542085-c8ca-5822-968b-02c5e6f24558
+- variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 0 addon rows
+- source item ids: 3a26066b-ac9b-56b6-a341-3cfc5590723f
+- raw names: (none)
+- historical merged source clusters: (none)
+
+  - source_item_id=3a26066b-ac9b-56b6-a341-3cfc5590723f [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+
+## Fig & Orange [Ice Cream] :: MINI_TUB_200ML
+- menu_item_id: 57542085-c8ca-5822-968b-02c5e6f24558
+- variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
+- mappings: 4 total, 4 verified
+- rows: 0 item rows, 23 addon rows
+- source item ids: 53507745 | 53507746 | 53507747 | 53507748
+- raw names: Eggless Fig & Orange 200ml | Eggless Fig &amp; Orange 200ml | Fig & Orange 200ml | Fig &amp; Orange 200ml
+- historical merged source clusters: (none)
+
+  - source_item_id=53507745 [addon] item_rows=0 addon_rows=1 raw_names=Fig &amp; Orange 200ml
+  - source_item_id=53507746 [addon] item_rows=0 addon_rows=4 raw_names=Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
+  - source_item_id=53507747 [addon] item_rows=0 addon_rows=15 raw_names=Eggless Fig & Orange 200ml | Fig & Orange 200ml
+  - source_item_id=53507748 [addon] item_rows=0 addon_rows=3 raw_names=Eggless Fig & Orange 200ml | Fig & Orange 200ml
 
 ## Fig & Orange Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: af249e85-4855-5076-867f-139e7e79da37
@@ -1723,34 +1733,29 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Fig & Orange Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: af249e85-4855-5076-867f-139e7e79da37
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
-- mappings: 3 total, 3 verified
+- mappings: 2 total, 2 verified
 - rows: 0 item rows, 0 addon rows
-- source item ids: 26706441-317b-56c7-a919-a15c4c5aff5b | 3a26066b-ac9b-56b6-a341-3cfc5590723f | bd7b2544-405e-5b1f-ad4d-07bee01b06da
+- source item ids: 26706441-317b-56c7-a919-a15c4c5aff5b | bd7b2544-405e-5b1f-ad4d-07bee01b06da
 - raw names: (none)
 - historical merged source clusters: Fig & Orange | Fig & Orange (60gm) | Fig & Orange Sample
 
   - source_item_id=26706441-317b-56c7-a919-a15c4c5aff5b [unknown] item_rows=0 addon_rows=0 raw_names=(none)
-  - source_item_id=3a26066b-ac9b-56b6-a341-3cfc5590723f [unknown] item_rows=0 addon_rows=0 raw_names=(none)
   - source_item_id=bd7b2544-405e-5b1f-ad4d-07bee01b06da [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Fig & Orange Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: af249e85-4855-5076-867f-139e7e79da37
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
-- mappings: 9 total, 9 verified
-- rows: 111 item rows, 72 addon rows
-- source item ids: 1284985010 | 51217616 | 51217633 | 51217661 | 51492581 | 53507745 | 53507746 | 53507747 | 53507748
-- raw names: Eggless Fig & Orange 200ml | Eggless Fig & Orange Ice Cream 200ml | Eggless Fig &amp; Orange 200ml | Eggless Fig Orange Ice Cream (Mini tub (200ml)) | Fig & Orange 200ml | Fig & Orange Ice Cream (Mini Tub (160gms)) | Fig & Orange Ice Cream (Mini tub (160gms)) | Fig & Orange Ice Cream 200ml | Fig &amp; Orange 200ml | Fig &amp; Orange Ice Cream 200ml | Fig Orange Ice Cream (Mini tub (200ml))
+- mappings: 5 total, 5 verified
+- rows: 119 item rows, 49 addon rows
+- source item ids: 1284985010 | 51217616 | 51217633 | 51217661 | 51492581
+- raw names: Eggless Fig & Orange Ice Cream 200ml | Eggless Fig Orange Ice Cream (Mini tub (200ml)) | Fig & Orange Ice Cream (Mini Tub (160gms)) | Fig & Orange Ice Cream (Mini tub (160gms)) | Fig & Orange Ice Cream 200ml | Fig &amp; Orange Ice Cream 200ml | Fig Orange Ice Cream (Mini tub (200ml))
 - historical merged source clusters: Fig & Orange | Fig & Orange (60gm) | Fig & Orange Sample
 
-  - source_item_id=1284985010 [item] item_rows=111 addon_rows=0 raw_names=Eggless Fig Orange Ice Cream (Mini tub (200ml)) | Fig & Orange Ice Cream (Mini Tub (160gms)) | Fig & Orange Ice Cream (Mini tub (160gms)) | Fig Orange Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985010 [item] item_rows=119 addon_rows=0 raw_names=Eggless Fig Orange Ice Cream (Mini tub (200ml)) | Fig & Orange Ice Cream (Mini Tub (160gms)) | Fig & Orange Ice Cream (Mini tub (160gms)) | Fig Orange Ice Cream (Mini tub (200ml))
   - source_item_id=51217616 [addon] item_rows=0 addon_rows=2 raw_names=Fig &amp; Orange Ice Cream 200ml
   - source_item_id=51217633 [addon] item_rows=0 addon_rows=34 raw_names=Eggless Fig & Orange Ice Cream 200ml | Fig & Orange Ice Cream 200ml
   - source_item_id=51217661 [addon] item_rows=0 addon_rows=1 raw_names=Fig &amp; Orange Ice Cream 200ml
   - source_item_id=51492581 [addon] item_rows=0 addon_rows=12 raw_names=Eggless Fig & Orange Ice Cream 200ml | Fig & Orange Ice Cream 200ml
-  - source_item_id=53507745 [addon] item_rows=0 addon_rows=1 raw_names=Fig &amp; Orange 200ml
-  - source_item_id=53507746 [addon] item_rows=0 addon_rows=4 raw_names=Eggless Fig &amp; Orange 200ml | Fig &amp; Orange 200ml
-  - source_item_id=53507747 [addon] item_rows=0 addon_rows=15 raw_names=Eggless Fig & Orange 200ml | Fig & Orange 200ml
-  - source_item_id=53507748 [addon] item_rows=0 addon_rows=3 raw_names=Eggless Fig & Orange 200ml | Fig & Orange 200ml
 
 ## Fig & Orange Ice Cream [Ice Cream] :: PERFECT_PLENTY_200GMS
 - menu_item_id: af249e85-4855-5076-867f-139e7e79da37
@@ -1767,23 +1772,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: af249e85-4855-5076-867f-139e7e79da37
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 177 item rows, 0 addon rows
+- rows: 185 item rows, 0 addon rows
 - source item ids: 1284985133
 - raw names: Eggless Fig Orange Ice Cream (Regular Scoop) | Fig & Orange Ice Cream (Regular Scoop (120gm)) | Fig Orange Ice Cream (Regular Scoop)
 - historical merged source clusters: Fig & Orange | Fig & Orange (60gm) | Fig & Orange Sample
 
-  - source_item_id=1284985133 [item] item_rows=177 addon_rows=0 raw_names=Eggless Fig Orange Ice Cream (Regular Scoop) | Fig & Orange Ice Cream (Regular Scoop (120gm)) | Fig Orange Ice Cream (Regular Scoop)
+  - source_item_id=1284985133 [item] item_rows=185 addon_rows=0 raw_names=Eggless Fig Orange Ice Cream (Regular Scoop) | Fig & Orange Ice Cream (Regular Scoop (120gm)) | Fig Orange Ice Cream (Regular Scoop)
 
 ## Fudgy Chocolate Brownie [Dessert] :: 1_PIECE
 - menu_item_id: 1182c413-4f67-5339-adb3-b4329846ab53
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 4 total, 4 verified
-- rows: 45 item rows, 4 addon rows
+- rows: 47 item rows, 4 addon rows
 - source item ids: 1293968810 | 60840446 | 60841060 | b48d80d1-5208-54f6-9df9-d1e82b43ff05
 - raw names: Fudgy Chocolate Brownie | Fudgy Chocolate Brownie (1pc)
 - historical merged source clusters: (none)
 
-  - source_item_id=1293968810 [item] item_rows=45 addon_rows=0 raw_names=Fudgy Chocolate Brownie | Fudgy Chocolate Brownie (1pc)
+  - source_item_id=1293968810 [item] item_rows=47 addon_rows=0 raw_names=Fudgy Chocolate Brownie | Fudgy Chocolate Brownie (1pc)
   - source_item_id=60840446 [addon] item_rows=0 addon_rows=2 raw_names=Fudgy Chocolate Brownie (1pc)
   - source_item_id=60841060 [addon] item_rows=0 addon_rows=2 raw_names=Fudgy Chocolate Brownie (1pc)
   - source_item_id=b48d80d1-5208-54f6-9df9-d1e82b43ff05 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
@@ -1792,12 +1797,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 1182c413-4f67-5339-adb3-b4329846ab53
 - variant_id: 5f354550-0f38-58c3-ad16-97672a66817d
 - mappings: 1 total, 1 verified
-- rows: 91 item rows, 0 addon rows
+- rows: 92 item rows, 0 addon rows
 - source item ids: 1295954711
 - raw names: Fudgy Chocolate Brownie (2pcs) - Round Shape
 - historical merged source clusters: (none)
 
-  - source_item_id=1295954711 [item] item_rows=91 addon_rows=0 raw_names=Fudgy Chocolate Brownie (2pcs) - Round Shape
+  - source_item_id=1295954711 [item] item_rows=92 addon_rows=0 raw_names=Fudgy Chocolate Brownie (2pcs) - Round Shape
 
 ## Go Bananas Ice Cream [Ice Cream] :: MINI_TUB_200ML
 - menu_item_id: 43b1f9c5-9438-5be8-bc91-488ff9c56d3d
@@ -1815,12 +1820,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 32941b27-b380-5495-add7-8022f4c99487
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 376 item rows, 0 addon rows
+- rows: 396 item rows, 0 addon rows
 - source item ids: 1285947613
 - raw names: Half In Half Regular Scoop Combo
 - historical merged source clusters: (none)
 
-  - source_item_id=1285947613 [item] item_rows=376 addon_rows=0 raw_names=Half In Half Regular Scoop Combo
+  - source_item_id=1285947613 [item] item_rows=396 addon_rows=0 raw_names=Half In Half Regular Scoop Combo
 
 ## Hot Chocolate [Drinks] :: 1_PIECE
 - menu_item_id: 113d84b7-b764-54a0-aeab-d349fec36b83
@@ -1848,12 +1853,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 68e9f641-0d12-5699-bda0-0fc452640a25
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 15 item rows, 0 addon rows
+- rows: 17 item rows, 0 addon rows
 - source item ids: 1298471396
 - raw names: Hot Chocolate Fudge Sauce 50gm
 - historical merged source clusters: (none)
 
-  - source_item_id=1298471396 [item] item_rows=15 addon_rows=0 raw_names=Hot Chocolate Fudge Sauce 50gm
+  - source_item_id=1298471396 [item] item_rows=17 addon_rows=0 raw_names=Hot Chocolate Fudge Sauce 50gm
 
 ## Ice Cream Cake [Ice Cream] :: 1KG
 - menu_item_id: 1f051617-9f42-5495-984d-01f0b811f45f
@@ -1881,12 +1886,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 9dfd092f-1a87-5eec-9536-b4f0acb02f6c
 - variant_id: 190eb2e5-5671-55be-ac33-57907b87a2ce
 - mappings: 1 total, 1 verified
-- rows: 9 item rows, 0 addon rows
+- rows: 10 item rows, 0 addon rows
 - source item ids: 1282786652
 - raw names: Ice Cream Factory Visit & Trials(family)
 - historical merged source clusters: (none)
 
-  - source_item_id=1282786652 [item] item_rows=9 addon_rows=0 raw_names=Ice Cream Factory Visit & Trials(family)
+  - source_item_id=1282786652 [item] item_rows=10 addon_rows=0 raw_names=Ice Cream Factory Visit & Trials(family)
 
 ## Ice Cream Factory Visit & Trials [Service] :: SINGLE
 - menu_item_id: 9dfd092f-1a87-5eec-9536-b4f0acb02f6c
@@ -1899,6 +1904,17 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 
   - source_item_id=1282786651 [item] item_rows=2 addon_rows=0 raw_names=Ice Cream Factory Visit & Trials (single)
 
+## Just Chocolate [Ice Cream] :: JUNIOR_SCOOP_60GMS
+- menu_item_id: 5b5641cb-5e82-543b-b6fe-1014f0d327b6
+- variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 0 addon rows
+- source item ids: 00b14d19-2d70-56b5-8337-a0bad8d71a04
+- raw names: (none)
+- historical merged source clusters: Just Chocolate (andra) (60gm)
+
+  - source_item_id=00b14d19-2d70-56b5-8337-a0bad8d71a04 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+
 ## Just Chocolate [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 5b5641cb-5e82-543b-b6fe-1014f0d327b6
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
@@ -1906,7 +1922,7 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - rows: 0 item rows, 0 addon rows
 - source item ids: fe18f747-ce4b-52b3-8aff-f4f37aa9afdb
 - raw names: (none)
-- historical merged source clusters: (none)
+- historical merged source clusters: Just Chocolate (andra) (60gm)
 
   - source_item_id=fe18f747-ce4b-52b3-8aff-f4f37aa9afdb [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
@@ -1948,34 +1964,34 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 8b5194fc-8f8e-59ee-9367-e4d63f1a39a4
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
 - mappings: 1 total, 1 verified
-- rows: 66 item rows, 0 addon rows
+- rows: 71 item rows, 0 addon rows
 - source item ids: 1300982022
 - raw names: Lemongrass, Ginger & Lemon Jam Ice Cream (Mini Tub (160gms)) | Lemongrass, Ginger & Lemon Jam Ice Cream (Mini tub (160gms)) | Lemongrass, Ginger &amp; Lemon Jam Ice Cream (Mini Tub (160gms))
 - historical merged source clusters: Lemongrass Ginger & Lemon Jam | Lemongrass Ginger & Lemon Jam Ice Cream | Lemongrass Ginger Sample
 
-  - source_item_id=1300982022 [item] item_rows=66 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Mini Tub (160gms)) | Lemongrass, Ginger & Lemon Jam Ice Cream (Mini tub (160gms)) | Lemongrass, Ginger &amp; Lemon Jam Ice Cream (Mini Tub (160gms))
+  - source_item_id=1300982022 [item] item_rows=71 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Mini Tub (160gms)) | Lemongrass, Ginger & Lemon Jam Ice Cream (Mini tub (160gms)) | Lemongrass, Ginger &amp; Lemon Jam Ice Cream (Mini Tub (160gms))
 
 ## Lemongrass, Ginger & Lemon Jam Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 8b5194fc-8f8e-59ee-9367-e4d63f1a39a4
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 63 item rows, 0 addon rows
+- rows: 74 item rows, 0 addon rows
 - source item ids: 1300982021
 - raw names: Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: Lemongrass Ginger & Lemon Jam | Lemongrass Ginger & Lemon Jam Ice Cream | Lemongrass Ginger Sample
 
-  - source_item_id=1300982021 [item] item_rows=63 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1300982021 [item] item_rows=74 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Scoop (120gm))
 
 ## Lemongrass, Ginger & Lemon Jam Ice Cream [Ice Cream] :: REGULAR_TUB_220GMS
 - menu_item_id: 8b5194fc-8f8e-59ee-9367-e4d63f1a39a4
 - variant_id: e1b8037f-345a-52d6-ae94-cc115490705a
 - mappings: 1 total, 1 verified
-- rows: 25 item rows, 0 addon rows
+- rows: 28 item rows, 0 addon rows
 - source item ids: 1300982023
 - raw names: Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Tub (220gms))
 - historical merged source clusters: Lemongrass Ginger & Lemon Jam | Lemongrass Ginger & Lemon Jam Ice Cream | Lemongrass Ginger Sample
 
-  - source_item_id=1300982023 [item] item_rows=25 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Tub (220gms))
+  - source_item_id=1300982023 [item] item_rows=28 addon_rows=0 raw_names=Lemongrass, Ginger & Lemon Jam Ice Cream (Regular Tub (220gms))
 
 ## Masala Chai Ice Cream [Ice Cream] :: FAMILY_TUB_700ML
 - menu_item_id: 7e934374-853c-5250-a690-ad9f0abea8a4
@@ -2041,12 +2057,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 7e934374-853c-5250-a690-ad9f0abea8a4
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 28 item rows, 0 addon rows
+- rows: 29 item rows, 0 addon rows
 - source item ids: 1282581666
 - raw names: Masala Chai Ice Cream (Perfect Plenty (300ml)) | Masala Chai Ice Cream (Regular Tub (220gms)) | Masala Chai Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Masala Chai (60gm)
 
-  - source_item_id=1282581666 [item] item_rows=28 addon_rows=0 raw_names=Masala Chai Ice Cream (Perfect Plenty (300ml)) | Masala Chai Ice Cream (Regular Tub (220gms)) | Masala Chai Ice Cream (Regular Tub (300ml))
+  - source_item_id=1282581666 [item] item_rows=29 addon_rows=0 raw_names=Masala Chai Ice Cream (Perfect Plenty (300ml)) | Masala Chai Ice Cream (Regular Tub (220gms)) | Masala Chai Ice Cream (Regular Tub (300ml))
 
 ## Matcha Berries Ice Cream [Ice Cream] :: FAMILY_TUB_500GMS
 - menu_item_id: 44b22abe-2ca0-5a2e-8919-43396cfdecda
@@ -2063,12 +2079,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 44b22abe-2ca0-5a2e-8919-43396cfdecda
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
 - mappings: 1 total, 1 verified
-- rows: 30 item rows, 0 addon rows
+- rows: 31 item rows, 0 addon rows
 - source item ids: 1299587666
 - raw names: Matcha Berries Ice Cream (Mini Tub (160gms)) | Matcha Berries Ice Cream (Mini tub (160gms))
 - historical merged source clusters: (none)
 
-  - source_item_id=1299587666 [item] item_rows=30 addon_rows=0 raw_names=Matcha Berries Ice Cream (Mini Tub (160gms)) | Matcha Berries Ice Cream (Mini tub (160gms))
+  - source_item_id=1299587666 [item] item_rows=31 addon_rows=0 raw_names=Matcha Berries Ice Cream (Mini Tub (160gms)) | Matcha Berries Ice Cream (Mini tub (160gms))
 
 ## Matcha Berries Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 44b22abe-2ca0-5a2e-8919-43396cfdecda
@@ -2080,6 +2096,17 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - historical merged source clusters: (none)
 
   - source_item_id=1299587665 [item] item_rows=18 addon_rows=0 raw_names=Matcha Berries Ice Cream (Regular Scoop (120gm))
+
+## Matcha Berries Ice Cream [Ice Cream] :: REGULAR_TUB_220GMS
+- menu_item_id: 44b22abe-2ca0-5a2e-8919-43396cfdecda
+- variant_id: e1b8037f-345a-52d6-ae94-cc115490705a
+- mappings: 1 total, 1 verified
+- rows: 7 item rows, 0 addon rows
+- source item ids: 1299587667
+- raw names: Matcha Berries Ice Cream (Regular Tub (220gms))
+- historical merged source clusters: (none)
+
+  - source_item_id=1299587667 [item] item_rows=7 addon_rows=0 raw_names=Matcha Berries Ice Cream (Regular Tub (220gms))
 
 ## Mocha Indulgence Duo Ice Creams [Combo] :: DUO_200ML_200ML
 - menu_item_id: 0e5a948e-b98d-52c2-96ae-9e4a8ae8a6df
@@ -2096,12 +2123,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 3c11f5f6-0712-593a-972b-b3a9acb398b5
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 54 item rows, 0 addon rows
+- rows: 55 item rows, 0 addon rows
 - source item ids: 1282807671
 - raw names: Monkey Business Ice Cream (Family Feast (550gms)) | Monkey Business Ice Cream (Family Feast (725ml)) | Monkey Business Ice Cream (Family Feast) | Monkey Business Ice Cream (Family Tub (500gms)) | Monkey Business Ice Cream (Family Tub (700ml)) | Monkey Business Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Monkey Business Ice Cream (60gm)
 
-  - source_item_id=1282807671 [item] item_rows=54 addon_rows=0 raw_names=Monkey Business Ice Cream (Family Feast (550gms)) | Monkey Business Ice Cream (Family Feast (725ml)) | Monkey Business Ice Cream (Family Feast) | Monkey Business Ice Cream (Family Tub (500gms)) | Monkey Business Ice Cream (Family Tub (700ml)) | Monkey Business Ice Cream (Family Tub (725ml))
+  - source_item_id=1282807671 [item] item_rows=55 addon_rows=0 raw_names=Monkey Business Ice Cream (Family Feast (550gms)) | Monkey Business Ice Cream (Family Feast (725ml)) | Monkey Business Ice Cream (Family Feast) | Monkey Business Ice Cream (Family Tub (500gms)) | Monkey Business Ice Cream (Family Tub (700ml)) | Monkey Business Ice Cream (Family Tub (725ml))
 
 ## Monkey Business Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 3c11f5f6-0712-593a-972b-b3a9acb398b5
@@ -2131,12 +2158,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 3c11f5f6-0712-593a-972b-b3a9acb398b5
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 11 total, 11 verified
-- rows: 112 item rows, 86 addon rows
+- rows: 121 item rows, 86 addon rows
 - source item ids: 1284985076 | 51217618 | 51217637 | 51217659 | 51492583 | 51975428 | 51975457 | 51975458 | 51975459 | 52320273 | 52700810
 - raw names: Monkey Business Ice Cream (Mini Tub (160gms)) | Monkey Business Ice Cream (Mini tub (160gms)) | Monkey Business Ice Cream (Mini tub (200ml)) | Monkey Business Ice Cream 200ml
 - historical merged source clusters: Monkey Business Ice Cream (60gm)
 
-  - source_item_id=1284985076 [item] item_rows=112 addon_rows=0 raw_names=Monkey Business Ice Cream (Mini Tub (160gms)) | Monkey Business Ice Cream (Mini tub (160gms)) | Monkey Business Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985076 [item] item_rows=121 addon_rows=0 raw_names=Monkey Business Ice Cream (Mini Tub (160gms)) | Monkey Business Ice Cream (Mini tub (160gms)) | Monkey Business Ice Cream (Mini tub (200ml))
   - source_item_id=51217618 [addon] item_rows=0 addon_rows=1 raw_names=Monkey Business Ice Cream 200ml
   - source_item_id=51217637 [addon] item_rows=0 addon_rows=32 raw_names=Monkey Business Ice Cream 200ml
   - source_item_id=51217659 [addon] item_rows=0 addon_rows=1 raw_names=Monkey Business Ice Cream 200ml
@@ -2152,34 +2179,45 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 3c11f5f6-0712-593a-972b-b3a9acb398b5
 - variant_id: c6438ece-1c0e-5db1-860f-27f45090a616
 - mappings: 1 total, 1 verified
-- rows: 254 item rows, 0 addon rows
+- rows: 259 item rows, 0 addon rows
 - source item ids: 1282807670
 - raw names: Monkey Business Ice Cream (Perfect Plenty (300ml)) | Monkey Business Ice Cream (Regular Tub (220gms)) | Monkey Business Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Monkey Business Ice Cream (60gm)
 
-  - source_item_id=1282807670 [item] item_rows=254 addon_rows=0 raw_names=Monkey Business Ice Cream (Perfect Plenty (300ml)) | Monkey Business Ice Cream (Regular Tub (220gms)) | Monkey Business Ice Cream (Regular Tub (300ml))
+  - source_item_id=1282807670 [item] item_rows=259 addon_rows=0 raw_names=Monkey Business Ice Cream (Perfect Plenty (300ml)) | Monkey Business Ice Cream (Regular Tub (220gms)) | Monkey Business Ice Cream (Regular Tub (300ml))
 
 ## Monkey Business Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 3c11f5f6-0712-593a-972b-b3a9acb398b5
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 193 item rows, 0 addon rows
+- rows: 206 item rows, 0 addon rows
 - source item ids: 1284985077
 - raw names: Monkey Business Ice Cream (Regular Scoop (120gm)) | Monkey Business Ice Cream (Regular Scoop)
 - historical merged source clusters: Monkey Business Ice Cream (60gm)
 
-  - source_item_id=1284985077 [item] item_rows=193 addon_rows=0 raw_names=Monkey Business Ice Cream (Regular Scoop (120gm)) | Monkey Business Ice Cream (Regular Scoop)
+  - source_item_id=1284985077 [item] item_rows=206 addon_rows=0 raw_names=Monkey Business Ice Cream (Regular Scoop (120gm)) | Monkey Business Ice Cream (Regular Scoop)
+
+## Monkey Business Ice Cream (60gm) [Ice Cream] :: 1_PIECE
+- menu_item_id: 159552a6-5f13-5cb8-b40f-1c62466c8956
+- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
+- mappings: 1 total, 1 verified
+- rows: 0 item rows, 0 addon rows
+- source item ids: 91129549-cbd3-5062-83e6-f08837d69de4
+- raw names: (none)
+- historical merged source clusters: (none)
+
+  - source_item_id=91129549-cbd3-5062-83e6-f08837d69de4 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## New York Baked Cheesecake Eggless [Dessert] :: 1_PIECE
 - menu_item_id: 6d2881a0-8482-57ba-893b-fbfc9ddcd367
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 336 item rows, 0 addon rows
+- rows: 340 item rows, 0 addon rows
 - source item ids: 1291293953
 - raw names: New York Baked Cheesecake Eggless
 - historical merged source clusters: (none)
 
-  - source_item_id=1291293953 [item] item_rows=336 addon_rows=0 raw_names=New York Baked Cheesecake Eggless
+  - source_item_id=1291293953 [item] item_rows=340 addon_rows=0 raw_names=New York Baked Cheesecake Eggless
 
 ## Nona’s Traditional Plum Cake Eggless Contains Alcohol [Dessert] :: 1_PIECE
 - menu_item_id: eb43e82b-3d0c-5e2c-9e41-d8db18962404
@@ -2208,23 +2246,24 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 64 item rows, 0 addon rows
+- rows: 70 item rows, 0 addon rows
 - source item ids: 1282571500
 - raw names: Old Fashion Vanilla Ice Cream (Family Feast (725ml)) | Old Fashion Vanilla Ice Cream (Family Feast) | Old Fashion Vanilla Ice Cream (Family Tub (500gms)) | Old Fashion Vanilla Ice Cream (Family Tub (700ml)) | Old Fashion Vanilla Ice Cream (Family Tub (725ml))
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
-  - source_item_id=1282571500 [item] item_rows=64 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Family Feast (725ml)) | Old Fashion Vanilla Ice Cream (Family Feast) | Old Fashion Vanilla Ice Cream (Family Tub (500gms)) | Old Fashion Vanilla Ice Cream (Family Tub (700ml)) | Old Fashion Vanilla Ice Cream (Family Tub (725ml))
+  - source_item_id=1282571500 [item] item_rows=70 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Family Feast (725ml)) | Old Fashion Vanilla Ice Cream (Family Feast) | Old Fashion Vanilla Ice Cream (Family Tub (500gms)) | Old Fashion Vanilla Ice Cream (Family Tub (700ml)) | Old Fashion Vanilla Ice Cream (Family Tub (725ml))
 
 ## Old Fashion Vanilla Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 1 total, 1 verified
-- rows: 15 item rows, 0 addon rows
-- source item ids: 1285048138
+- mappings: 2 total, 2 verified
+- rows: 16 item rows, 0 addon rows
+- source item ids: 1285048138 | 34d13340-caba-5cb5-a372-a460ab56743c
 - raw names: Old Fashion Vanilla Ice Cream (Junior Scoop (60gm)) | Old Fashion Vanilla Ice Cream (Junior Scoop)
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
-  - source_item_id=1285048138 [item] item_rows=15 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Junior Scoop (60gm)) | Old Fashion Vanilla Ice Cream (Junior Scoop)
+  - source_item_id=1285048138 [item] item_rows=16 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Junior Scoop (60gm)) | Old Fashion Vanilla Ice Cream (Junior Scoop)
+  - source_item_id=34d13340-caba-5cb5-a372-a460ab56743c [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Old Fashion Vanilla Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
@@ -2233,7 +2272,7 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - rows: 0 item rows, 0 addon rows
 - source item ids: c226a257-ccd8-53d2-a824-d75755e5695f
 - raw names: (none)
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
   - source_item_id=c226a257-ccd8-53d2-a824-d75755e5695f [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
@@ -2241,12 +2280,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 11 total, 11 verified
-- rows: 157 item rows, 73 addon rows
+- rows: 164 item rows, 73 addon rows
 - source item ids: 1284985704 | 51217594 | 51217615 | 51217631 | 51492543 | 51492580 | 51975426 | 51975452 | 51975453 | 52320271 | 52700813
 - raw names: Old Fashion Vanilla Ice Cream (Mini Tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (200ml)) | Old Fashion Vanilla Ice Cream 200ml
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
-  - source_item_id=1284985704 [item] item_rows=157 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Mini Tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985704 [item] item_rows=164 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Mini Tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (160gms)) | Old Fashion Vanilla Ice Cream (Mini tub (200ml))
   - source_item_id=51217594 [addon] item_rows=0 addon_rows=1 raw_names=Old Fashion Vanilla Ice Cream 200ml
   - source_item_id=51217615 [addon] item_rows=0 addon_rows=2 raw_names=Old Fashion Vanilla Ice Cream 200ml
   - source_item_id=51217631 [addon] item_rows=0 addon_rows=28 raw_names=Old Fashion Vanilla Ice Cream 200ml
@@ -2262,23 +2301,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 142 item rows, 0 addon rows
+- rows: 147 item rows, 0 addon rows
 - source item ids: 1284985705
 - raw names: Old Fashion Vanilla Ice Cream (Regular Scoop (120gm)) | Old Fashion Vanilla Ice Cream (Regular Scoop) | Old Fashion Vanilla Ice Cream (Scoop)
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
-  - source_item_id=1284985705 [item] item_rows=142 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Regular Scoop (120gm)) | Old Fashion Vanilla Ice Cream (Regular Scoop) | Old Fashion Vanilla Ice Cream (Scoop)
+  - source_item_id=1284985705 [item] item_rows=147 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Regular Scoop (120gm)) | Old Fashion Vanilla Ice Cream (Regular Scoop) | Old Fashion Vanilla Ice Cream (Scoop)
 
 ## Old Fashion Vanilla Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 31419064-2567-548d-9219-0897562e6367
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 215 item rows, 0 addon rows
+- rows: 219 item rows, 0 addon rows
 - source item ids: 1282571499
 - raw names: Old Fashion Vanilla Ice Cream (Perfect Plenty (300ml)) | Old Fashion Vanilla Ice Cream (Perfect Plenty) | Old Fashion Vanilla Ice Cream (Regular Tub (220gms)) | Old Fashion Vanilla Ice Cream (Regular Tub (300ml)) | Old Fashion Vanilla Ice Cream (Regular)
-- historical merged source clusters: (none)
+- historical merged source clusters: Old Fashion Vanilla (60gm)
 
-  - source_item_id=1282571499 [item] item_rows=215 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Perfect Plenty (300ml)) | Old Fashion Vanilla Ice Cream (Perfect Plenty) | Old Fashion Vanilla Ice Cream (Regular Tub (220gms)) | Old Fashion Vanilla Ice Cream (Regular Tub (300ml)) | Old Fashion Vanilla Ice Cream (Regular)
+  - source_item_id=1282571499 [item] item_rows=219 addon_rows=0 raw_names=Old Fashion Vanilla Ice Cream (Perfect Plenty (300ml)) | Old Fashion Vanilla Ice Cream (Perfect Plenty) | Old Fashion Vanilla Ice Cream (Regular Tub (220gms)) | Old Fashion Vanilla Ice Cream (Regular Tub (300ml)) | Old Fashion Vanilla Ice Cream (Regular)
 
 ## Old Fashioned Vanilla Ice Cream ( Recommended ) [Ice Cream] :: 1_PIECE
 - menu_item_id: be8d8dcf-6163-5ef5-ba7f-c08f8e599005
@@ -2309,12 +2348,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: d4c5cdb2-07f9-53bd-a880-740ba64b42f6
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 266 item rows, 0 addon rows
+- rows: 272 item rows, 0 addon rows
 - source item ids: 1294028425
 - raw names: Orange & Chocolate Cheesecake | Orange &amp; Chocolate Cheesecake
 - historical merged source clusters: (none)
 
-  - source_item_id=1294028425 [item] item_rows=266 addon_rows=0 raw_names=Orange & Chocolate Cheesecake | Orange &amp; Chocolate Cheesecake
+  - source_item_id=1294028425 [item] item_rows=272 addon_rows=0 raw_names=Orange & Chocolate Cheesecake | Orange &amp; Chocolate Cheesecake
 
 ## Orange (Contains Alcohol) Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: b2d62165-7d97-5797-8cc8-07023bc9fa47
@@ -2353,12 +2392,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 40ad4449-a346-58aa-b244-0e948b030f27
 - variant_id: 6326525b-bdc3-534a-9f1a-1f0586c04d1b
 - mappings: 1 total, 1 verified
-- rows: 9 item rows, 0 addon rows
+- rows: 12 item rows, 0 addon rows
 - source item ids: 1302246705
 - raw names: Orange With Orange Jam Ice Cream (Family Tub (500gms))
 - historical merged source clusters: Orange And Orange Jam (60gm) | Orange With Orange Jam Ice Cream
 
-  - source_item_id=1302246705 [item] item_rows=9 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Family Tub (500gms))
+  - source_item_id=1302246705 [item] item_rows=12 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Family Tub (500gms))
 
 ## Orange With Orange Jam [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 40ad4449-a346-58aa-b244-0e948b030f27
@@ -2375,34 +2414,34 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 40ad4449-a346-58aa-b244-0e948b030f27
 - variant_id: a1df2a57-b94a-56db-b890-3cba1e7aa15c
 - mappings: 1 total, 1 verified
-- rows: 43 item rows, 0 addon rows
+- rows: 57 item rows, 0 addon rows
 - source item ids: 1302246703
 - raw names: Orange With Orange Jam Ice Cream (Mini Tub (160gms)) | Orange With Orange Jam Ice Cream (Mini tub (160gms))
 - historical merged source clusters: Orange And Orange Jam (60gm) | Orange With Orange Jam Ice Cream
 
-  - source_item_id=1302246703 [item] item_rows=43 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Mini Tub (160gms)) | Orange With Orange Jam Ice Cream (Mini tub (160gms))
+  - source_item_id=1302246703 [item] item_rows=57 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Mini Tub (160gms)) | Orange With Orange Jam Ice Cream (Mini tub (160gms))
 
 ## Orange With Orange Jam [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: 40ad4449-a346-58aa-b244-0e948b030f27
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 68 item rows, 0 addon rows
+- rows: 87 item rows, 0 addon rows
 - source item ids: 1302246702
 - raw names: Orange With Orange Jam Ice Cream (Regular Scoop (120gm))
 - historical merged source clusters: Orange And Orange Jam (60gm) | Orange With Orange Jam Ice Cream
 
-  - source_item_id=1302246702 [item] item_rows=68 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Regular Scoop (120gm))
+  - source_item_id=1302246702 [item] item_rows=87 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Regular Scoop (120gm))
 
 ## Orange With Orange Jam [Ice Cream] :: REGULAR_TUB_220GMS
 - menu_item_id: 40ad4449-a346-58aa-b244-0e948b030f27
 - variant_id: e1b8037f-345a-52d6-ae94-cc115490705a
 - mappings: 1 total, 1 verified
-- rows: 30 item rows, 0 addon rows
+- rows: 35 item rows, 0 addon rows
 - source item ids: 1302246704
 - raw names: Orange With Orange Jam Ice Cream (Regular Tub (220gms))
 - historical merged source clusters: Orange And Orange Jam (60gm) | Orange With Orange Jam Ice Cream
 
-  - source_item_id=1302246704 [item] item_rows=30 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Regular Tub (220gms))
+  - source_item_id=1302246704 [item] item_rows=35 addon_rows=0 raw_names=Orange With Orange Jam Ice Cream (Regular Tub (220gms))
 
 ## Paan & Gulkand Ice Cream [Ice Cream] :: MINI_TUB_160GMS
 - menu_item_id: 94ef9647-4895-5e12-8c73-dc56f3b16e89
@@ -2452,23 +2491,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 2998b13f-df5c-591e-b432-c0068d41af92
 - variant_id: b43993c2-8f3b-541e-af64-c9599eba6e7d
 - mappings: 1 total, 1 verified
-- rows: 54 item rows, 0 addon rows
+- rows: 55 item rows, 0 addon rows
 - source item ids: 1282581560
 - raw names: Pistachio Ice Cream (Family Feast (725ml)) | Pistachio Ice Cream (Family Feast) | Pistachio Ice Cream (Family Tub (500gms)) | Pistachio Ice Cream (Family Tub (700ml)) | Pistachio Ice Cream (Family Tub (725ml))
 - historical merged source clusters: Pistachio Ice Cream (60gm)
 
-  - source_item_id=1282581560 [item] item_rows=54 addon_rows=0 raw_names=Pistachio Ice Cream (Family Feast (725ml)) | Pistachio Ice Cream (Family Feast) | Pistachio Ice Cream (Family Tub (500gms)) | Pistachio Ice Cream (Family Tub (700ml)) | Pistachio Ice Cream (Family Tub (725ml))
+  - source_item_id=1282581560 [item] item_rows=55 addon_rows=0 raw_names=Pistachio Ice Cream (Family Feast (725ml)) | Pistachio Ice Cream (Family Feast) | Pistachio Ice Cream (Family Tub (500gms)) | Pistachio Ice Cream (Family Tub (700ml)) | Pistachio Ice Cream (Family Tub (725ml))
 
 ## Pistachio Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 2998b13f-df5c-591e-b432-c0068d41af92
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
 - mappings: 4 total, 4 verified
-- rows: 6 item rows, 14 addon rows
+- rows: 7 item rows, 14 addon rows
 - source item ids: 1285048148 | 54290387 | a06ddfc3-8e2c-51e8-ade5-ff3c227a50ec | ce64affb-58bc-5225-9e49-28282a3fa8d3
 - raw names: Pistachio Ice Cream (60gm) | Pistachio Ice Cream (Junior Scoop (60gm)) | Pistachio Ice Cream (Junior Scoop) | Pistachio Ice Cream Ice Cream Small Scoop
 - historical merged source clusters: Pistachio Ice Cream (60gm)
 
-  - source_item_id=1285048148 [item] item_rows=6 addon_rows=0 raw_names=Pistachio Ice Cream (Junior Scoop (60gm)) | Pistachio Ice Cream (Junior Scoop)
+  - source_item_id=1285048148 [item] item_rows=7 addon_rows=0 raw_names=Pistachio Ice Cream (Junior Scoop (60gm)) | Pistachio Ice Cream (Junior Scoop)
   - source_item_id=54290387 [addon] item_rows=0 addon_rows=14 raw_names=Pistachio Ice Cream (60gm) | Pistachio Ice Cream Ice Cream Small Scoop
   - source_item_id=a06ddfc3-8e2c-51e8-ade5-ff3c227a50ec [unknown] item_rows=0 addon_rows=0 raw_names=(none)
   - source_item_id=ce64affb-58bc-5225-9e49-28282a3fa8d3 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
@@ -2488,12 +2527,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 2998b13f-df5c-591e-b432-c0068d41af92
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 7 total, 7 verified
-- rows: 189 item rows, 40 addon rows
+- rows: 194 item rows, 40 addon rows
 - source item ids: 1284985744 | 52962549 | 52962550 | 52962551 | 55242582 | 55242583 | 55242584
 - raw names: Pistachio Ice Cream (Mini Tub (160gms)) | Pistachio Ice Cream (Mini tub (160gms)) | Pistachio Ice Cream (Mini tub (200ml)) | Pistachio Ice Cream 200ml
 - historical merged source clusters: Pistachio Ice Cream (60gm)
 
-  - source_item_id=1284985744 [item] item_rows=189 addon_rows=0 raw_names=Pistachio Ice Cream (Mini Tub (160gms)) | Pistachio Ice Cream (Mini tub (160gms)) | Pistachio Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985744 [item] item_rows=194 addon_rows=0 raw_names=Pistachio Ice Cream (Mini Tub (160gms)) | Pistachio Ice Cream (Mini tub (160gms)) | Pistachio Ice Cream (Mini tub (200ml))
   - source_item_id=52962549 [addon] item_rows=0 addon_rows=2 raw_names=Pistachio Ice Cream 200ml
   - source_item_id=52962550 [addon] item_rows=0 addon_rows=11 raw_names=Pistachio Ice Cream 200ml
   - source_item_id=52962551 [addon] item_rows=0 addon_rows=8 raw_names=Pistachio Ice Cream 200ml
@@ -2505,23 +2544,23 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 2998b13f-df5c-591e-b432-c0068d41af92
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 99 item rows, 0 addon rows
+- rows: 104 item rows, 0 addon rows
 - source item ids: 1284985745
 - raw names: Pistachio Ice Cream (Regular Scoop (120gm)) | Pistachio Ice Cream (Regular Scoop)
 - historical merged source clusters: Pistachio Ice Cream (60gm)
 
-  - source_item_id=1284985745 [item] item_rows=99 addon_rows=0 raw_names=Pistachio Ice Cream (Regular Scoop (120gm)) | Pistachio Ice Cream (Regular Scoop)
+  - source_item_id=1284985745 [item] item_rows=104 addon_rows=0 raw_names=Pistachio Ice Cream (Regular Scoop (120gm)) | Pistachio Ice Cream (Regular Scoop)
 
 ## Pistachio Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 2998b13f-df5c-591e-b432-c0068d41af92
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 231 item rows, 0 addon rows
+- rows: 235 item rows, 0 addon rows
 - source item ids: 1282581559
 - raw names: Pistachio Ice Cream (Perfect Plenty (200gms)) | Pistachio Ice Cream (Perfect Plenty (300ml)) | Pistachio Ice Cream (Perfect Plenty) | Pistachio Ice Cream (Regular Tub (220gms)) | Pistachio Ice Cream (Regular Tub (300ml)) | Pistachio Ice Cream (Regular)
 - historical merged source clusters: Pistachio Ice Cream (60gm)
 
-  - source_item_id=1282581559 [item] item_rows=231 addon_rows=0 raw_names=Pistachio Ice Cream (Perfect Plenty (200gms)) | Pistachio Ice Cream (Perfect Plenty (300ml)) | Pistachio Ice Cream (Perfect Plenty) | Pistachio Ice Cream (Regular Tub (220gms)) | Pistachio Ice Cream (Regular Tub (300ml)) | Pistachio Ice Cream (Regular)
+  - source_item_id=1282581559 [item] item_rows=235 addon_rows=0 raw_names=Pistachio Ice Cream (Perfect Plenty (200gms)) | Pistachio Ice Cream (Perfect Plenty (300ml)) | Pistachio Ice Cream (Perfect Plenty) | Pistachio Ice Cream (Regular Tub (220gms)) | Pistachio Ice Cream (Regular Tub (300ml)) | Pistachio Ice Cream (Regular)
 
 ## Rose Cardamom (60gm) [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 0563f0e8-644c-59b8-b410-7e940445d629
@@ -2548,13 +2587,14 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 ## Rose Cardamom Ice Cream [Ice Cream] :: JUNIOR_SCOOP_60GMS
 - menu_item_id: 1a9c190c-a9c3-5169-8b0a-1183387d6a7b
 - variant_id: e4d57a7d-d262-5fd8-98cb-62ae69804b8d
-- mappings: 2 total, 2 verified
-- rows: 0 item rows, 3 addon rows
-- source item ids: 0d9a1ffe-bc5e-5d7b-8599-4fb9574e7113 | 54290385
-- raw names: Rose Cardamom Ice Cream Small Scoop
+- mappings: 3 total, 3 verified
+- rows: 1 item rows, 3 addon rows
+- source item ids: 0d9a1ffe-bc5e-5d7b-8599-4fb9574e7113 | 1285047956 | 54290385
+- raw names: Rose Cardamom Ice Cream (Junior Scoop (60gm)) | Rose Cardamom Ice Cream Small Scoop
 - historical merged source clusters: (none)
 
   - source_item_id=0d9a1ffe-bc5e-5d7b-8599-4fb9574e7113 [unknown] item_rows=0 addon_rows=0 raw_names=(none)
+  - source_item_id=1285047956 [item] item_rows=1 addon_rows=0 raw_names=Rose Cardamom Ice Cream (Junior Scoop (60gm))
   - source_item_id=54290385 [addon] item_rows=0 addon_rows=3 raw_names=Rose Cardamom Ice Cream Small Scoop
 
 ## Rose Cardamom Ice Cream [Ice Cream] :: MINI_TUB_160GMS
@@ -2589,12 +2629,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: 1a9c190c-a9c3-5169-8b0a-1183387d6a7b
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 49 item rows, 0 addon rows
+- rows: 53 item rows, 0 addon rows
 - source item ids: 1284985238
 - raw names: Rose Cardamom Ice Cream (Regular Scoop (120gm)) | Rose Cardamom Ice Cream (Regular Scoop)
 - historical merged source clusters: (none)
 
-  - source_item_id=1284985238 [item] item_rows=49 addon_rows=0 raw_names=Rose Cardamom Ice Cream (Regular Scoop (120gm)) | Rose Cardamom Ice Cream (Regular Scoop)
+  - source_item_id=1284985238 [item] item_rows=53 addon_rows=0 raw_names=Rose Cardamom Ice Cream (Regular Scoop (120gm)) | Rose Cardamom Ice Cream (Regular Scoop)
 
 ## Rose Cardamom Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: 1a9c190c-a9c3-5169-8b0a-1183387d6a7b
@@ -2655,12 +2695,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: a69e1017-d393-55c3-bedb-3c1ee47863de
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 1 total, 1 verified
-- rows: 10 item rows, 0 addon rows
+- rows: 12 item rows, 0 addon rows
 - source item ids: 1284985258
 - raw names: Egg Strawberry Cream Cheese Ice Cream (Mini tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (200ml))
 - historical merged source clusters: Strawberry Cream Cheese (60gm)
 
-  - source_item_id=1284985258 [item] item_rows=10 addon_rows=0 raw_names=Egg Strawberry Cream Cheese Ice Cream (Mini tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985258 [item] item_rows=12 addon_rows=0 raw_names=Egg Strawberry Cream Cheese Ice Cream (Mini tub (160gms)) | Strawberry Cream Cheese Ice Cream (Mini tub (200ml))
 
 ## Strawberry Cream Cheese Ice Cream [Ice Cream] :: REGULAR_SCOOP_120GMS
 - menu_item_id: a69e1017-d393-55c3-bedb-3c1ee47863de
@@ -2724,12 +2764,12 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: a8546c3d-fda9-56dc-a578-11585845e21f
 - variant_id: 74f43046-a2ff-5e69-9b78-1724b6f0a030
 - mappings: 10 total, 10 verified
-- rows: 104 item rows, 76 addon rows
+- rows: 107 item rows, 76 addon rows
 - source item ids: 1284985170 | 51217621 | 51217643 | 51217660 | 51492586 | 51975425 | 51975449 | 51975450 | 52320270 | 52700812
 - raw names: Sunshine Limone Ice Cream (Mini Tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (200ml)) | Sunshine Limone Ice Cream 200ml
 - historical merged source clusters: Sunshine Limone (60gm)
 
-  - source_item_id=1284985170 [item] item_rows=104 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Mini Tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (200ml))
+  - source_item_id=1284985170 [item] item_rows=107 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Mini Tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (160gms)) | Sunshine Limone Ice Cream (Mini tub (200ml))
   - source_item_id=51217621 [addon] item_rows=0 addon_rows=6 raw_names=Sunshine Limone Ice Cream 200ml
   - source_item_id=51217643 [addon] item_rows=0 addon_rows=26 raw_names=Sunshine Limone Ice Cream 200ml
   - source_item_id=51217660 [addon] item_rows=0 addon_rows=1 raw_names=Sunshine Limone Ice Cream 200ml
@@ -2744,46 +2784,46 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - menu_item_id: a8546c3d-fda9-56dc-a578-11585845e21f
 - variant_id: b747b32a-ee01-59b9-b443-75581bb57863
 - mappings: 1 total, 1 verified
-- rows: 101 item rows, 0 addon rows
+- rows: 109 item rows, 0 addon rows
 - source item ids: 1284985171
 - raw names: Sunshine Limone Ice Cream (Regular Scoop (120gm)) | Sunshine Limone Ice Cream (Regular Scoop)
 - historical merged source clusters: Sunshine Limone (60gm)
 
-  - source_item_id=1284985171 [item] item_rows=101 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Regular Scoop (120gm)) | Sunshine Limone Ice Cream (Regular Scoop)
+  - source_item_id=1284985171 [item] item_rows=109 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Regular Scoop (120gm)) | Sunshine Limone Ice Cream (Regular Scoop)
 
 ## Sunshine Limone Ice Cream [Ice Cream] :: REGULAR_TUB_300ML
 - menu_item_id: a8546c3d-fda9-56dc-a578-11585845e21f
 - variant_id: 95cd7af2-383e-5449-893f-83f53bb658bf
 - mappings: 1 total, 1 verified
-- rows: 122 item rows, 0 addon rows
+- rows: 124 item rows, 0 addon rows
 - source item ids: 1282581652
 - raw names: Sunshine Limone Ice Cream (Perfect Plenty (300ml)) | Sunshine Limone Ice Cream (Perfect Plenty) | Sunshine Limone Ice Cream (Regular Tub (220gms)) | Sunshine Limone Ice Cream (Regular Tub (300ml))
 - historical merged source clusters: Sunshine Limone (60gm)
 
-  - source_item_id=1282581652 [item] item_rows=122 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Perfect Plenty (300ml)) | Sunshine Limone Ice Cream (Perfect Plenty) | Sunshine Limone Ice Cream (Regular Tub (220gms)) | Sunshine Limone Ice Cream (Regular Tub (300ml))
+  - source_item_id=1282581652 [item] item_rows=124 addon_rows=0 raw_names=Sunshine Limone Ice Cream (Perfect Plenty (300ml)) | Sunshine Limone Ice Cream (Perfect Plenty) | Sunshine Limone Ice Cream (Regular Tub (220gms)) | Sunshine Limone Ice Cream (Regular Tub (300ml))
 
 ## Takeaway Cup [Extra] :: 1_PIECE
 - menu_item_id: 09b68ead-5d03-5f9d-8e35-0aa8467f7c32
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 2 total, 2 verified
-- rows: 0 item rows, 12 addon rows
+- rows: 0 item rows, 15 addon rows
 - source item ids: 58647656 | cf0ea70b-f423-5511-ad7f-62d3118b83de
 - raw names: Takeaway Cup
-- historical merged source clusters: (none)
+- historical merged source clusters: Mapping audit: Takeaway Cup — 1_PIECE
 
-  - source_item_id=58647656 [addon] item_rows=0 addon_rows=12 raw_names=Takeaway Cup
+  - source_item_id=58647656 [addon] item_rows=0 addon_rows=15 raw_names=Takeaway Cup
   - source_item_id=cf0ea70b-f423-5511-ad7f-62d3118b83de [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Tres Leches [Dessert] :: 1_PIECE
 - menu_item_id: ca612c98-acf6-52c7-9617-0dbc7e014953
 - variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
 - mappings: 1 total, 1 verified
-- rows: 719 item rows, 0 addon rows
+- rows: 751 item rows, 0 addon rows
 - source item ids: 1288297411
 - raw names: Tres Leches
 - historical merged source clusters: (none)
 
-  - source_item_id=1288297411 [item] item_rows=719 addon_rows=0 raw_names=Tres Leches
+  - source_item_id=1288297411 [item] item_rows=751 addon_rows=0 raw_names=Tres Leches
 
 ## Triple Chocolate Ice Cream [Ice Cream] :: FAMILY_TUB_725ML
 - menu_item_id: 10ed2345-74d2-5f34-bd36-ce91724ce9e6
@@ -2847,20 +2887,6 @@ Each section shows the current parent cluster, child cluster, source item IDs, a
 - historical merged source clusters: (none)
 
   - source_item_id=1302835658 [item] item_rows=1 addon_rows=0 raw_names=Veg Sample(sg)
-
-## Waffle Cone [Extra] :: 1_PIECE
-- menu_item_id: fc970c78-39d6-5dce-a90d-013c8d833d54
-- variant_id: f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc
-- mappings: 4 total, 4 verified
-- rows: 0 item rows, 563 addon rows
-- source item ids: 53392898 | 53392901 | 53392902 | fdcc6ba9-aaa3-555a-9993-8d4c8302b9ec
-- raw names: Waffle Cone
-- historical merged source clusters: (none)
-
-  - source_item_id=53392898 [addon] item_rows=0 addon_rows=560 raw_names=Waffle Cone
-  - source_item_id=53392901 [addon] item_rows=0 addon_rows=1 raw_names=Waffle Cone
-  - source_item_id=53392902 [addon] item_rows=0 addon_rows=2 raw_names=Waffle Cone
-  - source_item_id=fdcc6ba9-aaa3-555a-9993-8d4c8302b9ec [unknown] item_rows=0 addon_rows=0 raw_names=(none)
 
 ## Water Bottle [Drinks] :: 1_PIECE
 - menu_item_id: 72b47b77-80f4-5e5a-af2b-1d2abbd6f39d

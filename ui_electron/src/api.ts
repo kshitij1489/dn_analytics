@@ -91,6 +91,14 @@ export const endpoints = {
         types: () => api.get('/menu/types'),
 
         // New Endpoints
+        summary: (params?: {
+            mode?: 'volume' | 'quantity';
+            as_of_date?: string;
+            page?: number;
+            page_size?: number;
+            name_search?: string;
+            sort_desc?: boolean;
+        }) => api.get('/menu/summary', { params }),
         itemsView: (params?: any) => api.get('/menu/items-view', { params }),
         variantsView: (params?: any) => api.get('/menu/variants-view', { params }),
         matrix: () => api.get('/menu/matrix'),

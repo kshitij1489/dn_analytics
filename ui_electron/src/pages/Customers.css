@@ -27,11 +27,6 @@
     border-top: 1px solid var(--border-color);
 }
 
-.customers-tabs {
-    width: 100%;
-    flex-wrap: wrap;
-}
-
 .customers-analytics-table-toggle {
     flex-shrink: 0;
 }
@@ -41,12 +36,6 @@
     width: fit-content;
     max-width: 100%;
     flex-wrap: wrap;
-}
-
-.customers-tabs > button {
-    flex: 1 1 140px;
-    text-align: center;
-    min-height: 44px;
 }
 
 .customers-kpi-separator {

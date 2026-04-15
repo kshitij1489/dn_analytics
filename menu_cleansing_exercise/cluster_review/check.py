@@ -3,8 +3,8 @@ import re
 from collections import defaultdict
 from difflib import SequenceMatcher
 
-clusters_file = "tmp/cluster_review/current_clusters.csv"
-merge_history_file = "tmp/cluster_review/merge_history.csv"
+clusters_file = "menu_cleansing_exercise/cluster_review/current_clusters.csv"
+merge_history_file = "menu_cleansing_exercise/cluster_review/merge_history.csv"
 
 def read_csv(filepath):
     with open(filepath, "r", encoding="utf-8") as f:

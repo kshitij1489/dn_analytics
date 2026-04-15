@@ -187,7 +187,7 @@ export default function Customers({
 
             <hr className="customers-divider" />
 
-            <div className="segmented-control customers-tabs">
+            <div className="segmented-control segmented-page-tabs">
                 <TabButton active={activeSection === 'overview'} onClick={() => setActiveSection('overview')} variant="segmented" size="large">
                     Overview
                 </TabButton>

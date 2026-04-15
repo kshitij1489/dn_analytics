@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { endpoints } from '../api';
-import { PaginatedDataTable } from '../components';
+import { PaginatedDataTable, TabButton } from '../components';
 
 export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
     const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'restaurants' | 'taxes' | 'discounts'>('orders');
@@ -11,31 +11,21 @@ export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
         { id: 'restaurants', label: '🍽️ Restaurants' },
         { id: 'taxes', label: '📊 Taxes' },
         { id: 'discounts', label: '💰 Discounts' },
-    ];
+    ] as const;
 
     return (
         <div className="page-container" style={{ padding: '20px', fontFamily: 'Inter, sans-serif' }}>
-            <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'white', padding: '5px', borderRadius: '30px', overflowX: 'auto', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+            <div className="segmented-control segmented-page-tabs" style={{ marginBottom: '20px' }}>
                 {tabs.map((tab) => (
-                    <button
+                    <TabButton
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                        style={{
-                            flex: 1,
-                            padding: '12px',
-                            background: activeTab === tab.id ? '#3B82F6' : 'transparent',
-                            border: 'none',
-                            color: activeTab === tab.id ? 'white' : 'black',
-                            cursor: 'pointer',
-                            borderRadius: '25px',
-                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                            fontWeight: activeTab === tab.id ? 600 : 500,
-                            minWidth: '120px',
-                            boxShadow: activeTab === tab.id ? '0 2px 5px rgba(96, 165, 250, 0.4)' : 'none'
-                        }}
+                        active={activeTab === tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        variant="segmented"
+                        size="large"
                     >
                         {tab.label}
-                    </button>
+                    </TabButton>
                 ))}
             </div>
 

@@ -1,5 +1,7 @@
 import pandas as pd
 from datetime import datetime, timedelta
+from typing import Optional
+
 from src.core.utils.business_date import get_business_date_range
 
 # SQLite strftime('%w') = 0 Sunday, 1 Monday, ..., 6 Saturday
@@ -400,15 +402,200 @@ def fetch_unverified_items(conn):
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
 def fetch_menu_matrix(conn):
-    """Fetch the full menu matrix"""
+    """Fetch the full menu matrix as unique menu item + variant pairs."""
     query = """
         SELECT 
-            mi.name, mi.type, v.variant_name, miv.price, miv.is_active, 
-            miv.addon_eligible, miv.delivery_eligible, miv.menu_item_id, miv.variant_id
+            mi.name,
+            mi.type,
+            v.variant_name,
+            MIN(miv.price) AS price,
+            MIN(miv.is_active) AS is_active,
+            MIN(miv.addon_eligible) AS addon_eligible,
+            MIN(miv.delivery_eligible) AS delivery_eligible,
+            miv.menu_item_id,
+            miv.variant_id,
+            COUNT(*) AS mapping_count
         FROM menu_item_variants miv
         JOIN menu_items mi ON miv.menu_item_id = mi.menu_item_id
         JOIN variants v ON miv.variant_id = v.variant_id
+        GROUP BY mi.name, mi.type, v.variant_name, miv.menu_item_id, miv.variant_id
         ORDER BY mi.type, mi.name, v.variant_name
     """
     cursor = conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+
+
+def _menu_summary_window_specs(as_of_date: str):
+    """
+    Rolling windows are inclusive business dates ending at as_of_date.
+    month_1 / month_2 use 30 and 60 calendar-day spans in business-date space.
+    """
+    end = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    specs = [
+        ("day_1", 1),
+        ("day_2", 2),
+        ("day_3", 3),
+        ("day_5", 5),
+        ("day_7", 7),
+        ("day_14", 14),
+        ("month_1", 30),
+        ("month_2", 60),
+    ]
+    windows = []
+    params = []
+    for key, n in specs:
+        start = (end - timedelta(days=n - 1)).isoformat()
+        windows.append((key, start, as_of_date))
+        params.extend([start, as_of_date])
+    return windows, params
+
+
+def _menu_summary_norm_unit_sql() -> str:
+    """Normalize variant.unit for rollup columns (COUNT-style → PIECES)."""
+    return """
+        CASE
+            WHEN UPPER(TRIM(COALESCE(v.unit, ''))) IN ('COUNT', 'PIECE', 'PIECES', 'PCS') THEN 'PIECES'
+            WHEN UPPER(TRIM(COALESCE(v.unit, ''))) = 'ML' THEN 'ML'
+            WHEN UPPER(TRIM(COALESCE(v.unit, ''))) = 'GMS' THEN 'GMS'
+            WHEN TRIM(COALESCE(v.unit, '')) = '' OR v.unit IS NULL THEN 'UNKNOWN'
+            ELSE UPPER(TRIM(v.unit))
+        END
+    """
+
+
+def fetch_menu_summary_rollups(
+    conn,
+    mode: str,
+    as_of_date: str,
+    page: int = 1,
+    page_size: int = 50,
+    name_search: Optional[str] = None,
+    sort_desc: bool = True,
+):
+    """
+    Rolling sales by menu item for the Menu Summary page.
+
+    mode:
+      - quantity: one row per menu item; values are total line quantity
+        (deduped order lines + add-ons), sum(quantity).
+      - volume: one row per (menu item, normalized unit); values are
+        sum(COALESCE(variant.value, 0) * quantity) for that unit only.
+    """
+    try:
+        finite_windows, window_params = _menu_summary_window_specs(as_of_date)
+        life_param = [as_of_date]
+
+        if mode == "quantity":
+            measure_sql = "CAST(COALESCE(e.qty, 0) AS REAL)"
+            group_sql = "mi.menu_item_id, mi.name"
+            select_extra = "mi.menu_item_id, mi.name"
+        elif mode == "volume":
+            measure_sql = "(COALESCE(v.value, 0) * CAST(COALESCE(e.qty, 0) AS REAL))"
+            nu = _menu_summary_norm_unit_sql()
+            group_sql = f"mi.menu_item_id, mi.name, ({nu.strip()})"
+            select_extra = f"mi.menu_item_id, mi.name, ({nu.strip()}) AS unit"
+        else:
+            return None, 0, "mode must be 'volume' or 'quantity'"
+
+        sum_fragments = []
+        for key, start, end in finite_windows:
+            sum_fragments.append(
+                f"SUM(CASE WHEN e.business_date >= ? AND e.business_date <= ? "
+                f"THEN {measure_sql} ELSE 0 END) AS {key}"
+            )
+        sum_fragments.append(
+            f"SUM(CASE WHEN e.business_date <= ? THEN {measure_sql} ELSE 0 END) AS lifetime"
+        )
+
+        sums_sql = ",\n                ".join(sum_fragments)
+
+        search_clause = ""
+        search_params: list = []
+        if name_search and str(name_search).strip():
+            search_clause = "AND UPPER(mi.name) LIKE ?"
+            search_params.append(f"%{str(name_search).strip().upper()}%")
+
+        inner_query = f"""
+            WITH filtered_orders AS (
+                SELECT o.order_id, o.created_on
+                FROM orders o
+                WHERE o.order_status = 'Success'
+            ),
+            dedup_items AS (
+                SELECT
+                    order_item_id,
+                    order_id,
+                    menu_item_id,
+                    quantity AS qty,
+                    variant_id,
+                    business_date
+                FROM (
+                    SELECT
+                        oi.order_item_id,
+                        oi.order_id,
+                        oi.menu_item_id,
+                        oi.quantity,
+                        oi.variant_id,
+                        DATE(fo.created_on, '-5 hours') AS business_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oi.order_id, oi.name_raw, oi.quantity, oi.unit_price
+                            ORDER BY oi.order_item_id
+                        ) AS rn
+                    FROM order_items oi
+                    JOIN filtered_orders fo ON fo.order_id = oi.order_id
+                )
+                WHERE rn = 1
+            ),
+            dedup_addons AS (
+                SELECT
+                    menu_item_id,
+                    quantity AS qty,
+                    variant_id,
+                    business_date
+                FROM (
+                    SELECT
+                        oia.menu_item_id,
+                        oia.quantity,
+                        oia.variant_id,
+                        di.business_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oia.order_item_id, oia.name_raw, oia.quantity, oia.price
+                            ORDER BY oia.order_item_addon_id
+                        ) AS rn
+                    FROM order_item_addons oia
+                    JOIN dedup_items di ON di.order_item_id = oia.order_item_id
+                )
+                WHERE rn = 1
+            ),
+            events AS (
+                SELECT menu_item_id, business_date, qty, variant_id FROM dedup_items
+                UNION ALL
+                SELECT menu_item_id, business_date, qty, variant_id FROM dedup_addons
+            )
+            SELECT
+                {select_extra},
+                {sums_sql}
+            FROM events e
+            JOIN menu_items mi ON e.menu_item_id = mi.menu_item_id
+            LEFT JOIN variants v ON e.variant_id = v.variant_id
+            WHERE e.business_date <= ?
+            {search_clause}
+            GROUP BY {group_sql}
+        """
+
+        measure_params = window_params + life_param + life_param
+        inner_params = measure_params + search_params
+
+        sort_dir = "DESC" if sort_desc else "ASC"
+        offset = (page - 1) * page_size
+
+        count_sql = f"SELECT COUNT(*) FROM ({inner_query}) AS agg"
+        count_cursor = conn.execute(count_sql, inner_params)
+        total_count = count_cursor.fetchone()[0]
+
+        data_sql = f"{inner_query} ORDER BY lifetime {sort_dir} LIMIT ? OFFSET ?"
+        data_params = inner_params + [page_size, offset]
+        cursor = conn.execute(data_sql, data_params)
+        return pd.DataFrame([dict(row) for row in cursor.fetchall()]), total_count, None
+    except Exception as e:
+        return None, 0, str(e)

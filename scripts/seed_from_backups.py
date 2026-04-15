@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.db.connection import get_db_connection
 from src.core.utils.path_helper import get_resource_path
+from utils.variant_metadata import infer_variant_metadata
 
 def perform_seeding(conn):
     """Restore menu data from JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json)."""
@@ -59,33 +60,11 @@ def perform_seeding(conn):
         
         # 2. Insert Variants
         print("Seeding Variants...")
-        
-        # Hardcoded updates for units and values
-        variant_updates = {
-            "4398d6ab-f481-5179-9903-084067113cc0": {"unit": "GMS", "value": 1000},
-            "f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc": {"unit": "COUNT", "value": 1},
-            "41b9844c-f8f1-543a-8f80-fec32f9f18e3": {"unit": "GMS", "value": 250},
-            "5f354550-0f38-58c3-ad16-97672a66817d": {"unit": "COUNT", "value": 2},
-            "4442990c-72cc-5474-a4f2-1a429caac09a": {"unit": "GMS", "value": 400},
-            "d755256f-e108-56e3-b125-be7736f091af": {"unit": "ML", "value": 400},
-            "190eb2e5-5671-55be-ac33-57907b87a2ce": {"unit": "COUNT", "value": 1},
-            "c5bd4518-50da-59ee-b63d-50c4904a9912": {"unit": "ML", "value": 600},
-            "ad6587f3-b7c1-536c-88cb-c48b0b610ada": {"unit": "ML", "value": 700},
-            "b43993c2-8f3b-541e-af64-c9599eba6e7d": {"unit": "ML", "value": 725},
-            "e4d57a7d-d262-5fd8-98cb-62ae69804b8d": {"unit": "GMS", "value": 60},
-            "a1df2a57-b94a-56db-b890-3cba1e7aa15c": {"unit": "GMS", "value": 160},
-            "74f43046-a2ff-5e69-9b78-1724b6f0a030": {"unit": "ML", "value": 200},
-            "0a41ed3b-37e4-540b-bc5c-407631835802": {"unit": "GMS", "value": 200},
-            "c6438ece-1c0e-5db1-860f-27f45090a616": {"unit": "ML", "value": 300},
-            "b747b32a-ee01-59b9-b443-75581bb57863": {"unit": "GMS", "value": 120},
-            "e1b8037f-345a-52d6-ae94-cc115490705a": {"unit": "GMS", "value": 220},
-            "95cd7af2-383e-5449-893f-83f53bb658bf": {"unit": "ML", "value": 300},
-            "f2a1ea5a-2b0b-562d-8c50-808760640024": {"unit": "COUNT", "value": 1}
-        }
+        variant_meta = id_maps.get("variant_id_to_meta", {})
 
         variants_count = 0
         for variant_id, variant_name in id_maps.get("variant_id_to_str", {}).items():
-            extra = variant_updates.get(variant_id, {"unit": None, "value": None})
+            metadata = infer_variant_metadata(variant_name, variant_meta.get(variant_id))
             
             cursor.execute("""
                 INSERT INTO variants (variant_id, variant_name, unit, value, is_verified)
@@ -95,7 +74,7 @@ def perform_seeding(conn):
                     unit = excluded.unit,
                     value = excluded.value,
                     is_verified = 1
-            """, (variant_id, variant_name, extra['unit'], extra['value']))
+            """, (variant_id, variant_name, metadata["unit"], metadata["value"]))
             variants_count += 1
             
         # 3. Insert Mappings (menu_item_variants)
@@ -146,6 +125,7 @@ def export_to_backups(conn):
         id_maps = {
             "menu_id_to_str": {},
             "variant_id_to_str": {},
+            "variant_id_to_meta": {},
             "type_id_to_str": {}
         }
         
@@ -165,9 +145,12 @@ def export_to_backups(conn):
                 id_maps["type_id_to_str"][tid] = mtype
                 
         # Variants
-        cursor.execute("SELECT variant_id, variant_name FROM variants")
-        for vid, vname in cursor.fetchall():
+        cursor.execute("SELECT variant_id, variant_name, unit, value FROM variants")
+        for vid, vname, unit, value in cursor.fetchall():
             id_maps["variant_id_to_str"][str(vid)] = vname
+            metadata = infer_variant_metadata(vname, {"unit": unit, "value": value})
+            if metadata["unit"] is not None or metadata["value"] is not None:
+                id_maps["variant_id_to_meta"][str(vid)] = metadata
 
         # 2. Generate cluster_state
         print("Exporting Cluster State...")

@@ -59,6 +59,7 @@ class MenuBootstrapPullTests(unittest.TestCase):
         id_maps = {
             "menu_id_to_str": {"item_cold_coffee": "Cold Coffee"},
             "variant_id_to_str": {"variant_large": "Large"},
+            "variant_id_to_meta": {"variant_large": {"unit": "ML", "value": 750}},
             "type_id_to_str": {"type_beverage": "Beverage"},
         }
         cluster_state = {
@@ -99,6 +100,45 @@ class MenuBootstrapPullTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(mapping["menu_item_id"], "item_cold_coffee")
         self.assertEqual(mapping["variant_id"], "variant_large")
+
+        variant = self.conn.execute(
+            "SELECT unit, value FROM variants WHERE variant_id = 'variant_large'"
+        ).fetchone()
+        self.assertEqual(variant["unit"], "ML")
+        self.assertEqual(variant["value"], 750)
+
+    def test_apply_menu_bootstrap_snapshot_infers_variant_metadata_for_legacy_snapshots(self) -> None:
+        id_maps = {
+            "menu_id_to_str": {"item_family_tub": "Family Tub"},
+            "variant_id_to_str": {"variant_family_tub": "FAMILY_TUB_500GMS"},
+            "type_id_to_str": {"type_ice_cream": "Ice Cream"},
+        }
+        cluster_state = {
+            "item_family_tub:type_ice_cream": {
+                "101": [["101", "variant_family_tub"]],
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
+                "scripts.seed_from_backups.get_resource_path",
+                return_value=str(data_dir),
+            ):
+                result = apply_menu_bootstrap_snapshot(
+                    self.conn,
+                    id_maps,
+                    cluster_state,
+                    apply_mode="seed_and_relink_orders",
+                )
+
+        self.assertIsNone(result["error"])
+
+        variant = self.conn.execute(
+            "SELECT unit, value FROM variants WHERE variant_id = 'variant_family_tub'"
+        ).fetchone()
+        self.assertEqual(variant["unit"], "GMS")
+        self.assertEqual(variant["value"], 500)
 
 
 if __name__ == "__main__":

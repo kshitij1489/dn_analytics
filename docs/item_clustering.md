@@ -67,14 +67,14 @@ When a new order arrives, the `CleaningService` performs the following steps:
 4.  **Learning**: Once verified, that mapping is permanent. Future orders with that name will automatically map correctly.
 
 ## Testing and Evaluation
-To evaluate the current clustering results and inspect historical merge decisions, use the reproducible export script at [scripts/export_cluster_review.py](../scripts/export_cluster_review.py). It generates temporary review files under [tmp/cluster_review](../tmp/cluster_review).
+To evaluate the current clustering results and inspect historical merge decisions, use the reproducible export script at [scripts/export_cluster_review.py](../scripts/export_cluster_review.py). It generates review files under [menu_cleansing_exercise/cluster_review](../menu_cleansing_exercise/cluster_review) (menu state evaluation / cleansing exercise outputs).
 
 ### Generated Files
-- [current_clusters.md](../tmp/cluster_review/current_clusters.md): Human-readable list grouped by `parent cluster :: child cluster`, with source item IDs and raw names.
-- [current_clusters.csv](../tmp/cluster_review/current_clusters.csv): One row per current parent+child cluster summary.
-- [current_cluster_members.csv](../tmp/cluster_review/current_cluster_members.csv): One row per current mapping/source ID.
-- [merge_history.md](../tmp/cluster_review/merge_history.md): Human-readable merge history list with source name, target name, affected source IDs, raw names, and variant assignments.
-- [merge_history.csv](../tmp/cluster_review/merge_history.csv): One row per merge event.
+- [current_clusters.md](../menu_cleansing_exercise/cluster_review/current_clusters.md): Human-readable list grouped by `parent cluster :: child cluster`, with source item IDs and raw names.
+- [current_clusters.csv](../menu_cleansing_exercise/cluster_review/current_clusters.csv): One row per current parent+child cluster summary.
+- [current_cluster_members.csv](../menu_cleansing_exercise/cluster_review/current_cluster_members.csv): One row per current mapping/source ID.
+- [merge_history.md](../menu_cleansing_exercise/cluster_review/merge_history.md): Human-readable merge history list with source name, target name, affected source IDs, raw names, and variant assignments.
+- [merge_history.csv](../menu_cleansing_exercise/cluster_review/merge_history.csv): One row per merge event.
 
 ### Current Output Sizes
 - 232 current parent+child cluster rows

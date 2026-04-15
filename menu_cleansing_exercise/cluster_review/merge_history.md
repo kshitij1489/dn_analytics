@@ -1,14 +1,144 @@
 # Merge History Review
 
-Generated at: 2026-04-11 10:28:48 UTC
+Generated at: 2026-04-15 18:01:45 UTC
 
 Each section shows a historical merge event, the source and target names, the affected source item IDs, and raw names currently linked to those IDs.
+
+## Merge 76 :: Bean-to-Bar 70% Dark Chocolate Ice Cream -> Bean-to-Bar Dark Chocolate Ice Cream
+- merged_at: 2026-04-15 18:01:40
+- payload_kind: variant_merge_v1
+- source_type: Ice Cream
+- current_final_target: Bean-to-Bar Dark Chocolate Ice Cream [Ice Cream]
+- variant_assignments: MINI_TUB_160GMS -> MINI_TUB_200ML | REGULAR_TUB_220GMS -> REGULAR_TUB_220GMS
+- affected source item ids: 1282581599 | 51217617 | 51217635 | 51217674 | 51492582 | 51975424 | 51975446 | 51975447 | 52700809
+- raw names: Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (200gms)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-Bar 70% Dark Chocolate Ice Cream (Perfect Plenty (325ml)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-Bar Dark Chocolate Ice Cream (Regular Tub (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar 70% Dark Chocolate Ice Cream 200ml | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty (300ml)) | Bean-to-bar Chocolate 70% Dark Ice Cream (Perfect Plenty) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (220gms)) | Bean-to-bar Chocolate Dark Ice Cream (Regular Tub (300ml)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (220gms)) | Bean-to-bar Dark Chocolate Ice Cream (Regular Tub (300ml))
+- counts: mappings=9 order_items=0 addons=0
+
+## Merge 75 :: Cakes & Cookies -> Cakes & Cookies Ice Cream
+- merged_at: 2026-04-15 12:55:55
+- payload_kind: legacy_merge_v1
+- source_type: Ice Cream
+- current_final_target: Cakes & Cookies Ice Cream [Ice Cream]
+- variant_assignments: (none recorded)
+- affected source item ids: 54126524 | 54126526 | 54126527 | 54126528 | 621b7988-0a4a-581f-8ab6-50ded78a25ea
+- raw names: Cakes & Cookies 200ml | Cakes &amp; Cookies 200ml
+- counts: mappings=5 order_items=0 addons=0
+
+## Merge 74 :: Mapping audit: Takeaway Cup — 1_PIECE -> Takeaway Cup
+- merged_at: 2026-04-15 11:14:12
+- payload_kind: mapping_audit_v1
+- source_type: Extra
+- current_final_target: Takeaway Cup [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: (none recorded)
+- raw names: (none found)
+- counts: mappings=0 order_items=0 addons=0
+
+## Merge 73 :: Mapping audit: Cup — 1_PIECE -> Cup
+- merged_at: 2026-04-15 11:14:12
+- payload_kind: mapping_audit_v1
+- source_type: Extra
+- current_final_target: Cup [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: (none recorded)
+- raw names: (none found)
+- counts: mappings=0 order_items=0 addons=0
+
+## Merge 72 :: Mapping audit: Butter Waffle Cones — 2_PIECES -> Butter Waffle Cones
+- merged_at: 2026-04-15 11:14:12
+- payload_kind: mapping_audit_v1
+- source_type: Extra
+- current_final_target: Butter Waffle Cones [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: (none recorded)
+- raw names: (none found)
+- counts: mappings=0 order_items=0 addons=0
+
+## Merge 71 :: Mapping audit: Butter Waffle Cones — 1_PIECE -> Butter Waffle Cones
+- merged_at: 2026-04-15 11:14:12
+- payload_kind: mapping_audit_v1
+- source_type: Extra
+- current_final_target: Butter Waffle Cones [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: (none recorded)
+- raw names: (none found)
+- counts: mappings=0 order_items=0 addons=0
+
+## Merge 70 :: Waffle Cone -> Butter Waffle Cones
+- merged_at: 2026-04-15 09:49:45
+- payload_kind: legacy_merge_v1
+- source_type: Extra
+- current_final_target: Butter Waffle Cones [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: 53392898 | 53392901 | 53392902 | fdcc6ba9-aaa3-555a-9993-8d4c8302b9ec
+- raw names: (none found)
+- counts: mappings=4 order_items=0 addons=0
+
+## Merge 69 :: Butter Waffle Cone -> Butter Waffle Cones
+- merged_at: 2026-04-15 09:49:45
+- payload_kind: legacy_merge_v1
+- source_type: Extra
+- current_final_target: Butter Waffle Cones [Extra]
+- variant_assignments: (none recorded)
+- affected source item ids: 59023334 | 59023335 | d212bd81-115b-5b7a-8c95-cdcce01175ab
+- raw names: Butter Waffle Cone (2pcs)
+- counts: mappings=3 order_items=0 addons=0
+
+## Merge 68 :: 3 Flavors In One Tub Combo -> Design Family Pack Of 3 Ice Creams
+- merged_at: 2026-04-15 07:03:18
+- payload_kind: variant_merge_v1
+- source_type: Combo
+- current_final_target: Design Family Pack Of 3 Ice Creams [Combo]
+- variant_assignments: 1_PIECE -> FAMILY_PACK_3X200ML
+- affected source item ids: 1297923934
+- raw names: 3 Flavors In One Tub Combo
+- counts: mappings=1 order_items=2 addons=0
+
+## Merge 67 :: Curious Creations Duo -> Design Your Indulgence Duo Ice Creams
+- merged_at: 2026-04-15 06:56:45
+- payload_kind: legacy_merge_v1
+- source_type: Combo
+- current_final_target: Design Your Indulgence Duo Ice Creams [Combo]
+- variant_assignments: (none recorded)
+- affected source item ids: 1284128670
+- raw names: Curious Creations Duo | Curious Creations Duo Ice Creams (200ml+200ml)
+- counts: mappings=1 order_items=0 addons=0
+
+## Merge 66 :: Classic Night & Day Duo -> Design Your Indulgence Duo Ice Creams
+- merged_at: 2026-04-15 06:56:45
+- payload_kind: legacy_merge_v1
+- source_type: Combo
+- current_final_target: Design Your Indulgence Duo Ice Creams [Combo]
+- variant_assignments: (none recorded)
+- affected source item ids: 1284128671
+- raw names: Classic Night & Day Duo Ice Creams (200ml+200ml) | Classic Night &amp; Day Duo
+- counts: mappings=1 order_items=0 addons=0
+
+## Merge 65 :: Old Fashion Vanilla (60gm) -> Old Fashion Vanilla Ice Cream
+- merged_at: 2026-04-14 09:11:51
+- payload_kind: resolution_variant_v1
+- source_type: Ice Cream
+- current_final_target: Old Fashion Vanilla Ice Cream [Ice Cream]
+- variant_assignments: 1_PIECE -> JUNIOR_SCOOP_60GMS
+- affected source item ids: 34d13340-caba-5cb5-a372-a460ab56743c
+- raw names: (none found)
+- counts: mappings=1 order_items=0 addons=2
+
+## Merge 64 :: Just Chocolate (andra) (60gm) -> Just Chocolate
+- merged_at: 2026-04-14 09:11:27
+- payload_kind: resolution_variant_v1
+- source_type: Ice Cream
+- current_final_target: Just Chocolate [Ice Cream]
+- variant_assignments: 1_PIECE -> JUNIOR_SCOOP_60GMS
+- affected source item ids: 00b14d19-2d70-56b5-8337-a0bad8d71a04
+- raw names: (none found)
+- counts: mappings=1 order_items=0 addons=11
 
 ## Merge 63 :: Banoffee Ice Cream -> Banoffee Ice Cream
 - merged_at: 2026-04-11 10:28:38
 - payload_kind: resolution_variant_v1
 - source_type: Ice Cream
-- current_final_target: Banoffee Ice Cream [Ice Cream]
+- current_final_target: Banoffee Ice Cream [Dessert]
 - variant_assignments: JUNIOR_SCOOP_60GMS -> 1_PIECE
 - affected source item ids: 7449dbb6-75ef-5e31-a0ab-a84c75401451
 - raw names: (none found)
@@ -208,7 +338,7 @@ Each section shows a historical merge event, the source and target names, the af
 - merged_at: 2026-04-09 16:31:27
 - payload_kind: resolution_variant_v1
 - source_type: Ice Cream
-- current_final_target: Banoffee Ice Cream [Ice Cream]
+- current_final_target: Banoffee Ice Cream [Dessert]
 - variant_assignments: JUNIOR_SCOOP_60GMS -> JUNIOR_SCOOP_60GMS
 - affected source item ids: 1285047341 | 54290380 | 7449dbb6-75ef-5e31-a0ab-a84c75401451 | f7fb56db-3163-5a15-9911-53d5732f081a
 - raw names: Banoffee (60gm) | Banoffee Ice Cream (Junior Scoop (60gm)) | Eggless Banoffee Ice Cream (Junior Scoop) | Eggless Banoffee Ice Cream Small Scoop
@@ -278,7 +408,7 @@ Each section shows a historical merge event, the source and target names, the af
 - merged_at: 2026-04-09 16:15:48
 - payload_kind: resolution_variant_v1
 - source_type: Ice Cream
-- current_final_target: Banoffee Ice Cream [Ice Cream]
+- current_final_target: Banoffee Ice Cream [Dessert]
 - variant_assignments: 1_PIECE -> PERFECT_PLENTY_300ML
 - affected source item ids: 8d0eefd7-6cf9-51d9-9341-3c424546c18d
 - raw names: (none found)
@@ -454,7 +584,7 @@ Each section shows a historical merge event, the source and target names, the af
 - raw names: (none found)
 - counts: mappings=1 order_items=0 addons=11
 
-## Merge 16 :: Fig & Orange (60gm) -> 57542085-c8ca-5822-968b-02c5e6f24558
+## Merge 16 :: Fig & Orange (60gm) -> Fig & Orange
 - merged_at: 2026-04-09 12:47:28
 - payload_kind: variant_merge_v1
 - source_type: Ice Cream
@@ -484,7 +614,7 @@ Each section shows a historical merge event, the source and target names, the af
 - raw names: (none found)
 - counts: mappings=1 order_items=0 addons=1
 
-## Merge 13 :: Coffee Mascarpone (60gm) -> af4a5711-e1b4-5418-b2cb-b87a62903ee8
+## Merge 13 :: Coffee Mascarpone (60gm) -> Coffee Mascarpone
 - merged_at: 2026-04-09 12:46:56
 - payload_kind: variant_merge_v1
 - source_type: Ice Cream
@@ -578,7 +708,7 @@ Each section shows a historical merge event, the source and target names, the af
 - merged_at: 2026-04-09 12:13:16
 - payload_kind: variant_merge_v1
 - source_type: Ice Cream
-- current_final_target: Banoffee Ice Cream [Ice Cream]
+- current_final_target: Banoffee Ice Cream [Dessert]
 - variant_assignments: 1_PIECE -> JUNIOR_SCOOP_60GMS
 - affected source item ids: 7449dbb6-75ef-5e31-a0ab-a84c75401451
 - raw names: (none found)

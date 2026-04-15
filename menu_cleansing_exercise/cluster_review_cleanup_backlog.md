@@ -1,11 +1,17 @@
 # Cluster Review Cleanup Backlog
 
+## Combo cluster review — **complete** (2026-04-15)
+
+Combo-specific data cleansing is **finished** and **does not need to be revisited** unless new evidence appears. Archived exports and notice live under **`menu_cleansing_exercise/done/`** (see `menu_cleansing_exercise/done/README.md`). Ongoing work below refers to **general** cluster review under `menu_cleansing_exercise/cluster_review/`, not the closed combo-only exports.
+
+---
+
 Primary review files:
-- `tmp/cluster_review/current_clusters.md`
-- `tmp/cluster_review/current_clusters.csv`
-- `tmp/cluster_review/current_cluster_members.csv`
-- `tmp/cluster_review/merge_history.md`
-- `tmp/cluster_review/merge_history.csv`
+- `menu_cleansing_exercise/cluster_review/current_clusters.md`
+- `menu_cleansing_exercise/cluster_review/current_clusters.csv`
+- `menu_cleansing_exercise/cluster_review/current_cluster_members.csv`
+- `menu_cleansing_exercise/cluster_review/merge_history.md`
+- `menu_cleansing_exercise/cluster_review/merge_history.csv`
 
 Goal:
 - List the still-open cleanup work.

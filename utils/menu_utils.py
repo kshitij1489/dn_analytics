@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 from scripts.seed_from_backups import export_to_backups
 from utils.id_generator import generate_deterministic_id
+from utils.variant_metadata import infer_variant_metadata
 
 NULL_VARIANT_SENTINEL = "__NULL_VARIANT__"
 NULL_VARIANT_LABEL = "UNASSIGNED"
@@ -256,15 +257,18 @@ def _ensure_variant(conn, variant_name: str) -> str:
         raise ValueError("Variant name cannot be empty")
 
     variant_id = generate_deterministic_id(normalized_name)
+    metadata = infer_variant_metadata(normalized_name)
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT INTO variants (variant_id, variant_name, is_verified)
-            VALUES (?, ?, 1)
+            INSERT INTO variants (variant_id, variant_name, unit, value, is_verified)
+            VALUES (?, ?, ?, ?, 1)
             ON CONFLICT (variant_id) DO UPDATE SET
                 variant_name = excluded.variant_name,
+                unit = COALESCE(excluded.unit, unit),
+                value = COALESCE(excluded.value, value),
                 is_verified = 1
-        """, (variant_id, normalized_name))
+        """, (variant_id, normalized_name, metadata["unit"], metadata["value"]))
         return variant_id
     finally:
         cursor.close()
@@ -306,6 +310,135 @@ def _clear_volume_forecast_cache(cursor) -> Dict[str, int]:
     return cleared
 
 
+def _clear_item_and_volume_forecast_cache(cursor, menu_item_ids: List[str]) -> Dict[str, int]:
+    """Clear item/volume forecast caches for the affected menu items."""
+    cleared = {
+        "item_forecast_cache": 0,
+        "item_backtest_cache": 0,
+        "volume_forecast_cache": 0,
+        "volume_backtest_cache": 0,
+    }
+    normalized_ids = []
+    seen_ids = set()
+    for menu_item_id in menu_item_ids:
+        normalized_menu_item_id = str(menu_item_id or "").strip()
+        if not normalized_menu_item_id or normalized_menu_item_id in seen_ids:
+            continue
+        seen_ids.add(normalized_menu_item_id)
+        normalized_ids.append(normalized_menu_item_id)
+
+    if not normalized_ids:
+        return cleared
+
+    placeholders = ",".join("?" for _ in normalized_ids)
+    for table_name in cleared:
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table_name,),
+        )
+        if cursor.fetchone():
+            cursor.execute(
+                f"DELETE FROM {table_name} WHERE item_id IN ({placeholders})",
+                normalized_ids,
+            )
+            cleared[table_name] = cursor.rowcount
+    return cleared
+
+
+def _retarget_menu_item_suggestions(
+    cursor,
+    source_menu_item_id: str,
+    target_menu_item_id: str,
+) -> List[Dict[str, str]]:
+    """Point suggestion references at the surviving target before a source item is deleted."""
+    source_menu_item_id = str(source_menu_item_id or "").strip()
+    target_menu_item_id = str(target_menu_item_id or "").strip()
+    if not source_menu_item_id or not target_menu_item_id or source_menu_item_id == target_menu_item_id:
+        return []
+
+    cursor.execute("PRAGMA table_info(menu_items)")
+    if "suggestion_id" not in {str(row[1]) for row in cursor.fetchall()}:
+        return []
+
+    cursor.execute(
+        """
+        SELECT menu_item_id
+        FROM menu_items
+        WHERE suggestion_id = ?
+        """,
+        (source_menu_item_id,),
+    )
+    rows = [
+        {
+            "menu_item_id": str(row[0]),
+            "old_suggestion_id": source_menu_item_id,
+            "new_suggestion_id": target_menu_item_id,
+        }
+        for row in cursor.fetchall()
+    ]
+    if rows:
+        cursor.execute(
+            """
+            UPDATE menu_items
+            SET suggestion_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE suggestion_id = ?
+            """,
+            (target_menu_item_id, source_menu_item_id),
+        )
+    return rows
+
+
+def _restore_menu_item_suggestions(cursor, suggestion_rows: List[Dict[str, Any]]) -> None:
+    """Restore suggestion references captured before a merge or variant move."""
+    cursor.execute("PRAGMA table_info(menu_items)")
+    if "suggestion_id" not in {str(row[1]) for row in cursor.fetchall()}:
+        return
+
+    for row in suggestion_rows or []:
+        menu_item_id = str(row.get("menu_item_id") or "").strip()
+        old_suggestion_id = str(row.get("old_suggestion_id") or "").strip()
+        if not menu_item_id or not old_suggestion_id:
+            continue
+        cursor.execute(
+            """
+            UPDATE menu_items
+            SET suggestion_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE menu_item_id = ?
+            """,
+            (old_suggestion_id, menu_item_id),
+        )
+
+
+def _clear_impacted_models(
+    clear_item_models: bool = False,
+    clear_volume_models: bool = False,
+) -> Optional[str]:
+    """Delete stale local model artifacts after menu assignments move."""
+    errors: List[str] = []
+
+    if clear_item_models:
+        try:
+            from src.core.learning.revenue_forecasting.item_demand_ml.model_io import delete_models as delete_item_models
+
+            delete_item_models()
+        except Exception as e:
+            errors.append(f"item models: {e}")
+
+    if clear_volume_models:
+        try:
+            from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models as delete_volume_models
+
+            delete_volume_models()
+        except Exception as e:
+            errors.append(f"volume models: {e}")
+
+    if not errors:
+        return None
+    return "; ".join(errors)
+
+
 def _update_rows_for_variant_mapping(
     cursor,
     table_name: str,
@@ -336,7 +469,7 @@ def preview_merge_menu_items(
     source_variant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Preview the impact of merging one menu item into another."""
-    if source_id == target_id:
+    if source_id == target_id and source_variant_id is None:
         return {"status": "error", "message": "Cannot merge item into itself"}
 
     cursor = conn.cursor()
@@ -520,8 +653,10 @@ def merge_menu_items_with_variant_mappings(
         cursor.execute("SELECT order_item_addon_id, variant_id FROM order_item_addons WHERE menu_item_id = ?", (source_id,))
         addon_rows = cursor.fetchall()
 
+        suggestion_rows = _retarget_menu_item_suggestions(cursor, source_id, target_id)
         history_payload = {
             "kind": "variant_merge_v1",
+            "suggestion_refs": suggestion_rows,
             "mapping_rows": [
                 {
                     "order_item_id": row[0],
@@ -557,6 +692,7 @@ def merge_menu_items_with_variant_mappings(
             _update_rows_for_variant_mapping(cursor, "menu_item_variants", target_id, resolved_variant_id, source_id, source_variant_id)
 
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
+        cleared_caches = _clear_item_and_volume_forecast_cache(cursor, [source_id, target_id])
 
         if emit_sync_event:
             from src.core.menu_merge_sync_events import record_menu_merge_applied_event
@@ -565,15 +701,25 @@ def merge_menu_items_with_variant_mappings(
 
         conn.commit()
         export_to_backups(conn)
+        model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
+
+        message = f"Merged '{source_name}' into '{target[1]}' with variant mapping"
+        if model_cleanup_error:
+            message = f"{message}. Cleared affected caches but could not delete all local models: {model_cleanup_error}"
 
         return {
             "status": "success",
-            "message": f"Merged '{source_name}' into '{target[1]}' with variant mapping",
+            "message": message,
             "merge_id": merge_id,
             "stats": {
                 "variant_mappings": len(resolved_variant_ids),
                 "source_total_sold": int(source[4] or 0),
                 "source_total_revenue": float(source[5] or 0),
+                "suggestion_refs_updated": len(suggestion_rows),
+                "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
+                "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
+                "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
+                "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
             },
         }
     except Exception as e:
@@ -621,7 +767,13 @@ def merge_menu_items(
         # 1.5 Record History (Collect affected order_item_ids from mappings)
         cursor.execute("SELECT order_item_id FROM menu_item_variants WHERE menu_item_id = ?", (source_id,))
         affected_ids = [row[0] for row in cursor.fetchall()]
-        merge_id = _insert_merge_history(cursor, source_id, target_id, source_name, source_type, affected_ids)
+        suggestion_rows = _retarget_menu_item_suggestions(cursor, source_id, target_id)
+        history_payload = {
+            "kind": "basic_merge_v1",
+            "affected_order_item_ids": affected_ids,
+            "suggestion_refs": suggestion_rows,
+        }
+        merge_id = _insert_merge_history(cursor, source_id, target_id, source_name, source_type, history_payload)
         
         # 2. Update Target Stats
         _update_merge_target_stats(cursor, target_id, (source_sold, source_revenue, source_as_item, source_as_addon))
@@ -651,6 +803,7 @@ def merge_menu_items(
 
         # 6. Delete Source Item
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
+        cleared_caches = _clear_item_and_volume_forecast_cache(cursor, [source_id, target_id])
 
         if emit_sync_event:
             from src.core.menu_merge_sync_events import record_menu_merge_applied_event
@@ -661,15 +814,25 @@ def merge_menu_items(
         
         # 7. Update Backups
         export_to_backups(conn)
+        model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
+
+        message = f"Merged '{source_name}' into '{target_name}'"
+        if model_cleanup_error:
+            message = f"{message}. Cleared affected caches but could not delete all local models: {model_cleanup_error}"
 
         return {
             "status": "success", 
-            "message": f"Merged '{source_name}' into '{target_name}'",
+            "message": message,
             "merge_id": merge_id,
             "stats": {
                 "orders_relinked": relinked_count,
                 "mappings_updated": mappings_updated,
-                "revenue_added": float(source_revenue or 0)
+                "revenue_added": float(source_revenue or 0),
+                "suggestion_refs_updated": len(suggestion_rows),
+                "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
+                "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
+                "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
+                "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
             }
         }
         
@@ -899,6 +1062,7 @@ def resolve_menu_item_variant(
             return {"status": "error", "message": "Source variant was not found"}
 
         source_variant = source_variant_summary[0]
+        full_source_variant_summary = _fetch_menu_item_variant_summary(conn, source_menu_item_id)
         source_variant_db_id = _decode_variant_key(source_variant_key)
 
         if target_menu_item_id:
@@ -976,7 +1140,7 @@ def resolve_menu_item_variant(
         ]
 
         if not mapping_rows:
-            return {"status": "error", "message": "No unresolved mapping rows were found for this source variant"}
+            return {"status": "error", "message": "No mapping rows were found for this source variant"}
 
         cursor.execute(
             f"""
@@ -1021,6 +1185,16 @@ def resolve_menu_item_variant(
             resolved_target_variant_id != source_variant_db_id
         )
         merge_id = None
+        source_will_be_removed = (
+            resolved_target_id != source_menu_item_id and
+            len(full_source_variant_summary) == 1 and
+            full_source_variant_summary[0]["variant_id"] == source_variant_key
+        )
+        suggestion_rows = (
+            _retarget_menu_item_suggestions(cursor, source_menu_item_id, resolved_target_id)
+            if source_will_be_removed
+            else []
+        )
         if should_record_history:
             history_payload = {
                 "kind": "resolution_variant_v1",
@@ -1028,6 +1202,7 @@ def resolve_menu_item_variant(
                 "target_variant_id": resolved_target_variant_id,
                 "source_variant_name": source_variant["variant_name"],
                 "target_variant_name": target_variant_name,
+                "suggestion_refs": suggestion_rows,
                 "mapping_rows": mapping_rows,
                 "order_items": order_item_rows,
                 "order_item_addons": addon_rows,
@@ -1112,6 +1287,26 @@ def resolve_menu_item_variant(
         for menu_item_id in {source_menu_item_id, resolved_target_id}:
             _sync_menu_item_resolution_state(cursor, menu_item_id)
 
+        cleared_item_caches = {
+            "item_forecast_cache": 0,
+            "item_backtest_cache": 0,
+            "volume_forecast_cache": 0,
+            "volume_backtest_cache": 0,
+        }
+        cleared_volume_caches = {
+            "volume_forecast_cache": 0,
+            "volume_backtest_cache": 0,
+        }
+        clear_item_models = False
+        clear_volume_models = False
+        if resolved_target_id != source_menu_item_id:
+            cleared_item_caches = _clear_item_and_volume_forecast_cache(cursor, [source_menu_item_id, resolved_target_id])
+            clear_item_models = True
+            clear_volume_models = True
+        elif resolved_target_variant_id != source_variant_db_id:
+            cleared_volume_caches = _clear_volume_forecast_cache(cursor)
+            clear_volume_models = True
+
         if emit_sync_event and merge_id is not None:
             from src.core.menu_merge_sync_events import record_menu_merge_applied_event
 
@@ -1119,6 +1314,10 @@ def resolve_menu_item_variant(
 
         conn.commit()
         export_to_backups(conn)
+        model_cleanup_error = _clear_impacted_models(
+            clear_item_models=clear_item_models,
+            clear_volume_models=clear_volume_models,
+        )
 
         if resolved_target_id == source_menu_item_id and resolved_target_variant_id == source_variant_db_id:
             message = f"Verified '{source_item[1]}' ({source_variant['variant_name']}) as a resolved menu item + variant pair"
@@ -1127,6 +1326,8 @@ def resolve_menu_item_variant(
                 f"Resolved '{source_item[1]}' ({source_variant['variant_name']}) "
                 f"into '{target_name}' ({target_variant_name})"
             )
+        if model_cleanup_error:
+            message = f"{message}. Cleared affected caches but could not delete all local models: {model_cleanup_error}"
 
         return {
             "status": "success",
@@ -1136,6 +1337,15 @@ def resolve_menu_item_variant(
                 "mapping_rows_updated": len(mapping_rows),
                 "order_items_updated": len(order_item_rows),
                 "order_item_addons_updated": len(addon_rows),
+                "suggestion_refs_updated": len(suggestion_rows),
+                "item_forecast_cache_cleared": cleared_item_caches["item_forecast_cache"],
+                "item_backtest_cache_cleared": cleared_item_caches["item_backtest_cache"],
+                "volume_forecast_cache_cleared": (
+                    cleared_item_caches["volume_forecast_cache"] + cleared_volume_caches["volume_forecast_cache"]
+                ),
+                "volume_backtest_cache_cleared": (
+                    cleared_item_caches["volume_backtest_cache"] + cleared_volume_caches["volume_backtest_cache"]
+                ),
             },
         }
     except Exception as e:
@@ -1205,14 +1415,22 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
         
         # Parse legacy list payload or richer variant-aware payload.
         history_payload = json.loads(affected_ids_json) if isinstance(affected_ids_json, str) else affected_ids_json
-        
+
+        history_kind = history_payload.get("kind") if isinstance(history_payload, dict) else None
+
+        if history_kind == "mapping_audit_v1":
+            return {
+                "status": "error",
+                "message": "This history entry records a mapping cleanup only; it cannot be undone from the UI.",
+            }
+
         # 2. Re-insert Source Item (SQLite UPSERT with INSERT OR IGNORE)
         cursor.execute("""
             INSERT OR IGNORE INTO menu_items (menu_item_id, name, type, is_verified)
             VALUES (?, ?, ?, 1)
         """, (source_id, history_dict['source_name'], history_dict['source_type']))
-        
-        history_kind = history_payload.get("kind") if isinstance(history_payload, dict) else None
+        if isinstance(history_payload, dict):
+            _restore_menu_item_suggestions(cursor, history_payload.get("suggestion_refs", []))
 
         if history_kind == "variant_merge_v1":
             for mapping_row in history_payload.get("mapping_rows", []):
@@ -1271,6 +1489,8 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                 ))
         else:
             affected_ids = history_payload
+            if history_kind == "basic_merge_v1" and isinstance(history_payload, dict):
+                affected_ids = history_payload.get("affected_order_item_ids", [])
             # 3. Relink Mappings (menu_item_variants)
             if affected_ids:
                 in_clause, params = _build_in_clause(affected_ids)
@@ -1302,6 +1522,26 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
             for mid in [target_id, source_id]:
                 _sync_menu_item_resolution_state(cursor, mid)
 
+        cleared_item_caches = {
+            "item_forecast_cache": 0,
+            "item_backtest_cache": 0,
+            "volume_forecast_cache": 0,
+            "volume_backtest_cache": 0,
+        }
+        cleared_volume_caches = {
+            "volume_forecast_cache": 0,
+            "volume_backtest_cache": 0,
+        }
+        clear_item_models = False
+        clear_volume_models = False
+        if history_kind == "resolution_variant_v1" and source_id == target_id:
+            cleared_volume_caches = _clear_volume_forecast_cache(cursor)
+            clear_volume_models = True
+        else:
+            cleared_item_caches = _clear_item_and_volume_forecast_cache(cursor, [source_id, target_id])
+            clear_item_models = True
+            clear_volume_models = True
+
         if emit_sync_event:
             from src.core.menu_merge_sync_events import record_menu_merge_undone_event
 
@@ -1319,8 +1559,29 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
         
         # 8. Update Backups
         export_to_backups(conn)
+        model_cleanup_error = _clear_impacted_models(
+            clear_item_models=clear_item_models,
+            clear_volume_models=clear_volume_models,
+        )
+
+        message = f"Successfully reversed merge of '{history_dict['source_name']}'"
+        if model_cleanup_error:
+            message = f"{message}. Cleared affected caches but could not delete all local models: {model_cleanup_error}"
         
-        return {"status": "success", "message": f"Successfully reversed merge of '{history_dict['source_name']}'"}
+        return {
+            "status": "success",
+            "message": message,
+            "stats": {
+                "item_forecast_cache_cleared": cleared_item_caches["item_forecast_cache"],
+                "item_backtest_cache_cleared": cleared_item_caches["item_backtest_cache"],
+                "volume_forecast_cache_cleared": (
+                    cleared_item_caches["volume_forecast_cache"] + cleared_volume_caches["volume_forecast_cache"]
+                ),
+                "volume_backtest_cache_cleared": (
+                    cleared_item_caches["volume_backtest_cache"] + cleared_volume_caches["volume_backtest_cache"]
+                ),
+            },
+        }
         
     except Exception as e:
         conn.rollback()

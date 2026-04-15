@@ -23,6 +23,10 @@ from src.core.db.connection import DB_PATH, get_db_connection
 NULL_VARIANT_LABEL = "UNASSIGNED"
 LIST_SEPARATOR = " | "
 
+# Human review exports for menu / cluster state (typed exports use the same root).
+MENU_STATE_EVALUATION_ROOT = "menu_cleansing_exercise"
+DEFAULT_CLUSTER_REVIEW_OUTPUT_DIR = f"{MENU_STATE_EVALUATION_ROOT}/cluster_review"
+
 
 def _sorted_join(values: Iterable[str]) -> str:
     cleaned = sorted({value.strip() for value in values if value and value.strip()})
@@ -214,6 +218,12 @@ def _load_current_mapping_context(
     This allows the review export to represent row-level overrides accurately when a
     shared source key has been split across variants or when a manual override uses an
     internal row id instead of the original PetPooja source id.
+
+    Order of resolution for each of order_items / order_item_addons:
+    1) Match source id + catalog ``menu_item_id`` + variant (strict).
+    2) If none, match source id + variant only (same POS key attached to another catalog row,
+       e.g. Dessert mapping vs Ice Cream parent line).
+    3) If still none for both channels, use the global per-source fallback (no variant).
     """
     context = _empty_source_context()
     cursor = conn.cursor()
@@ -221,13 +231,17 @@ def _load_current_mapping_context(
         if variant_id in (None, "", "None"):
             order_item_variant_clause = "oi.variant_id IS NULL"
             addon_variant_clause = "oa.variant_id IS NULL"
-            order_item_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
-            addon_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            oi_scoped_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            oi_relaxed_params: List[Any] = [source_item_id, source_item_id]
+            oa_scoped_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            oa_relaxed_params: List[Any] = [source_item_id, source_item_id]
         else:
             order_item_variant_clause = "oi.variant_id = ?"
             addon_variant_clause = "oa.variant_id = ?"
-            order_item_params = [source_item_id, source_item_id, menu_item_id, variant_id]
-            addon_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            oi_scoped_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            oi_relaxed_params = [source_item_id, source_item_id, variant_id]
+            oa_scoped_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            oa_relaxed_params = [source_item_id, source_item_id, variant_id]
 
         cursor.execute(
             f"""
@@ -241,12 +255,31 @@ def _load_current_mapping_context(
               AND {order_item_variant_clause}
             """
             ,
-            order_item_params,
+            oi_scoped_params,
         )
         for row in cursor.fetchall():
             context["item_rows"] += 1
             if row["name_raw"]:
                 context["item_raw_names"].add(row["name_raw"])
+
+        if context["item_rows"] == 0:
+            cursor.execute(
+                f"""
+                SELECT oi.name_raw
+                FROM order_items oi
+                WHERE (
+                    CAST(oi.petpooja_itemid AS TEXT) = ?
+                    OR CAST(oi.order_item_id AS TEXT) = ?
+                )
+                  AND {order_item_variant_clause}
+                """
+                ,
+                oi_relaxed_params,
+            )
+            for row in cursor.fetchall():
+                context["item_rows"] += 1
+                if row["name_raw"]:
+                    context["item_raw_names"].add(row["name_raw"])
 
         cursor.execute(
             f"""
@@ -260,18 +293,151 @@ def _load_current_mapping_context(
               AND {addon_variant_clause}
             """
             ,
-            addon_params,
+            oa_scoped_params,
         )
         for row in cursor.fetchall():
             context["addon_rows"] += 1
             if row["name_raw"]:
                 context["addon_raw_names"].add(row["name_raw"])
+
+        if context["addon_rows"] == 0:
+            cursor.execute(
+                f"""
+                SELECT oa.name_raw
+                FROM order_item_addons oa
+                WHERE (
+                    CAST(oa.petpooja_addonid AS TEXT) = ?
+                    OR CAST(oa.order_item_addon_id AS TEXT) = ?
+                )
+                  AND {addon_variant_clause}
+                """
+                ,
+                oa_relaxed_params,
+            )
+            for row in cursor.fetchall():
+                context["addon_rows"] += 1
+                if row["name_raw"]:
+                    context["addon_raw_names"].add(row["name_raw"])
     finally:
         cursor.close()
 
     if context["item_rows"] or context["addon_rows"]:
         return context
     return fallback_context
+
+
+def _sqlite_row_as_dict(row: Any) -> Dict[str, Any]:
+    return {k: row[k] for k in row.keys()}
+
+
+def fetch_order_lines_for_mapping_review(
+    conn: Any,
+    source_item_id: str,
+    menu_item_id: str,
+    variant_id: Optional[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool, bool]:
+    """
+    Rows for typed cluster markdown detail lists.
+
+    Uses the same two-tier resolution as ``_load_current_mapping_context`` for items and
+    addons independently: strict ``menu_item_id`` + variant, then source id + variant only.
+
+    Returns (order_items, order_item_addons, used_relaxed_items, used_relaxed_addons).
+    """
+    cursor = conn.cursor()
+    item_rows: List[Dict[str, Any]] = []
+    addon_rows: List[Dict[str, Any]] = []
+    relaxed_items = False
+    relaxed_addons = False
+    try:
+        if variant_id in (None, "", "None"):
+            order_item_variant_clause = "oi.variant_id IS NULL"
+            addon_variant_clause = "oa.variant_id IS NULL"
+            oi_scoped_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            oi_relaxed_params: List[Any] = [source_item_id, source_item_id]
+            oa_scoped_params: List[Any] = [source_item_id, source_item_id, menu_item_id]
+            oa_relaxed_params: List[Any] = [source_item_id, source_item_id]
+        else:
+            order_item_variant_clause = "oi.variant_id = ?"
+            addon_variant_clause = "oa.variant_id = ?"
+            oi_scoped_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            oi_relaxed_params = [source_item_id, source_item_id, variant_id]
+            oa_scoped_params = [source_item_id, source_item_id, menu_item_id, variant_id]
+            oa_relaxed_params = [source_item_id, source_item_id, variant_id]
+
+        cursor.execute(
+            f"""
+            SELECT oi.order_item_id, oi.order_id, oi.quantity, oi.unit_price, oi.total_price,
+                   oi.name_raw, oi.petpooja_itemid
+            FROM order_items oi
+            WHERE (
+                CAST(oi.petpooja_itemid AS TEXT) = ?
+                OR CAST(oi.order_item_id AS TEXT) = ?
+            )
+              AND oi.menu_item_id = ?
+              AND {order_item_variant_clause}
+            ORDER BY oi.order_item_id
+            """,
+            oi_scoped_params,
+        )
+        item_rows = [_sqlite_row_as_dict(r) for r in cursor.fetchall()]
+
+        if not item_rows:
+            cursor.execute(
+                f"""
+                SELECT oi.order_item_id, oi.order_id, oi.quantity, oi.unit_price, oi.total_price,
+                       oi.name_raw, oi.petpooja_itemid
+                FROM order_items oi
+                WHERE (
+                    CAST(oi.petpooja_itemid AS TEXT) = ?
+                    OR CAST(oi.order_item_id AS TEXT) = ?
+                )
+                  AND {order_item_variant_clause}
+                ORDER BY oi.order_item_id
+                """,
+                oi_relaxed_params,
+            )
+            item_rows = [_sqlite_row_as_dict(r) for r in cursor.fetchall()]
+            relaxed_items = bool(item_rows)
+
+        cursor.execute(
+            f"""
+            SELECT oa.order_item_addon_id, oa.order_item_id, oa.quantity, oa.price,
+                   oa.name_raw, oa.petpooja_addonid
+            FROM order_item_addons oa
+            WHERE (
+                CAST(oa.petpooja_addonid AS TEXT) = ?
+                OR CAST(oa.order_item_addon_id AS TEXT) = ?
+            )
+              AND oa.menu_item_id = ?
+              AND {addon_variant_clause}
+            ORDER BY oa.order_item_addon_id
+            """,
+            oa_scoped_params,
+        )
+        addon_rows = [_sqlite_row_as_dict(r) for r in cursor.fetchall()]
+
+        if not addon_rows:
+            cursor.execute(
+                f"""
+                SELECT oa.order_item_addon_id, oa.order_item_id, oa.quantity, oa.price,
+                       oa.name_raw, oa.petpooja_addonid
+                FROM order_item_addons oa
+                WHERE (
+                    CAST(oa.petpooja_addonid AS TEXT) = ?
+                    OR CAST(oa.order_item_addon_id AS TEXT) = ?
+                )
+                  AND {addon_variant_clause}
+                ORDER BY oa.order_item_addon_id
+                """,
+                oa_relaxed_params,
+            )
+            addon_rows = [_sqlite_row_as_dict(r) for r in cursor.fetchall()]
+            relaxed_addons = bool(addon_rows)
+
+        return item_rows, addon_rows, relaxed_items, relaxed_addons
+    finally:
+        cursor.close()
 
 
 def _load_merge_history_rows(
@@ -649,8 +815,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export cluster review lists from analytics.db")
     parser.add_argument(
         "--output-dir",
-        default="tmp/cluster_review",
-        help=f"Directory for generated review files (default: tmp/cluster_review, DB: {DB_PATH})",
+        default=DEFAULT_CLUSTER_REVIEW_OUTPUT_DIR,
+        help=(
+            "Directory for generated review files (must be a real path you can write to, "
+            "e.g. ./my_cluster_export or an absolute path under your home directory). "
+            f"Default: {DEFAULT_CLUSTER_REVIEW_OUTPUT_DIR}. DB: {DB_PATH}."
+        ),
     )
     args = parser.parse_args()
 
