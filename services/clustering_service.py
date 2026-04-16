@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.db.connection import get_db_connection
 from utils.id_generator import generate_deterministic_id
+from utils.menu_item_variant_enforcement import ensure_menu_item_has_variant_mapping
 
 try:
     from utils.clean_order_item import clean_order_item_name
@@ -159,7 +160,8 @@ class OrderItemCluster:
                 ON CONFLICT (order_item_id) DO NOTHING
             """, (str(order_item_id), menu_item_id, variant_id))
 
-            
+            ensure_menu_item_has_variant_mapping(self.conn, menu_item_id, cursor=cursor)
+
             self.conn.commit()
             return str(menu_item_id), str(order_item_id), str(variant_id), item_type
 

@@ -218,3 +218,15 @@ export function applyMetric(data: any[], metric: string) {
     // Fallback
     return data.map(d => ({ ...d, value: d.revenue }));
 }
+
+/**
+ * Map a numeric field on each row into `revenue` so {@link groupDataByTimeBucket},
+ * {@link applyMetric}, and {@link calculateStrictMA} can be reused without change.
+ */
+export function rowsWithRevenueFromMeasure(rows: any[], measureField: string) {
+    return rows.map((r) => ({
+        ...r,
+        date: r.date,
+        revenue: Number(r[measureField]) || 0,
+    }));
+}

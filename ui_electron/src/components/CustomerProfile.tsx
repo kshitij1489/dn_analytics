@@ -294,7 +294,7 @@ export function CustomerProfile({
                             <thead>
                                 <tr>
                                     <th>Date</th>
-                                    <th>Order No</th>
+                                    <th>Petpooja Order ID</th>
                                     <th>Items</th>
                                     <th>Total</th>
                                     <th>Source</th>

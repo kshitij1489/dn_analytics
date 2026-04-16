@@ -92,7 +92,7 @@ def run_client_learning(conn=Depends(get_db)):
     """
     Run all cloud push uploads: error logs, ai_logs + ai_feedback, menu bootstrap,
     customer merge events, menu merge events, and forecasts.
-    Uses placeholder URLs by default; set CLIENT_LEARNING_* env vars for real cloud.
+    Uses cloud_sync_url / cloud_sync_api_key from Configuration (same as the 5‑minute scheduler).
     """
     result = run_client_learning_shippers(conn)
     return {"status": "ok", "result": result}

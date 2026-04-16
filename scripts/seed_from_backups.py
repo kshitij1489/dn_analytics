@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.db.connection import get_db_connection
 from src.core.utils.path_helper import get_resource_path
+from utils.menu_item_variant_enforcement import backfill_menu_items_missing_variant_mappings
 from utils.variant_metadata import infer_variant_metadata
 
 def perform_seeding(conn):
@@ -97,8 +98,12 @@ def perform_seeding(conn):
                         seen_variants.add(variant_id)
                         mappings_count += 1
         
+        stub_count = backfill_menu_items_missing_variant_mappings(conn, cursor=cursor)
         conn.commit()
-        print(f"Successfully seeded: {menu_items_count} items, {variants_count} variants, {mappings_count} mappings")
+        print(
+            f"Successfully seeded: {menu_items_count} items, {variants_count} variants, "
+            f"{mappings_count} mappings, {stub_count} default variant stub(s)"
+        )
         return True
         
     except Exception as e:

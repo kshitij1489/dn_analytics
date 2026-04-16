@@ -7,6 +7,7 @@ Provides endpoints for menu items, variants, merging, remapping, and verificatio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Any, Dict, List, Optional, Tuple
 import json
+from datetime import datetime, timedelta
 from src.core.queries import menu_queries, table_queries
 from src.api.dependencies import get_db
 from src.api.utils import df_to_json
@@ -128,6 +129,48 @@ def get_menu_summary(
     if err:
         raise HTTPException(status_code=500, detail=err)
     return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size, "as_of_date": end_bd}
+
+
+@router.get("/summary-timeseries")
+def get_menu_summary_timeseries(
+    menu_item_ids: str = Query(
+        ...,
+        description="Comma-separated menu_item_id values (max 15).",
+    ),
+    start_date: Optional[str] = Query(
+        None,
+        description="Business date lower bound (YYYY-MM-DD). Defaults to 365 days before end_date.",
+    ),
+    end_date: Optional[str] = Query(
+        None,
+        description="Business date upper bound (YYYY-MM-DD). Defaults to current business date.",
+    ),
+    conn=Depends(get_db),
+):
+    """
+    Daily quantity, volume, and revenue for selected menu items (Menu Summary chart).
+
+    Uses the same event-level definitions as Menu → Summary rollups and Menu Items revenue.
+    """
+    ids = tuple(x.strip() for x in menu_item_ids.split(",") if x.strip())
+    if not ids:
+        raise HTTPException(status_code=400, detail="menu_item_ids is required")
+    if len(ids) > 15:
+        raise HTTPException(status_code=400, detail="At most 15 menu items per request")
+
+    end_bd = end_date or get_current_business_date()
+    if start_date:
+        start_bd = start_date
+    else:
+        end_dt = datetime.fromisoformat(end_bd)
+        start_bd = (end_dt - timedelta(days=365)).date().isoformat()
+
+    df, err = menu_queries.fetch_menu_items_daily_timeseries(
+        conn, ids, start_date=start_bd, end_date=end_bd
+    )
+    if err:
+        raise HTTPException(status_code=500, detail=err)
+    return {"data": df_to_json(df), "start_date": start_bd, "end_date": end_bd}
 
 
 @router.get("/items-view")

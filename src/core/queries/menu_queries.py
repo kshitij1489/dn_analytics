@@ -616,3 +616,115 @@ def fetch_menu_summary_rollups(
         return pd.DataFrame([dict(row) for row in cursor.fetchall()]), total_count, None
     except Exception as e:
         return None, 0, str(e)
+
+
+def fetch_menu_items_daily_timeseries(
+    conn,
+    menu_item_ids: tuple[str, ...],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """
+    Per business day, per menu item: quantity, volume, revenue.
+
+    Quantity and volume use the same deduped line + add-on events and volume math
+    as ``fetch_menu_summary_rollups`` (variant value × quantity, summed across units).
+
+    Revenue matches ``fetch_menu_items_summary``: deduped line ``total_price`` plus
+    add-on ``price * quantity``.
+    """
+    if not menu_item_ids:
+        return pd.DataFrame([]), None
+    try:
+        placeholders = ",".join(["?"] * len(menu_item_ids))
+        date_clauses: list[str] = []
+        date_params: list = []
+        if start_date:
+            date_clauses.append("e.business_date >= ?")
+            date_params.append(start_date)
+        if end_date:
+            date_clauses.append("e.business_date <= ?")
+            date_params.append(end_date)
+        date_sql = f" AND {' AND '.join(date_clauses)}" if date_clauses else ""
+
+        query = f"""
+            WITH filtered_orders AS (
+                SELECT o.order_id, o.created_on
+                FROM orders o
+                WHERE o.order_status = 'Success'
+            ),
+            dedup_items AS (
+                SELECT
+                    order_item_id,
+                    order_id,
+                    menu_item_id,
+                    quantity AS qty,
+                    variant_id,
+                    business_date,
+                    COALESCE(total_price, 0) AS line_revenue
+                FROM (
+                    SELECT
+                        oi.order_item_id,
+                        oi.order_id,
+                        oi.menu_item_id,
+                        oi.quantity,
+                        oi.variant_id,
+                        DATE(fo.created_on, '-5 hours') AS business_date,
+                        COALESCE(oi.total_price, 0) AS total_price,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oi.order_id, oi.name_raw, oi.quantity, oi.unit_price
+                            ORDER BY oi.order_item_id
+                        ) AS rn
+                    FROM order_items oi
+                    JOIN filtered_orders fo ON fo.order_id = oi.order_id
+                )
+                WHERE rn = 1
+            ),
+            dedup_addons AS (
+                SELECT
+                    menu_item_id,
+                    quantity AS qty,
+                    variant_id,
+                    business_date,
+                    (COALESCE(price, 0) * COALESCE(quantity, 0)) AS line_revenue
+                FROM (
+                    SELECT
+                        oia.menu_item_id,
+                        oia.quantity,
+                        oia.variant_id,
+                        di.business_date,
+                        oia.price,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY oia.order_item_id, oia.name_raw, oia.quantity, oia.price
+                            ORDER BY oia.order_item_addon_id
+                        ) AS rn
+                    FROM order_item_addons oia
+                    JOIN dedup_items di ON di.order_item_id = oia.order_item_id
+                )
+                WHERE rn = 1
+            ),
+            events AS (
+                SELECT menu_item_id, business_date, qty, variant_id, line_revenue FROM dedup_items
+                UNION ALL
+                SELECT menu_item_id, business_date, qty, variant_id, line_revenue FROM dedup_addons
+            )
+            SELECT
+                e.menu_item_id,
+                mi.name AS menu_item_name,
+                e.business_date AS date,
+                SUM(CAST(COALESCE(e.qty, 0) AS REAL)) AS quantity,
+                SUM(COALESCE(v.value, 0) * CAST(COALESCE(e.qty, 0) AS REAL)) AS volume,
+                SUM(COALESCE(e.line_revenue, 0)) AS revenue
+            FROM events e
+            JOIN menu_items mi ON mi.menu_item_id = e.menu_item_id
+            LEFT JOIN variants v ON e.variant_id = v.variant_id
+            WHERE e.menu_item_id IN ({placeholders})
+            {date_sql}
+            GROUP BY e.menu_item_id, mi.name, e.business_date
+            ORDER BY e.business_date ASC, mi.name ASC
+        """
+        params: list = list(menu_item_ids) + date_params
+        cursor = conn.execute(query, params)
+        return pd.DataFrame([dict(row) for row in cursor.fetchall()]), None
+    except Exception as e:
+        return None, str(e)

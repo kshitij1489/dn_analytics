@@ -10,7 +10,8 @@ import {
     OrderSourceChart,
     AverageRevenueByDayChart,
     BrandAwarenessChart,
-    ReorderRateChart
+    ReorderRateChart,
+    MenuItemTrendChart,
 } from '../components/charts';
 
 import { endpoints } from '../api';
@@ -52,7 +53,8 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
         { id: 'categoryTrend', label: '📉 Category Trend' },
         { id: 'revenueByCategory', label: '📂  Rev by Cat' },
         { id: 'topItems', label: '🏆 Top Items' },
-        { id: 'orderSource', label: '🛵 Order Source' }
+        { id: 'orderSource', label: '🛵 Order Source' },
+        { id: 'menuItemTrend', label: '📊 Menu items' },
     ];
 
     // Segmented Control Button Component 
@@ -133,6 +135,7 @@ export default function ChartPage({ lastDbSync }: { lastDbSync?: number }) {
                 {chartType === 'avgRevenueByDay' && <AverageRevenueByDayChart key={chartKey} />}
                 {chartType === 'brandAwareness' && <BrandAwarenessChart key={chartKey} />}
                 {chartType === 'reorderRate' && <ReorderRateChart key={chartKey} />}
+                {chartType === 'menuItemTrend' && <MenuItemTrendChart key={chartKey} lastDbSync={lastDbSync} />}
             </div>
         </div>
     );

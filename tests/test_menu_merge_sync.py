@@ -38,9 +38,13 @@ class MenuMergeSyncTests(unittest.TestCase):
             );
 
             CREATE TABLE menu_item_variants (
-                order_item_id INTEGER PRIMARY KEY,
+                order_item_id TEXT PRIMARY KEY,
                 menu_item_id TEXT NOT NULL,
                 variant_id TEXT,
+                price REAL DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                addon_eligible BOOLEAN DEFAULT 0,
+                delivery_eligible BOOLEAN DEFAULT 1,
                 is_verified BOOLEAN DEFAULT 1,
                 updated_at TEXT
             );
@@ -96,6 +100,12 @@ class MenuMergeSyncTests(unittest.TestCase):
         )
         self.conn.execute(
             """
+            INSERT INTO variants (variant_id, variant_name, is_verified)
+            VALUES ('variant_1_piece', '1_PIECE', 1)
+            """
+        )
+        self.conn.execute(
+            """
             INSERT INTO order_items (order_id, menu_item_id, quantity, total_price, name_raw)
             VALUES (1, 'item_source', 2, 240.0, 'Iced Coffee')
             """
@@ -103,7 +113,7 @@ class MenuMergeSyncTests(unittest.TestCase):
         self.conn.execute(
             """
             INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-            VALUES (1, 'item_source', NULL, 1)
+            VALUES ('1', 'item_source', NULL, 1)
             """
         )
         self.conn.commit()

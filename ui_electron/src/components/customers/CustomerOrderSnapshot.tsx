@@ -46,7 +46,7 @@ export function CustomerOrderSnapshot({
                                 <div key={order.order_id} className="customer-identity-order-card">
                                     <div className="customer-identity-row customer-identity-row-start">
                                         <div>
-                                            <div className="customer-identity-title-sm">Order #{order.order_number}</div>
+                                            <div className="customer-identity-title-sm">Petpooja Order ID {order.order_number}</div>
                                             <div className="customer-identity-subtitle">{formatDateTime(order.created_on)}</div>
                                         </div>
                                         <div className="customer-identity-order-total">{formatCurrency(order.total_amount)}</div>

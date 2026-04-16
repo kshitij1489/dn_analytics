@@ -39,7 +39,7 @@ class MenuUtilsTests(unittest.TestCase):
             );
 
             CREATE TABLE menu_item_variants (
-                order_item_id INTEGER PRIMARY KEY,
+                order_item_id TEXT PRIMARY KEY,
                 menu_item_id TEXT NOT NULL,
                 variant_id TEXT,
                 price REAL DEFAULT 0,
@@ -132,6 +132,9 @@ class MenuUtilsTests(unittest.TestCase):
         )
         self.conn.execute(
             "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant_small', 'SMALL', 1)"
+        )
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant_1_piece', '1_PIECE', 1)"
         )
         self.conn.execute(
             """

@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 from scripts.seed_from_backups import export_to_backups
 from utils.id_generator import generate_deterministic_id
+from utils.menu_item_variant_enforcement import ensure_menu_item_has_variant_mapping
 from utils.variant_metadata import infer_variant_metadata
 
 NULL_VARIANT_SENTINEL = "__NULL_VARIANT__"
@@ -692,6 +693,7 @@ def merge_menu_items_with_variant_mappings(
             _update_rows_for_variant_mapping(cursor, "menu_item_variants", target_id, resolved_variant_id, source_id, source_variant_id)
 
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
+        ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
         cleared_caches = _clear_item_and_volume_forecast_cache(cursor, [source_id, target_id])
 
         if emit_sync_event:
@@ -803,6 +805,7 @@ def merge_menu_items(
 
         # 6. Delete Source Item
         cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (source_id,))
+        ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
         cleared_caches = _clear_item_and_volume_forecast_cache(cursor, [source_id, target_id])
 
         if emit_sync_event:
@@ -849,6 +852,13 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
     """
     cursor = conn.cursor()
     try:
+        cursor.execute(
+            "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = ?",
+            (str(order_item_id),),
+        )
+        prev_row = cursor.fetchone()
+        prev_menu_item_id = str(prev_row[0]) if prev_row else None
+
         # 1. Update Mapping (SQLite UPSERT)
         cursor.execute("""
             INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
@@ -858,7 +868,11 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
                 variant_id = excluded.variant_id,
                 is_verified = 1
         """, (order_item_id, new_menu_item_id, new_variant_id))
-        
+
+        if prev_menu_item_id and prev_menu_item_id != str(new_menu_item_id):
+            ensure_menu_item_has_variant_mapping(conn, prev_menu_item_id, cursor=cursor)
+        ensure_menu_item_has_variant_mapping(conn, new_menu_item_id, cursor=cursor)
+
         conn.commit()
         
         # 2. Update Backups
@@ -1090,6 +1104,7 @@ def resolve_menu_item_variant(
                     INSERT INTO menu_items (menu_item_id, name, type, is_verified)
                     VALUES (?, ?, ?, 1)
                 """, (resolved_target_id, normalized_new_name, normalized_new_type))
+                ensure_menu_item_has_variant_mapping(conn, resolved_target_id, cursor=cursor)
                 target_name = normalized_new_name
                 target_type = normalized_new_type
             else:
@@ -1378,6 +1393,7 @@ def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> D
                 INSERT INTO menu_items (menu_item_id, name, type, is_verified)
                 VALUES (?, ?, ?, 1)
             """, (target_id, new_name, new_type))
+            ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
             conn.commit() # Commit creation effectively
             
         # Merge Source -> Target
@@ -1551,7 +1567,9 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                 occurred_at=datetime.now(timezone.utc).isoformat(),
             )
 
-        
+        ensure_menu_item_has_variant_mapping(conn, source_id, cursor=cursor)
+        ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
+
         # 7. Delete History
         cursor.execute("DELETE FROM merge_history WHERE merge_id = ?", (merge_id,))
         

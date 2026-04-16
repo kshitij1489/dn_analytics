@@ -100,6 +100,11 @@ export const endpoints = {
             sort_by?: string;
             sort_desc?: boolean;
         }) => api.get('/menu/summary', { params }),
+        summaryTimeseries: (params: {
+            menu_item_ids: string;
+            start_date?: string;
+            end_date?: string;
+        }) => api.get('/menu/summary-timeseries', { params }),
         itemsView: (params?: any) => api.get('/menu/items-view', { params }),
         variantsView: (params?: any) => api.get('/menu/variants-view', { params }),
         matrix: () => api.get('/menu/matrix'),

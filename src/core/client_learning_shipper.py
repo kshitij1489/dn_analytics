@@ -64,6 +64,14 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
         if db_auth:
             auth = db_auth
 
+    # Push Now calls run_all(conn) without base_url; background sync passes it explicitly.
+    # Without this, learning/menu-bootstrap/error shippers fall back to CLIENT_LEARNING_* env
+    # defaults (http://localhost in client_learning_config), ignoring Configuration.
+    if not base_url and conn:
+        db_url, _ = get_cloud_sync_config(conn)
+        if db_url:
+            base_url = db_url
+
     # Pass configured endpoints/auth to sub-shippers if base_url is provided.
     # Each sub-shipper (error, learning, menu, customer merges, forecasts) accepts
     # (endpoint=..., auth=...).
