@@ -1,6 +1,7 @@
 """
 Orchestrator for all client-learning uploads: errors, learning (ai_logs + ai_feedback),
-menu bootstrap, customer merges, menu merges, forecasts (revenue + item + backtest caches).
+menu bootstrap, customer merges, menu merges, menu mapping verifications, forecasts
+(revenue + item + backtest caches).
 
 Call run_all(conn) periodically (e.g. from a background task or POST /api/sync/client-learning).
 Uses placeholder URLs by default; set env vars for plug-and-play when cloud is ready.
@@ -16,6 +17,9 @@ from src.core.learning_shipper import upload_pending as upload_learning
 from src.core.menu_bootstrap_shipper import upload_pending as upload_menu_bootstrap
 from src.core.customer_merge_shipper import upload_pending as upload_customer_merges
 from src.core.menu_merge_shipper import upload_pending as upload_menu_merges
+from src.core.menu_mapping_verification_shipper import (
+    upload_pending as upload_menu_mapping_verifications,
+)
 from src.core.forecast_shipper import upload_pending as upload_forecasts
 from src.core.sync_identity import get_active_user_identity, get_device_identity
 
@@ -53,6 +57,7 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
         "menu_bootstrap": {},
         "customer_merges": {},
         "menu_merges": {},
+        "menu_mapping_verifications": {},
         "forecasts": {},
     }
     uploaded_by = get_uploaded_by(conn) if conn else None
@@ -81,6 +86,7 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
     menu_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
     customer_merge_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
     menu_merge_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
+    menu_mapping_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
     forecast_kwargs = {"uploaded_by": uploaded_by}
     
     if base_url:
@@ -91,18 +97,22 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
          menu_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-bootstrap/ingest"
          customer_merge_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/customer-merges/ingest"
          menu_merge_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-merges/ingest"
+         menu_mapping_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-mapping-verifications/ingest"
          forecast_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/forecasts/ingest"
     else:
          # Fall back to env-based full URLs (for POST /api/sync/client-learning)
          from src.core.config.client_learning_config import (
              CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL,
              CLIENT_LEARNING_FORECAST_INGEST_URL,
+             CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL,
              CLIENT_LEARNING_MENU_MERGE_INGEST_URL,
          )
          if CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL:
              customer_merge_kwargs["endpoint"] = CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL
          if CLIENT_LEARNING_MENU_MERGE_INGEST_URL:
              menu_merge_kwargs["endpoint"] = CLIENT_LEARNING_MENU_MERGE_INGEST_URL
+         if CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL:
+             menu_mapping_kwargs["endpoint"] = CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL
          if CLIENT_LEARNING_FORECAST_INGEST_URL:
              forecast_kwargs["endpoint"] = CLIENT_LEARNING_FORECAST_INGEST_URL
 
@@ -112,6 +122,7 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
          menu_kwargs["auth"] = auth
          customer_merge_kwargs["auth"] = auth
          menu_merge_kwargs["auth"] = auth
+         menu_mapping_kwargs["auth"] = auth
          forecast_kwargs["auth"] = auth
 
     result["errors"] = upload_errors(**error_kwargs)
@@ -130,6 +141,11 @@ def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None,
         upload_menu_merges(conn, **menu_merge_kwargs)
         if conn
         else {"events_sent": 0, "backfilled_applied": 0, "error": "No connection"}
+    )
+    result["menu_mapping_verifications"] = (
+        upload_menu_mapping_verifications(conn, **menu_mapping_kwargs)
+        if conn
+        else {"events_sent": 0, "error": "No connection"}
     )
     result["forecasts"] = (
         upload_forecasts(conn, **forecast_kwargs)

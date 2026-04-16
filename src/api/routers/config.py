@@ -216,35 +216,47 @@ def reset_db_section(data: Dict[str, str]):
     try:
         if section == "orders":
             # 1. Reset Orders Section
-            # Tables: restaurants, customers, orders, order_taxes, order_discounts, order_items, order_item_addons
-            
-            # Use PRAGMA foreign_keys = OFF to allow truncation in any order, 
-            # or delete in dependency order (leafs first).
-            # Dependency order: add-ons -> items -> taxes/discounts -> orders -> customers/restaurants
-            
+            # Clears POS data, customers (and merge/address rows that FK to them), menu + variants,
+            # and merge history / menu-merge sync queues. Re-seeds menu from bundled backups.
+            #
+            # customer_merge_history references customers without ON DELETE CASCADE — must be
+            # cleared before customers. menu_items.suggestion_id self-references menu_items.
+            # PRAGMA foreign_keys=OFF keeps this resilient if the schema gains new FK edges.
             tables_to_clear = [
-                # Orders Tables
                 "order_item_addons",
                 "order_items",
                 "order_taxes",
                 "order_discounts",
                 "orders",
+                "customer_merge_sync_events",
+                "customer_merge_remote_events",
+                "customer_merge_history",
+                "customer_addresses",
                 "customers",
                 "restaurants",
-                # Menu Tables
+                "menu_mapping_verification_deferred",
+                "menu_mapping_verification_remote_events",
+                "menu_mapping_verification_sync_events",
+                "menu_merge_remote_events",
+                "menu_merge_sync_events",
+                "merge_history",
                 "menu_item_variants",
                 "menu_items",
                 "variants",
-                # History
-                "merge_history"
             ]
-            
-            for table in tables_to_clear:
-                conn.execute(f"DELETE FROM {table}")
-                # Optional: Reset sequence
-                conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
-                
-            conn.commit()
+
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for table in tables_to_clear:
+                    conn.execute(f"DELETE FROM {table}")
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
             
             # Re-seed menu from backups if available
             from scripts.seed_from_backups import perform_seeding

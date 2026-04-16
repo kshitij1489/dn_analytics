@@ -405,6 +405,39 @@ def pull_menu_merges_from_cloud(limit: int = 100, conn=Depends(get_db)):
     }
 
 
+@router.post("/mapping-verifications/pull-from-cloud")
+def pull_menu_mapping_verifications_from_cloud(limit: int = 100, conn=Depends(get_db)):
+    """Pull menu mapping verification events from cloud and apply locally."""
+    from src.core.config.cloud_sync_config import get_cloud_sync_config
+    from src.core.menu_mapping_verification_sync import (
+        get_menu_mapping_verification_pull_endpoint,
+        pull_and_apply_menu_mapping_verification_events,
+    )
+
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    endpoint = get_menu_mapping_verification_pull_endpoint(conn)
+    if not endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud sync URL not configured. Set cloud_sync_url in Configuration.",
+        )
+
+    _, auth_key = get_cloud_sync_config(conn)
+    result = pull_and_apply_menu_mapping_verification_events(conn, endpoint, auth=auth_key, limit=limit)
+    if result.get("error"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Menu mapping verification pull failed: {result['error']}",
+        )
+
+    return {
+        "message": "Menu mapping verification events pulled from cloud",
+        **result,
+    }
+
+
 @router.post("/bootstrap/pull-from-cloud")
 def pull_menu_bootstrap_from_cloud(
     apply_mode: str = "seed_and_relink_orders",

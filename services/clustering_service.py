@@ -153,16 +153,40 @@ class OrderItemCluster:
             """, (variant_id, variant_name))
 
             
-            # CREATE MAPPING
+            # CREATE MAPPING — inherit verified status if this menu_item_id + variant_id was verified elsewhere (C1 heuristic).
+            cursor.execute(
+                """
+                SELECT 1 FROM menu_item_variants
+                WHERE menu_item_id = ? AND is_verified = 1
+                  AND ((variant_id = ?) OR (variant_id IS NULL AND ? IS NULL))
+                LIMIT 1
+                """,
+                (menu_item_id, variant_id, variant_id),
+            )
+            mapping_verified = 1 if cursor.fetchone() else 0
+
             cursor.execute("""
                 INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-                VALUES (?, ?, ?, 0)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT (order_item_id) DO NOTHING
-            """, (str(order_item_id), menu_item_id, variant_id))
+            """, (str(order_item_id), menu_item_id, variant_id, mapping_verified))
 
             ensure_menu_item_has_variant_mapping(self.conn, menu_item_id, cursor=cursor)
 
             self.conn.commit()
+
+            try:
+                from src.core.menu_mapping_verification_sync import (
+                    flush_deferred_menu_mapping_verifications,
+                )
+
+                flush_deferred_menu_mapping_verifications(self.conn)
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Deferred mapping verification flush skipped after cluster add",
+                    exc_info=True,
+                )
+
             return str(menu_item_id), str(order_item_id), str(variant_id), item_type
 
         except Exception as e:

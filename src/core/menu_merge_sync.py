@@ -383,6 +383,7 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
             target_variant_id=None if target_variant_id == menu_utils.NULL_VARIANT_SENTINEL else target_variant_id,
             new_variant_name=target_variant_name if target_variant_id == menu_utils.NULL_VARIANT_SENTINEL else None,
             emit_sync_event=False,
+            emit_mapping_verification_events=False,
         )
     else:
         raise ValueError(f"Unsupported menu merge kind '{merge_kind}'")

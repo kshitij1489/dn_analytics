@@ -62,6 +62,17 @@ CLIENT_LEARNING_MENU_MERGE_PULL_URL = os.environ.get(
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-merges",
 ).strip()
 
+# Menu mapping verification (per order_item_id is_verified)
+CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL = os.environ.get(
+    "CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-mapping-verifications/ingest",
+).strip()
+
+CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL = os.environ.get(
+    "CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL",
+    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-mapping-verifications",
+).strip()
+
 # Forecast ingest: POST revenue + item forecasts + backtest caches
 CLIENT_LEARNING_FORECAST_INGEST_URL = os.environ.get(
     "CLIENT_LEARNING_FORECAST_INGEST_URL",
@@ -120,6 +131,14 @@ def should_pull_customer_merges() -> bool:
 def should_pull_menu_merges() -> bool:
     """True if menu merge pull is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_MENU_MERGE_PULL_URL)
+
+
+def should_upload_menu_mapping_verifications() -> bool:
+    return bool(CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL)
+
+
+def should_pull_menu_mapping_verifications() -> bool:
+    return bool(CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL)
 
 
 def should_upload_forecasts() -> bool:

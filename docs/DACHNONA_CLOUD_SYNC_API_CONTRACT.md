@@ -1,12 +1,12 @@
 # Dachnona Cloud Sync API Contract
 
 **Audience:** Dachnona backend engineers / Codex agent implementing the cloud-side sync work  
-**Status:** Ready for implementation on the Dachnona backend  
-**Scope:** Add the missing cloud endpoints and persistence needed by the analytics desktop client work already implemented in this repo
+**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. **Section 16** describes **additional** server work required for [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification replay + richer catalog snapshots).  
+**Scope:** Original document: merge + bootstrap + attribution sync. Additive extensions: mapping verification and/or versioned catalog payloads as specified in Section 16.
 
 ## 1. Purpose
 
-This contract is the server-side counterpart to the changes described in [DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md](/Users/kshitijsharma/Documents/projects/analytics/docs/DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md).
+This contract is the server-side counterpart to the changes described in [DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md](./DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md).
 
 The analytics client already implements:
 
@@ -16,7 +16,9 @@ The analytics client already implements:
 - menu bootstrap latest pull/apply
 - menu merge push/pull
 
-The remaining work is on the Dachnona cloud backend.
+**Baseline (Section 5):** The endpoints and persistence described in **Section 5** and the detailed sections through **Section 15** are **already implemented** on the Dachnona central server (ingest + cursor pull for customer/menu merges, menu-bootstrap latest, attribution persistence). Treat that work as **complete** for collaboration sync.
+
+**Extensions (Section 16):** Further **Dachnona** implementation is required if the product adopts the **single source of truth** plan (verification events and/or richer bootstrap snapshots). The desktop client changes described in [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) **depend** on those server extensions.
 
 This document is intentionally **additive**, not a rewrite request. The backend Codex agent should:
 
@@ -31,18 +33,18 @@ If an endpoint below already exists in the backend, keep the existing route and 
 
 This contract is derived from the current analytics client implementation, especially:
 
-- [src/core/customer_merge_shipper.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/customer_merge_shipper.py)
-- [src/core/customer_merge_sync.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/customer_merge_sync.py)
-- [src/core/customer_merge_sync_events.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/customer_merge_sync_events.py)
-- [src/core/menu_merge_shipper.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/menu_merge_shipper.py)
-- [src/core/menu_merge_sync.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/menu_merge_sync.py)
-- [src/core/menu_merge_sync_events.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/menu_merge_sync_events.py)
-- [src/core/menu_bootstrap_shipper.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/menu_bootstrap_shipper.py)
-- [src/core/menu_bootstrap_sync.py](/Users/kshitijsharma/Documents/projects/analytics/src/core/menu_bootstrap_sync.py)
-- [tests/test_customer_merge_sync.py](/Users/kshitijsharma/Documents/projects/analytics/tests/test_customer_merge_sync.py)
-- [tests/test_customer_merge_pull.py](/Users/kshitijsharma/Documents/projects/analytics/tests/test_customer_merge_pull.py)
-- [tests/test_menu_merge_sync.py](/Users/kshitijsharma/Documents/projects/analytics/tests/test_menu_merge_sync.py)
-- [tests/test_menu_bootstrap_pull.py](/Users/kshitijsharma/Documents/projects/analytics/tests/test_menu_bootstrap_pull.py)
+- [src/core/customer_merge_shipper.py](../src/core/customer_merge_shipper.py)
+- [src/core/customer_merge_sync.py](../src/core/customer_merge_sync.py)
+- [src/core/customer_merge_sync_events.py](../src/core/customer_merge_sync_events.py)
+- [src/core/menu_merge_shipper.py](../src/core/menu_merge_shipper.py)
+- [src/core/menu_merge_sync.py](../src/core/menu_merge_sync.py)
+- [src/core/menu_merge_sync_events.py](../src/core/menu_merge_sync_events.py)
+- [src/core/menu_bootstrap_shipper.py](../src/core/menu_bootstrap_shipper.py)
+- [src/core/menu_bootstrap_sync.py](../src/core/menu_bootstrap_sync.py)
+- [tests/test_customer_merge_sync.py](../tests/test_customer_merge_sync.py)
+- [tests/test_customer_merge_pull.py](../tests/test_customer_merge_pull.py)
+- [tests/test_menu_merge_sync.py](../tests/test_menu_merge_sync.py)
+- [tests/test_menu_bootstrap_pull.py](../tests/test_menu_bootstrap_pull.py)
 
 If backend conventions differ, map this contract into those conventions without changing the client-required fields below.
 
@@ -100,16 +102,18 @@ This change should **not**:
 - Treat `schema_version` as informational and persist it.
 - `uploaded_by`, `uploaded_from`, `attribution.employee`, and `attribution.device` may be missing or partially populated on some rows.
 
-## 5. Required Backend Deliverables
+## 5. Baseline backend deliverables (implemented)
 
-The backend work is complete for this change when all of the following are true:
+The following **baseline** capabilities are **implemented on the Dachnona central server** and match what this document originally required. The desktop client relies on them today.
 
-- `POST /desktop-analytics-sync/customer-merges/ingest` accepts and persists customer merge events idempotently
-- `GET /desktop-analytics-sync/customer-merges` returns customer merge deltas for cursor-based pull
-- customer merge rows persist and surface `device_id` / `install_id` attribution
-- `GET /desktop-analytics-sync/menu-bootstrap/latest` returns the latest bootstrap snapshot in a client-compatible shape
-- `POST /desktop-analytics-sync/menu-merges/ingest` accepts and persists menu merge events idempotently
-- `GET /desktop-analytics-sync/menu-merges` returns menu merge deltas for cursor-based pull
+- `POST /desktop-analytics-sync/customer-merges/ingest` accepts and persists customer merge events idempotently  
+- `GET /desktop-analytics-sync/customer-merges` returns customer merge deltas for cursor-based pull  
+- customer merge rows persist and surface `device_id` / `install_id` attribution  
+- `GET /desktop-analytics-sync/menu-bootstrap/latest` returns the latest bootstrap snapshot in a client-compatible shape  
+- `POST /desktop-analytics-sync/menu-merges/ingest` accepts and persists menu merge events idempotently  
+- `GET /desktop-analytics-sync/menu-merges` returns menu merge deltas for cursor-based pull  
+
+**Product gap (not a baseline gap):** That baseline does **not** encode every **in-place mapping verification** (`menu_item_variants.is_verified` toggles without a merge history row) or every **`verify_item`** path on the desktop. The **desktop client** for **Section 16.1** (mapping verification ingest/pull + emitters) now lives in this repo; **Dachnona** must still implement the matching routes and persistence. **Section 16.2+** (bootstrap/snapshot checkpoints and related) remains future work — see [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md).
 
 ## 6. Recommended Persistence Shape
 
@@ -910,14 +914,24 @@ The backend may additionally expose these in admin views, audit screens, or repo
 
 ## 14. Completion Checklist
 
-After implementing this contract on the Dachnona backend, the following rows in [DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md](/Users/kshitijsharma/Documents/projects/analytics/docs/DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md) can be marked complete:
+### 14.1 Baseline collaboration sync (complete)
 
-- Dachnona backend ingest endpoint
-- Dachnona backend delta endpoint
-- Dachnona backend attribution persistence
-- Dachnona backend menu bootstrap latest endpoint
-- Dachnona backend menu merge ingest endpoint
-- Dachnona backend menu merge delta endpoint
+The following **baseline** items are **done** on the Dachnona central server (aligned with Section 5). The corresponding rows in [DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md](./DACHNONA_CLOUD_SYNC_AND_COLLABORATION_PLAN.md) can be treated as **complete**:
+
+- Dachnona backend customer merge ingest endpoint  
+- Dachnona backend customer merge delta endpoint  
+- Dachnona backend attribution persistence  
+- Dachnona backend menu bootstrap latest endpoint  
+- Dachnona backend menu merge ingest endpoint  
+- Dachnona backend menu merge delta endpoint  
+
+### 14.2 Single source of truth extensions (open — Section 16)
+
+Track implementation of **Section 16** separately (and update [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) phases when shipped):
+
+- [ ] Mapping verification ingest + pull (or agreed alternative)  
+- [ ] Optional: versioned / extended menu bootstrap or catalog snapshot API  
+- [ ] Optional: server-side compaction / retention policy for high-volume verification events  
 
 ## 15. Final Compatibility Summary
 
@@ -931,3 +945,71 @@ For the current analytics client to work without further changes, the backend mu
 - merge pull responses preserve event payloads, including attribution and undo links
 
 Anything beyond that may follow existing Dachnona backend conventions.
+
+---
+
+## 16. Extensions for menu single source of truth (Dachnona — to implement)
+
+**Goal:** Allow a **second install** (or a device after **reset orders + sync**) to **converge** on the same **verified catalog + mapping** state as a **reference** desktop, as described in [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md).
+
+**Why baseline is not enough:** The desktop can show **“All items verified!”** while **only** updating SQLite (and local `data/*.json` via `export_to_backups`) for paths that **do not** enqueue `menu_merge` sync events (e.g. in-place `menu_item_variants.is_verified = 1`, `verify_item`). The **baseline** merge + bootstrap APIs therefore **cannot** replay those edges today.
+
+**Principle:** Reuse **Section 4** (auth, tenant scoping, idempotency, cursors, raw payload preservation, forward compatibility) for every new endpoint.
+
+### 16.1 Option A — Mapping verification event stream (preferred for auditability)
+
+**New server capabilities**
+
+1. **Persistence** — Store events in tenant/store scope with at least:
+   - `remote_event_id` (unique per scope), `event_type`, `occurred_at`, `schema_version`, `payload_json`, `ingested_at`, optional `reverts_remote_event_id`, same attribution projection pattern as Sections 6.1–6.2 where applicable.
+
+2. **Ingest** — `POST /desktop-analytics-sync/menu-mapping-verifications/ingest` (path matches desktop `client_learning_shipper` / env defaults)  
+   - Body: same envelope as menu merge ingest — top-level `schema_version`, `events` array of per-event JSON objects, optional `uploaded_by` / `uploaded_from`.  
+   - Idempotent dedupe by `remote_event_id` per **Section 4.3**.  
+   - Each event uses `event_type` of `mapping.verified`, `mapping.bulk_verified`, or `mapping.reopened` (desktop emits the first two today).
+
+3. **Pull** — e.g. `GET /desktop-analytics-sync/menu-mapping-verifications`  
+   - Query params: optional `cursor`, optional `limit` per **Section 4.4**.  
+   - Response: `events` (or `items` alias tolerated by client), `next_cursor` (or `cursor_after` alias).  
+   - Ordering: stable ascending for replay.
+
+**Minimum payload semantics** (illustrative; exact JSON can mirror menu merge style)
+
+- Identify the mapping: prefer **`order_item_id`** (POS-stable) and/or **`menu_item_id` + `variant_id`**.  
+- Declare target: `is_verified` (typically `1`).  
+- Include `schema_version`, `occurred_at`, `remote_event_id`, and optional `uploaded_by` / `uploaded_from` / `attribution` blobs per **Section 4.6** and **Section 12**.
+
+**Server-side policy decisions** (must be documented in Dachnona runbooks)
+
+- Retention / compaction for high-volume stores.  
+- Conflict precedence when a verification event arrives **after** a merge undo (recommend: **merge / undo wins** over stale verify unless product says otherwise).
+
+### 16.2 Option B — Richer menu bootstrap or catalog snapshot (checkpoints)
+
+**Extend or add** (choose one product direction; both need server work if payloads grow beyond current limits)
+
+1. **Extend** `GET /desktop-analytics-sync/menu-bootstrap/latest` to return, in addition to current `id_maps` + `cluster_state`:
+   - `snapshot_version` / `generated_at` opaque version string  
+   - Optional **`mapping_verification_overlay`** or **backward-compatible** extension of `cluster_state` list entries to include **`is_verified`** per mapping (see [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) Section 5.2).
+
+2. **Or** add **`GET /desktop-analytics-sync/menu-catalog-snapshot/latest`** returning a versioned document the client can apply as a checkpoint (same auth; consider **gzip** or signed URL if size exceeds practical JSON inline).
+
+**Server responsibilities**
+
+- Store and serve **large** snapshots safely (size limits, CDN URL, or chunked download if needed).  
+- Validate tenant scope; do not mix stores.  
+- Preserve **forward compatibility** (**Section 4.6**): unknown fields tolerated on ingest if client uploads snapshots.
+
+### 16.3 Option C — Hosted reference DB (optional)
+
+If the product uses **packaged SQLite** or encrypted blobs for factory/support installs, Dachnona may host **static artifacts** (signed URL, checksum header). This is **optional** and orthogonal to Sections 16.1–16.2.
+
+### 16.4 Desktop client dependency (for implementers)
+
+The desktop **Option A** client work for **Section 16.1** is implemented in this repo (`menu_mapping_verification_*`, `run_best_effort_cloud_pulls` ordering, `verify_item` / `resolve_menu_item_variant` emitters, `client_learning_shipper`). Dachnona must still expose the ingest/pull routes and persistence described above for uploads and cross-device replay to succeed end-to-end.
+
+### 16.5 Explicit non-goals for extensions
+
+- Do **not** require the desktop to send new **mandatory** auth headers beyond existing Bearer usage (**Section 4.1**).  
+- Do **not** strip raw payloads for verification events; replay fidelity matters.  
+- Prefer **additive** tables/columns over breaking existing merge/bootstrap tables.

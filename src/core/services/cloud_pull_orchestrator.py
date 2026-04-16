@@ -1,5 +1,12 @@
 """
-Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu merges).
+Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
+
+Pull order (keep in sync with MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md):
+1. Menu bootstrap (broad catalog / id_maps + cluster_state)
+2. Menu mapping verification events (per-line is_verified on menu_item_variants)
+3. Menu merge events (structural merges / resolution history)
+4. Customer merges
+
 Used after POS sync when cloud endpoints are configured; failures are logged, not raised.
 """
 
@@ -30,6 +37,10 @@ def run_best_effort_cloud_pulls(
         fetch_and_apply_menu_bootstrap_snapshot,
         get_menu_bootstrap_pull_endpoint,
     )
+    from src.core.menu_mapping_verification_sync import (
+        get_menu_mapping_verification_pull_endpoint,
+        pull_and_apply_menu_mapping_verification_events,
+    )
     from src.core.menu_merge_sync import (
         get_menu_merge_pull_endpoint,
         pull_and_apply_menu_merge_events,
@@ -39,6 +50,7 @@ def run_best_effort_cloud_pulls(
         "attempted": False,
         "customer_merges": None,
         "menu_bootstrap": None,
+        "menu_mapping_verifications": None,
         "menu_merges": None,
     }
 
@@ -57,6 +69,20 @@ def run_best_effort_cloud_pulls(
         except Exception as e:
             logger.exception("Best-effort menu bootstrap pull failed")
             summary["menu_bootstrap"] = {"error": str(e)}
+
+    ep_mapping = get_menu_mapping_verification_pull_endpoint(conn)
+    if ep_mapping:
+        summary["attempted"] = True
+        try:
+            summary["menu_mapping_verifications"] = pull_and_apply_menu_mapping_verification_events(
+                conn,
+                ep_mapping,
+                auth=auth_key,
+                limit=merge_events_limit,
+            )
+        except Exception as e:
+            logger.exception("Best-effort menu mapping verification pull failed")
+            summary["menu_mapping_verifications"] = {"error": str(e)}
 
     ep_menu_merge = get_menu_merge_pull_endpoint(conn)
     if ep_menu_merge:
@@ -91,7 +117,7 @@ def run_best_effort_cloud_pulls(
         summary["reason"] = "no cloud pull endpoints configured"
         return summary
 
-    for key in ("menu_bootstrap", "menu_merges", "customer_merges"):
+    for key in ("menu_bootstrap", "menu_mapping_verifications", "menu_merges", "customer_merges"):
         block = summary.get(key)
         if isinstance(block, dict) and block.get("error"):
             logger.warning("Cloud pull %s reported error: %s", key, block["error"])

@@ -1046,6 +1046,7 @@ def resolve_menu_item_variant(
     target_variant_id: str = None,
     new_variant_name: str = None,
     emit_sync_event: bool = True,
+    emit_mapping_verification_events: bool = True,
 ) -> Dict[str, Any]:
     """Resolve a single unresolved menu item + variant pair."""
     source_menu_item_id = str(source_menu_item_id or "").strip()
@@ -1326,6 +1327,22 @@ def resolve_menu_item_variant(
             from src.core.menu_merge_sync_events import record_menu_merge_applied_event
 
             record_menu_merge_applied_event(conn, merge_id)
+
+        if emit_mapping_verification_events and mapping_rows:
+            from src.core.menu_mapping_verification_sync_events import (
+                record_menu_mapping_verification_events_chunked,
+            )
+
+            verify_emit_rows = [
+                {
+                    "order_item_id": row["order_item_id"],
+                    "menu_item_id": row["new_menu_item_id"],
+                    "variant_id": row["new_variant_id"],
+                    "is_verified": row.get("new_is_verified", 1),
+                }
+                for row in mapping_rows
+            ]
+            record_menu_mapping_verification_events_chunked(conn, verify_emit_rows)
 
         conn.commit()
         export_to_backups(conn)
@@ -1613,6 +1630,7 @@ def verify_item(
     new_name: str = None,
     new_type: str = None,
     new_variant_id: str = None,
+    emit_mapping_verification_events: bool = True,
 ) -> Dict[str, Any]:
     """Mark an item as verified, optionally updating name/type"""
     cursor = conn.cursor()
@@ -1668,7 +1686,31 @@ def verify_item(
 
         if new_variant_id:
             _reassign_menu_item_variant(cursor, item_id, new_variant_id)
-        
+
+        if emit_mapping_verification_events:
+            from src.core.menu_mapping_verification_sync_events import (
+                record_menu_mapping_verification_events_chunked,
+            )
+
+            cursor.execute(
+                """
+                SELECT order_item_id, menu_item_id, variant_id, is_verified
+                FROM menu_item_variants
+                WHERE menu_item_id = ?
+                """,
+                (item_id,),
+            )
+            verify_emit_rows = [
+                {
+                    "order_item_id": str(r[0]),
+                    "menu_item_id": str(r[1]),
+                    "variant_id": r[2],
+                    "is_verified": int(r[3] or 0),
+                }
+                for r in cursor.fetchall()
+            ]
+            record_menu_mapping_verification_events_chunked(conn, verify_emit_rows)
+
         conn.commit()
         export_to_backups(conn)
         return {"status": "success", "message": "Item verified successfully"}
