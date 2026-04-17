@@ -14,6 +14,10 @@ class ConfigUpdate(BaseModel):
 
 from src.core.db.connection import get_db_connection
 from src.core.sync_identity import get_sync_attribution
+from utils.api_client import (
+    normalize_integration_orders_base_url,
+    orders_integration_request_headers,
+)
 
 @router.get("/")
 def get_config():
@@ -71,19 +75,44 @@ def verify_config(data: ConfigVerification):
             
         try:
             import requests
-            # Clean URL
-            base_url = url.rstrip('/')
+            base_url = normalize_integration_orders_base_url(url)
             # Try a lightweight request (limit=1) to check auth
             resp = requests.get(
-                f"{base_url}/orders/", 
-                headers={
-                    "X-API-Key": key
-                }, 
+                f"{base_url}/orders/",
+                headers=orders_integration_request_headers(key),
                 params={"limit": 1},
-                timeout=10
+                timeout=10,
             )
+            if resp.status_code == 403:
+                ctype = (resp.headers.get("content-type") or "").lower()
+                body = resp.text or ""
+                snippet = body[:1200].lower()
+                looks_like_edge_html = "text/html" in ctype or snippet.lstrip().startswith(
+                    "<!"
+                ) or "cloudflare" in snippet or "sorry, you have been blocked" in snippet
+                if looks_like_edge_html:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Orders returned 403 with an HTML page — usually Cloudflare/WAF blocking the "
+                            "request before it reaches your API (not proven wrong API key). Ask ops to allow "
+                            "this client for GET /orders/ (IP allowlist, WAF skip, or rule for User-Agent "
+                            "DachnonaAnalyticsDesktop/1.0). If a browser on the same network shows a "
+                            "Cloudflare block page for that URL, that confirms edge blocking."
+                        ),
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Orders endpoint returned 403 Forbidden. "
+                        "Use the API key issued for the orders/webhook stream (it is often not the same as the Cloud Sync key). "
+                        "Paste the key with no extra spaces."
+                    ),
+                )
             resp.raise_for_status()
             return {"status": "success", "message": "✅ Orders Integration Connected!"}
+        except HTTPException:
+            raise
         except Exception as e:
              raise HTTPException(status_code=400, detail=f"Connection Failed: {str(e)}")
 
@@ -249,6 +278,12 @@ def reset_db_section(data: Dict[str, str]):
             conn.execute("BEGIN IMMEDIATE")
             try:
                 for table in tables_to_clear:
+                    exists = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,),
+                    ).fetchone()
+                    if not exists:
+                        continue
                     conn.execute(f"DELETE FROM {table}")
                     conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
                 conn.commit()
@@ -257,6 +292,16 @@ def reset_db_section(data: Dict[str, str]):
                 raise
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
+
+            # Clear cloud-pull cursors so a fresh sync re-pulls from the beginning
+            # instead of resuming at a stale position after the data wipe.
+            for cursor_key in (
+                "menu_merge_pull_cursor",
+                "menu_mapping_verification_pull_cursor",
+                "customer_merge_pull_cursor",
+            ):
+                conn.execute("DELETE FROM system_config WHERE key = ?", (cursor_key,))
+            conn.commit()
             
             # Re-seed menu from backups if available
             from scripts.seed_from_backups import perform_seeding

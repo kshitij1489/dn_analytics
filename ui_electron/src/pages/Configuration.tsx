@@ -725,7 +725,12 @@ export default function Configuration() {
                             <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
 
                             <h4 style={{ marginBottom: '10px' }}>Orders Service</h4>
-                            {renderInput("Orders URL", "integration_orders_url", "url", "https://api.example.com/orders")}
+                            {renderInput(
+                                "Orders URL",
+                                "integration_orders_url",
+                                "url",
+                                "https://webhooks.db1-prod-dachnona.store/analytics",
+                            )}
                             {renderInput("Orders API Key", "integration_orders_key", "password")}
                             {renderTestButton('orders')}
 

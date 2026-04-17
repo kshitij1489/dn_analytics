@@ -10,6 +10,38 @@ from typing import List, Dict, Any, Optional
 
 REQUEST_DELAY = 1.0  # seconds between requests
 
+
+def normalize_integration_orders_base_url(raw: str) -> str:
+    """
+    Build the base URL used for GET {base}/orders/...
+
+    Strips trailing slashes and a trailing /orders segment (so pasting the full stream
+    URL ending in .../orders does not become .../orders/orders/).
+
+    The path prefix before /orders/ is kept as configured (e.g. .../analytics for
+    webhooks behind /analytics/orders/).
+    """
+    base = (raw or "").strip().rstrip("/")
+    if not base:
+        return base
+    lower = base.lower()
+    if lower.endswith("/orders"):
+        base = base[: -len("/orders")].rstrip("/")
+    return base
+
+
+def orders_integration_request_headers(api_key: str) -> dict:
+    """Headers for GET {base}/orders/ — Dachnona accepts Bearer; legacy stacks used X-API-Key."""
+    key = (api_key or "").strip()
+    return {
+        "Authorization": f"Bearer {key}",
+        "X-API-Key": key,
+        "Accept": "application/json",
+        # Stable UA so edge firewalls (e.g. Cloudflare) can allowlist the desktop client if needed.
+        "User-Agent": "DachnonaAnalyticsDesktop/1.0",
+    }
+
+
 def fetch_stream_raw(
     conn,
     endpoint: str = "orders",
@@ -45,12 +77,9 @@ def fetch_stream_raw(
         print("❌ Orders Integration not configured. Please check Configuration.")
         return [], 0
 
-    # Ensure base_url doesn't have trailing slash
-    base_url = base_url.rstrip('/')
+    base_url = normalize_integration_orders_base_url(base_url)
 
-    headers = {
-        "X-API-Key": api_key
-    }
+    headers = orders_integration_request_headers(api_key)
 
     results = []
     last_stream_id = start_cursor or 0

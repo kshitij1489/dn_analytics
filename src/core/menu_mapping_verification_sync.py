@@ -4,6 +4,13 @@ Pull and apply menu mapping verification events from cloud.
 Pull order (documented in cloud_pull_orchestrator): menu bootstrap → mapping verifications →
 menu merges → customer merges. Mapping verifications fine-tune is_verified on menu_item_variants
 before structural merge replay.
+
+Conflict resolution (Phase 1): **last-write-wins** — the most recently pulled event
+for a given order_item_id determines its is_verified value. No occurred_at comparison
+is performed; cursor ordering from the server is assumed to be authoritative. If two
+installs emit conflicting events (one verifies, one reopens), the last event ingested
+by the server and subsequently pulled wins. A future phase may add timestamp-based or
+vector-clock conflict resolution if needed.
 """
 
 import json
@@ -154,6 +161,9 @@ def _apply_verification_by_order_item_id(conn, order_item_id: str, is_verified: 
     """
     Set is_verified on the mapping row keyed by order_item_id (POS-canonical).
     Returns menu_item_id if a row was updated, else None.
+
+    Uses last-write-wins: the value is overwritten unconditionally without
+    comparing occurred_at timestamps.  See module docstring for rationale.
     """
     cur = conn.execute(
         """
@@ -207,6 +217,7 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
         event_type = str(payload.get("event_type") or "")
         mids: Set[str] = set()
         ok = False
+        all_resolved = True  # tracks if every row in a bulk event was applied
         try:
             if event_type == EVENT_VERIFIED:
                 oid = str(payload.get("order_item_id") or "").strip()
@@ -216,6 +227,8 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                     if mid:
                         ok = True
                         mids.add(mid)
+                    else:
+                        all_resolved = False
             elif event_type == EVENT_BULK_VERIFIED:
                 mappings = payload.get("mappings")
                 if isinstance(mappings, list):
@@ -230,6 +243,8 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                         if mid:
                             ok = True
                             mids.add(mid)
+                        else:
+                            all_resolved = False
             elif event_type == EVENT_REOPENED:
                 oid = str(payload.get("order_item_id") or "").strip()
                 target = int(payload.get("is_verified", 0))
@@ -238,12 +253,17 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                     if mid:
                         ok = True
                         mids.add(mid)
+                    else:
+                        all_resolved = False
         except Exception:
             conn.rollback()
             raise
 
         if ok:
             _sync_menu_items_after_mapping_verified(conn, mids)
+        # Only remove the deferred record when every row has been handled;
+        # for bulk events some rows may still be missing their order_item_id.
+        if ok and all_resolved:
             conn.execute(
                 "DELETE FROM menu_mapping_verification_deferred WHERE remote_event_id = ?",
                 (remote_event_id,),
@@ -288,6 +308,10 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
         mappings = event.get("mappings")
         if not isinstance(mappings, list) or not mappings:
             raise ValueError("mapping.bulk_verified requires non-empty mappings")
+        # Partial application: apply rows whose order_item_id exists now,
+        # defer the whole event only if ANY row is missing (the deferred
+        # copy will retry all rows; already-applied rows are idempotent UPDATEs).
+        has_missing = False
         prepared: List[tuple] = []
         for m in mappings:
             if not isinstance(m, dict):
@@ -301,15 +325,16 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
                 (oid,),
             ).fetchone()
             if not row:
-                deferred = True
-                _defer_event(conn, remote_event_id, event)
-                prepared = []
-                break
+                has_missing = True
+                continue  # skip this row for now, but keep processing others
             prepared.append((oid, target))
         for oid, target in prepared:
             mid = _apply_verification_by_order_item_id(conn, oid, target)
             if mid:
                 menu_item_ids.add(mid)
+        if has_missing:
+            deferred = True
+            _defer_event(conn, remote_event_id, event)
     elif event_type == EVENT_REOPENED:
         oid = str(event.get("order_item_id") or "").strip()
         target = int(event.get("is_verified", 0))

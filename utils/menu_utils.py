@@ -873,6 +873,20 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
             ensure_menu_item_has_variant_mapping(conn, prev_menu_item_id, cursor=cursor)
         ensure_menu_item_has_variant_mapping(conn, new_menu_item_id, cursor=cursor)
 
+        # Emit verification event so the remap propagates to other installs
+        from src.core.menu_mapping_verification_sync_events import (
+            record_menu_mapping_verification_events_chunked,
+        )
+
+        record_menu_mapping_verification_events_chunked(conn, [
+            {
+                "order_item_id": str(order_item_id),
+                "menu_item_id": str(new_menu_item_id),
+                "variant_id": str(new_variant_id) if new_variant_id else None,
+                "is_verified": 1,
+            }
+        ])
+
         conn.commit()
         
         # 2. Update Backups
@@ -1692,11 +1706,13 @@ def verify_item(
                 record_menu_mapping_verification_events_chunked,
             )
 
+            # Only emit rows where is_verified=1 to avoid un-verifying
+            # mappings that were independently verified on another install.
             cursor.execute(
                 """
                 SELECT order_item_id, menu_item_id, variant_id, is_verified
                 FROM menu_item_variants
-                WHERE menu_item_id = ?
+                WHERE menu_item_id = ? AND is_verified = 1
                 """,
                 (item_id,),
             )
@@ -1705,7 +1721,7 @@ def verify_item(
                     "order_item_id": str(r[0]),
                     "menu_item_id": str(r[1]),
                     "variant_id": r[2],
-                    "is_verified": int(r[3] or 0),
+                    "is_verified": 1,
                 }
                 for r in cursor.fetchall()
             ]
