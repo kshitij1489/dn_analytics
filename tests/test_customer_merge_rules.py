@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
+from src.core.queries.customer_similarity_helpers import fetch_customer_summary
 from src.core.queries.customer_similarity_queries import (
     fetch_customer_merge_preview,
     fetch_customer_similarity_candidates,
@@ -237,6 +238,32 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 for item in suggestions
             )
         )
+
+    def test_similarity_candidates_include_order_item_history_signal(self) -> None:
+        suggestions = fetch_customer_similarity_candidates(self.conn, limit=10, min_score=0.5)
+        rahul_pair = next(
+            item
+            for item in suggestions
+            if item["source_customer"]["customer_id"] == "2"
+            and item["target_customer"]["customer_id"] == "1"
+        )
+
+        self.assertGreater(rahul_pair["metrics"]["item_similarity"], 0.55)
+        self.assertIn("Similar order item history", rahul_pair["reasons"])
+
+    def test_customer_summary_combines_item_quantities_after_name_normalization(self) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO order_items (order_id, menu_item_id, name_raw, quantity)
+            VALUES (?, ?, ?, ?)
+            """,
+            (101, None, " cold   coffee ", 3),
+        )
+        self.conn.commit()
+
+        summary = fetch_customer_summary(self.conn, "2")
+
+        self.assertEqual(summary["item_profile"]["cold coffee"], 4.0)
 
     def test_similarity_search_filters_pairs_by_source_or_target_name(self) -> None:
         suggestions = fetch_customer_similarity_candidates(

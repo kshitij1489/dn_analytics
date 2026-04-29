@@ -1,4 +1,5 @@
 from difflib import SequenceMatcher
+from math import sqrt
 
 
 def similarity_ratio(left: str, right: str) -> float:
@@ -62,6 +63,23 @@ def compute_name_similarity(left_name: str, right_name: str) -> float:
     return min(1.0, max(0.0, base_similarity * confidence))
 
 
+def compute_item_similarity(left_profile: dict[str, float], right_profile: dict[str, float]) -> float:
+    if not left_profile or not right_profile:
+        return 0.0
+
+    shared_items = set(left_profile).intersection(right_profile)
+    if not shared_items:
+        return 0.0
+
+    dot_product = sum(float(left_profile[item] or 0.0) * float(right_profile[item] or 0.0) for item in shared_items)
+    left_norm = sqrt(sum(float(quantity or 0.0) ** 2 for quantity in left_profile.values()))
+    right_norm = sqrt(sum(float(quantity or 0.0) ** 2 for quantity in right_profile.values()))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+
+    return min(1.0, max(0.0, dot_product / (left_norm * right_norm)))
+
+
 def build_similarity_candidate(left_record: dict, right_record: dict, text_similarity: float, model_name: str):
     def numeric_closeness(left_value, right_value) -> float:
         left_float = float(left_value or 0.0)
@@ -84,6 +102,7 @@ def build_similarity_candidate(left_record: dict, right_record: dict, text_simil
 
     name_similarity = compute_name_similarity(left_record["name_norm"], right_record["name_norm"])
     address_similarity = similarity_ratio(left_record["address_norm"], right_record["address_norm"])
+    item_similarity = compute_item_similarity(left_record.get("item_profile", {}), right_record.get("item_profile", {}))
     phone_exact = bool(left_record["phone_norm"] and left_record["phone_norm"] == right_record["phone_norm"])
     behavior_similarity = (
         numeric_closeness(left_record["total_orders"], right_record["total_orders"]) +
@@ -96,6 +115,7 @@ def build_similarity_candidate(left_record: dict, right_record: dict, text_simil
         behavior_similarity * 0.15 +
         (0.20 if phone_exact else 0.0)
     )
+    score += item_similarity * 0.12
     if phone_exact:
         score = max(score, 0.88)
     score = min(score, 0.99)
@@ -109,6 +129,8 @@ def build_similarity_candidate(left_record: dict, right_record: dict, text_simil
         reasons.append("Very similar saved addresses")
     if behavior_similarity >= 0.75:
         reasons.append("Similar order count / spend profile")
+    if item_similarity >= 0.55:
+        reasons.append("Similar order item history")
     if text_similarity >= 0.80:
         reasons.append("Strong text similarity across name, phone, and address")
     if not reasons:
@@ -140,6 +162,7 @@ def build_similarity_candidate(left_record: dict, right_record: dict, text_simil
             "text_similarity": round(text_similarity, 4),
             "name_similarity": round(name_similarity, 4),
             "address_similarity": round(address_similarity, 4),
+            "item_similarity": round(item_similarity, 4),
             "behavior_similarity": round(behavior_similarity, 4),
             "phone_exact_match": 1.0 if phone_exact else 0.0,
         },

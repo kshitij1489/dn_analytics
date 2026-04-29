@@ -10,6 +10,8 @@ import {
 import type { PopupMessage } from '../components';
 
 type SimilarityQueueMode = 'suggestions' | 'search' | 'compare';
+const TOP_SUGGESTIONS_MIN_SCORE = 0.72;
+const SEARCH_MIN_SCORE = 0;
 
 function isSameMergeRequest(
     left: CustomerMergeRequestPayload | null,
@@ -68,7 +70,11 @@ export function useSimilarityQueue(
         setLoadingSimilar(true);
         try {
             const query = searchQuery?.trim() || undefined;
-            const res = await endpoints.customers.similar({ limit: 20, min_score: 0.72, q: query });
+            const res = await endpoints.customers.similar({
+                limit: 20,
+                min_score: query ? SEARCH_MIN_SCORE : TOP_SUGGESTIONS_MIN_SCORE,
+                q: query,
+            });
             if (requestId !== similarRequestIdRef.current) {
                 return;
             }

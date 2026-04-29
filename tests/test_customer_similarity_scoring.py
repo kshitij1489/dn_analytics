@@ -1,6 +1,6 @@
 import unittest
 
-from src.core.queries.customer_similarity_scoring import compute_name_similarity
+from src.core.queries.customer_similarity_scoring import compute_item_similarity, compute_name_similarity
 
 
 class CustomerSimilarityScoringTests(unittest.TestCase):
@@ -21,6 +21,19 @@ class CustomerSimilarityScoringTests(unittest.TestCase):
         long_exact_score = compute_name_similarity("priscillishwear", "priscillishwear")
 
         self.assertGreater(long_exact_score, short_exact_score)
+
+    def test_item_similarity_uses_quantity_weighted_basket_overlap(self) -> None:
+        similar_basket_score = compute_item_similarity(
+            {"classic tiramisu": 6, "sunshine limone": 1},
+            {"classic tiramisu": 4, "sunshine limone": 1},
+        )
+        unrelated_basket_score = compute_item_similarity(
+            {"classic tiramisu": 6, "sunshine limone": 1},
+            {"brownie cheesecake": 4, "vanilla gelato": 1},
+        )
+
+        self.assertGreater(similar_basket_score, 0.95)
+        self.assertEqual(unrelated_basket_score, 0.0)
 
 
 if __name__ == "__main__":

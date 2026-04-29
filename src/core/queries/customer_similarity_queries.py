@@ -83,6 +83,13 @@ def fetch_customer_similarity_candidates(
             if neighbor_index != row_index:
                 register_pair(population[row_index], population[neighbor_index], max(0.0, 1.0 - float(distance)))
 
+    if matched_row_indexes is not None and len(normalized_search_query) >= 3 and len(matched_row_indexes) <= 50:
+        for row_index in matched_row_indexes:
+            left_record = population[row_index]
+            for right_index, right_record in enumerate(population):
+                if right_index != row_index:
+                    register_pair(left_record, right_record, similarity_ratio(left_record["feature_text"], right_record["feature_text"]))
+
     phone_groups = {}
     for record in population:
         if record["phone_norm"]:
@@ -98,11 +105,22 @@ def fetch_customer_similarity_candidates(
                     continue
                 register_pair(group[left_index], group[right_index], similarity_ratio(group[left_index]["feature_text"], group[right_index]["feature_text"]))
 
-    suggestions = sorted(
-        best_pairs.values(),
-        key=lambda item: (item["score"], item["target_customer"]["total_orders"], item["target_customer"]["total_spent"]),
-        reverse=True,
-    )
+    def suggestion_sort_key(item):
+        search_match_count = 0
+        if normalized_search_query:
+            search_match_count = sum(
+                1
+                for customer_key in ("source_customer", "target_customer")
+                if normalized_search_query in normalize_text(item[customer_key]["name"])
+            )
+        return (
+            search_match_count,
+            item["score"],
+            item["target_customer"]["total_orders"],
+            item["target_customer"]["total_spent"],
+        )
+
+    suggestions = sorted(best_pairs.values(), key=suggestion_sort_key, reverse=True)
     return suggestions[:limit]
 
 

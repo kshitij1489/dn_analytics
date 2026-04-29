@@ -114,7 +114,7 @@ export function CustomerSimilaritySection({
                                 placeholder="Search customer name"
                             />
                             <div className="customer-identity-copy">
-                                Shows likely merge pairs where the source or target customer name matches your search, sorted by score.
+                                Shows matching merge pairs even when confidence is low, sorted by score for manual review.
                             </div>
                         </div>
                     )}
