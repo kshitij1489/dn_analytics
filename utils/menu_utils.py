@@ -4,6 +4,7 @@ Menu Management Utilities (SQLite Version)
 
 import csv
 import os
+import re
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 import json
@@ -271,6 +272,60 @@ def _ensure_variant(conn, variant_name: str) -> str:
                 is_verified = 1
         """, (variant_id, normalized_name, metadata["unit"], metadata["value"]))
         return variant_id
+    finally:
+        cursor.close()
+
+
+def create_variant_type(
+    conn,
+    variant_name: str,
+    description: Optional[str] = None,
+    unit: Optional[str] = None,
+    value: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Create a new verified variant type from the Variants tab.
+
+    The name is canonicalized to UPPER_SNAKE_CASE and the ID is derived with
+    generate_deterministic_id — the same scheme the clustering pipeline uses —
+    so a later clustering run that produces this variant name reuses this row
+    (ON CONFLICT variant_id) instead of tripping the UNIQUE(variant_name)
+    constraint with a second ID.
+    """
+    normalized_name = re.sub(r"[\s_]+", "_", str(variant_name or "").strip().upper()).strip("_")
+    if not normalized_name:
+        return {"status": "error", "message": "Variant name cannot be empty."}
+
+    variant_id = generate_deterministic_id(normalized_name)
+    metadata = infer_variant_metadata(normalized_name, {"unit": unit, "value": value})
+    description_text = (description or "").strip() or None
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT variant_name FROM variants WHERE variant_id = ?", (variant_id,))
+        existing = cursor.fetchone()
+        if existing:
+            return {
+                "status": "error",
+                "message": f"Variant type '{existing[0]}' already exists.",
+            }
+
+        cursor.execute("""
+            INSERT INTO variants (variant_id, variant_name, description, unit, value, is_verified)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (variant_id, normalized_name, description_text, metadata["unit"], metadata["value"]))
+        conn.commit()
+        export_to_backups(conn)
+        return {
+            "status": "success",
+            "message": f"Variant type '{normalized_name}' created.",
+            "variant_id": variant_id,
+            "variant_name": normalized_name,
+            "unit": metadata["unit"],
+            "value": metadata["value"],
+        }
+    except Exception as exc:
+        conn.rollback()
+        return {"status": "error", "message": str(exc)}
     finally:
         cursor.close()
 

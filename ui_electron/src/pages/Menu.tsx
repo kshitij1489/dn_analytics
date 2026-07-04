@@ -850,6 +850,13 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [newVariantName, setNewVariantName] = useState('');
+    const [newVariantDescription, setNewVariantDescription] = useState('');
+    const [newVariantUnit, setNewVariantUnit] = useState('');
+    const [newVariantValue, setNewVariantValue] = useState('');
+    const [addSubmitting, setAddSubmitting] = useState(false);
 
     const load = async () => {
         setLoading(true);
@@ -890,9 +897,126 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
         'variant_id', 'variant_name', 'description', 'unit', 'value', 'is_verified', 'created_at', 'updated_at'
     ];
 
+    const resetAddForm = () => {
+        setNewVariantName('');
+        setNewVariantDescription('');
+        setNewVariantUnit('');
+        setNewVariantValue('');
+    };
+
+    const handleAddVariantType = async () => {
+        const trimmedName = newVariantName.trim();
+        if (!trimmedName) {
+            setPopup({ type: 'error', message: 'Variant type name is required.' });
+            return;
+        }
+        if (newVariantValue.trim() && Number.isNaN(Number(newVariantValue))) {
+            setPopup({ type: 'error', message: 'Value must be a number.' });
+            return;
+        }
+
+        setAddSubmitting(true);
+        try {
+            const res = await endpoints.menu.variantsCreate({
+                variant_name: trimmedName,
+                description: newVariantDescription.trim() || undefined,
+                unit: newVariantUnit || undefined,
+                value: newVariantValue.trim() ? Number(newVariantValue) : undefined,
+            });
+            const created = res.data;
+            const metaSummary = created.unit
+                ? ` (unit: ${created.unit}, value: ${created.value ?? '-'})`
+                : '';
+            setPopup({ type: 'success', message: `${created.message || 'Variant type created.'}${metaSummary}` });
+            resetAddForm();
+            setShowAddForm(false);
+            await load();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setAddSubmitting(false);
+        }
+    };
+
+    const addInputStyle: CSSProperties = {
+        padding: '8px',
+        background: 'var(--input-bg)',
+        color: 'var(--text-color)',
+        border: '1px solid var(--input-border)',
+        borderRadius: '6px',
+    };
+
     return (
         <div style={{ marginTop: '20px' }}>
-            <h3 style={{ marginTop: 0, marginBottom: '15px', color: 'var(--accent-color)' }}>Variants</h3>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Variants</h3>
+                <button
+                    onClick={() => setShowAddForm(prev => !prev)}
+                    style={{ padding: '8px 14px', background: showAddForm ? 'var(--card-bg)' : '#2563EB', color: showAddForm ? 'var(--text-color)' : 'white', border: showAddForm ? '1px solid var(--border-color)' : 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                >
+                    {showAddForm ? 'Cancel' : '+ Add Variant Type'}
+                </button>
+            </div>
+            {showAddForm && (
+                <div style={{ background: 'var(--card-bg)', padding: '16px', borderRadius: '12px', marginBottom: '15px', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) minmax(200px, 2fr) minmax(120px, 1fr) minmax(120px, 1fr)', gap: '10px', alignItems: 'end' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                            Name *
+                            <input
+                                value={newVariantName}
+                                onChange={e => setNewVariantName(e.target.value)}
+                                placeholder="e.g. FAMILY_TUB_725ML"
+                                style={addInputStyle}
+                            />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                            Description
+                            <input
+                                value={newVariantDescription}
+                                onChange={e => setNewVariantDescription(e.target.value)}
+                                placeholder="Optional"
+                                style={addInputStyle}
+                            />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                            Unit
+                            <select
+                                value={newVariantUnit}
+                                onChange={e => setNewVariantUnit(e.target.value)}
+                                style={addInputStyle}
+                            >
+                                <option value="">Auto-detect</option>
+                                <option value="ML">ML</option>
+                                <option value="GMS">GMS</option>
+                                <option value="COUNT">COUNT</option>
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                            Value
+                            <input
+                                value={newVariantValue}
+                                onChange={e => setNewVariantValue(e.target.value)}
+                                placeholder="Auto-detect"
+                                inputMode="decimal"
+                                style={addInputStyle}
+                            />
+                        </label>
+                    </div>
+                    <p style={{ margin: '10px 0 12px', fontSize: '0.8em', color: 'var(--text-secondary)' }}>
+                        The name is normalized to UPPER_SNAKE_CASE (e.g. "family tub 725ml" becomes FAMILY_TUB_725ML) so menu item
+                        clustering reuses this variant type instead of creating a duplicate. Unit and value are auto-detected from the
+                        name when left blank.
+                    </p>
+                    <button
+                        onClick={handleAddVariantType}
+                        disabled={addSubmitting || !newVariantName.trim()}
+                        style={{ padding: '10px 16px', background: '#44aa44', color: 'white', border: 'none', cursor: addSubmitting || !newVariantName.trim() ? 'not-allowed' : 'pointer', borderRadius: '8px', fontWeight: 700, opacity: addSubmitting || !newVariantName.trim() ? 0.6 : 1 }}
+                    >
+                        {addSubmitting ? 'Creating...' : 'Create Variant Type'}
+                    </button>
+                </div>
+            )}
             {loading ? <div>Loading...</div> : (
                 <ResizableTableWrapper onExportCSV={() => exportToCSV(data, 'variants', displayColumns)}>
                     <table className="standard-table">

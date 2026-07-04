@@ -54,6 +54,14 @@ class RemapRequest(BaseModel):
     new_variant_id: str
 
 
+class CreateVariantTypeRequest(BaseModel):
+    """Request to create a new variant type from the Variants tab."""
+    variant_name: str
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    value: Optional[float] = None
+
+
 class UpdateVariantMappingRequest(BaseModel):
     """Request to update an existing menu item + variant mapping to a new variant."""
     menu_item_id: str

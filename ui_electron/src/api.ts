@@ -110,6 +110,12 @@ export const endpoints = {
         matrix: () => api.get('/menu/matrix'),
         list: () => api.get('/menu/list'),
         variantsList: () => api.get('/menu/variants/list'),
+        variantsCreate: (data: {
+            variant_name: string;
+            description?: string;
+            unit?: string;
+            value?: number;
+        }) => api.post('/menu/variants/create', data),
 
         mergeHistory: () => api.get('/menu/merge/history'),
         mergePreview: (params: { source_id: string, target_id: string, source_variant_id?: string }) => api.get('/menu/merge/preview', { params }),

@@ -13,6 +13,7 @@ from src.api.dependencies import get_db
 from src.api.utils import df_to_json
 from src.core.utils.business_date import get_current_business_date
 from src.api.models import (
+    CreateVariantTypeRequest,
     MergeRequest,
     UndoMergeRequest,
     RemapRequest,
@@ -276,6 +277,21 @@ def get_variants_list(conn=Depends(get_db)):
     data = [{"variant_id": row[0], "name": row[1]} for row in cursor.fetchall()]
     cursor.close()
     return data
+
+
+@router.post("/variants/create")
+def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get_db)):
+    """Create a new variant type; uses the clustering pipeline's deterministic ID scheme."""
+    res = menu_utils.create_variant_type(
+        conn,
+        req.variant_name,
+        req.description,
+        req.unit,
+        req.value,
+    )
+    if res['status'] == 'error':
+        raise HTTPException(400, res['message'])
+    return res
 
 
 # --- Merge Logic ---
