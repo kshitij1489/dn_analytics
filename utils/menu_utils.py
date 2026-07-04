@@ -1265,11 +1265,6 @@ def resolve_menu_item_variant(
             for row in cursor.fetchall()
         ]
 
-        should_record_history = (
-            resolved_target_id != source_menu_item_id or
-            resolved_target_variant_id != source_variant_db_id
-        )
-        merge_id = None
         source_will_be_removed = (
             resolved_target_id != source_menu_item_id and
             len(full_source_variant_summary) == 1 and
@@ -1280,26 +1275,27 @@ def resolve_menu_item_variant(
             if source_will_be_removed
             else []
         )
-        if should_record_history:
-            history_payload = {
-                "kind": "resolution_variant_v1",
-                "source_variant_id": source_variant_key,
-                "target_variant_id": resolved_target_variant_id,
-                "source_variant_name": source_variant["variant_name"],
-                "target_variant_name": target_variant_name,
-                "suggestion_refs": suggestion_rows,
-                "mapping_rows": mapping_rows,
-                "order_items": order_item_rows,
-                "order_item_addons": addon_rows,
-            }
-            merge_id = _insert_merge_history(
-                cursor,
-                source_menu_item_id,
-                resolved_target_id,
-                source_item[1],
-                source_item[2],
-                history_payload,
-            )
+        # Record every resolution, including verify-in-place (same item + variant),
+        # so Resolution History is a complete, undoable audit trail.
+        history_payload = {
+            "kind": "resolution_variant_v1",
+            "source_variant_id": source_variant_key,
+            "target_variant_id": resolved_target_variant_id,
+            "source_variant_name": source_variant["variant_name"],
+            "target_variant_name": target_variant_name,
+            "suggestion_refs": suggestion_rows,
+            "mapping_rows": mapping_rows,
+            "order_items": order_item_rows,
+            "order_item_addons": addon_rows,
+        }
+        merge_id = _insert_merge_history(
+            cursor,
+            source_menu_item_id,
+            resolved_target_id,
+            source_item[1],
+            source_item[2],
+            history_payload,
+        )
 
         if resolved_target_id == source_menu_item_id and normalized_new_name and normalized_new_type:
             cursor.execute("""

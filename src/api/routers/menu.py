@@ -297,16 +297,20 @@ def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get
 # --- Merge Logic ---
 
 @router.get("/merge/history")
-def get_merge_history(conn=Depends(get_db)):
-    """Get recent merge history"""
+def get_merge_history(limit: int = 20, offset: int = 0, conn=Depends(get_db)):
+    """Get paginated merge/resolution history"""
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM merge_history")
+    total = int(cursor.fetchone()[0] or 0)
     cursor.execute("""
-        SELECT h.*, m.name as target_name 
+        SELECT h.*, m.name as target_name
         FROM merge_history h
         LEFT JOIN menu_items m ON h.target_id = m.menu_item_id
-        ORDER BY h.merged_at DESC 
-        LIMIT 20
-    """)
+        ORDER BY h.merged_at DESC, h.merge_id DESC
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
     cols = [desc[0] for desc in cursor.description]
     results = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
@@ -345,7 +349,7 @@ def get_merge_history(conn=Depends(get_db)):
         ]
 
     cursor.close()
-    return results
+    return {"entries": results, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/merge/preview")

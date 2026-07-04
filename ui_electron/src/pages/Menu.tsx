@@ -48,6 +48,8 @@ interface ResolutionItem {
 
 interface MergeHistoryEntry {
     merge_id: number;
+    source_id: string;
+    target_id: string;
     source_name: string;
     target_name?: string | null;
     merged_at: string;
@@ -127,14 +129,24 @@ const renderVariantAssignments = (assignments?: MergeHistoryVariantAssignment[],
                         color: 'var(--text-secondary)',
                     }}
                 >
-                    Variant: <span style={{ color: '#F59E0B' }}>{assignment.source_variant_name}</span>
-                    {' → '}
-                    <span style={{ color: '#60A5FA' }}>{assignment.target_variant_name}</span>
+                    {assignment.source_variant_id === assignment.target_variant_id ? (
+                        <>Variant: <span style={{ color: '#60A5FA' }}>{assignment.target_variant_name}</span></>
+                    ) : (
+                        <>
+                            Variant: <span style={{ color: '#F59E0B' }}>{assignment.source_variant_name}</span>
+                            {' → '}
+                            <span style={{ color: '#60A5FA' }}>{assignment.target_variant_name}</span>
+                        </>
+                    )}
                 </div>
             ))}
         </div>
     );
 };
+
+const isVerifyInPlaceEntry = (entry: MergeHistoryEntry) =>
+    entry.source_id === entry.target_id &&
+    (entry.variant_assignments || []).every(assignment => assignment.source_variant_id === assignment.target_variant_id);
 
 const getMergeSuggestionLabel = (item: ResolutionItem) => {
     if (!item.suggestion_name) return 'Merge with Suggested Item';
@@ -343,6 +355,7 @@ const SUMMARY_PERIOD_LABELS: Record<(typeof SUMMARY_PERIOD_KEYS)[number], string
 };
 
 const SEARCH_IDLE_DELAY_MS = 1500;
+const HISTORY_PAGE_SIZE = 20;
 
 function formatSummaryNumber(value: unknown, volume: boolean): string {
     const n = typeof value === 'number' ? value : Number(value);
@@ -1149,7 +1162,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
             setItems(itemsRes.data);
             setVariants(variantsRes.data);
             setMatrixData(matrixRes.data);
-            setMergeHistory(historyRes.data);
+            setMergeHistory(historyRes.data.entries);
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         }
@@ -1626,7 +1639,10 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     const [items, setItems] = useState<ResolutionItem[]>([]);
     const [lookupItems, setLookupItems] = useState<MenuLookupItem[]>([]);
     const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
+    const [typeOptions, setTypeOptions] = useState<string[]>([]);
     const [mergeHistory, setMergeHistory] = useState<MergeHistoryEntry[]>([]);
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyTotal, setHistoryTotal] = useState(0);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const [loading, setLoading] = useState(true);
     const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
@@ -1663,10 +1679,25 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         return res.data;
     };
 
-    const loadHistory = async () => {
-        const res = await endpoints.menu.mergeHistory();
-        setMergeHistory(res.data);
+    const loadTypeOptions = async () => {
+        const res = await endpoints.menu.types();
+        setTypeOptions(res.data);
         return res.data;
+    };
+
+    const loadHistory = async (page = historyPage) => {
+        const res = await endpoints.menu.mergeHistory({
+            limit: HISTORY_PAGE_SIZE,
+            offset: (page - 1) * HISTORY_PAGE_SIZE,
+        });
+        setMergeHistory(res.data.entries);
+        setHistoryTotal(res.data.total);
+        // If the last item on the final page was undone, step back a page.
+        const maxPage = Math.max(1, Math.ceil(res.data.total / HISTORY_PAGE_SIZE));
+        if (page > maxPage) {
+            setHistoryPage(maxPage);
+        }
+        return res.data.entries;
     };
 
     const removeResolvedItem = (menuItemId: string, sourceVariantId: string) => {
@@ -1677,9 +1708,9 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 
     const refreshAll = async () => {
         setLoading(true);
-        const results = await Promise.allSettled([loadItems(), loadLookupItems(), loadVariantOptions(), loadHistory()]);
+        const results = await Promise.allSettled([loadItems(), loadLookupItems(), loadVariantOptions(), loadTypeOptions(), loadHistory()]);
         const failedRefreshes = results
-            .map((result, index) => ({ result, label: ['items', 'lookup', 'variants', 'history'][index] }))
+            .map((result, index) => ({ result, label: ['items', 'lookup', 'variants', 'types', 'history'][index] }))
             .filter(({ result }) => result.status === 'rejected')
             .map(({ label, result }) => `${label}: ${getApiErrorMessage((result as PromiseRejectedResult).reason)}`);
 
@@ -1696,6 +1727,15 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     useEffect(() => {
         void refreshAll();
     }, [lastDbSync]);
+
+    const loadedHistoryPageRef = useRef(1);
+    useEffect(() => {
+        if (loadedHistoryPageRef.current === historyPage) return;
+        loadedHistoryPageRef.current = historyPage;
+        loadHistory(historyPage).catch(error => {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        });
+    }, [historyPage]);
 
     useEffect(() => {
         if (!modalItem || !selectedTargetId) {
@@ -1909,12 +1949,12 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const handleUndo = async (mergeId: number) => {
-        if (!window.confirm('Undo this merge?')) return;
+        if (!window.confirm('Undo this resolution?')) return;
 
         setUndoingMergeId(mergeId);
         try {
             await endpoints.menu.undoMerge({ merge_id: mergeId });
-            setPopup({ type: 'success', message: 'Merge undone successfully.' });
+            setPopup({ type: 'success', message: 'Resolution undone successfully.' });
             await refreshAll();
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
@@ -1923,8 +1963,11 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         }
     };
 
+    // The item being resolved is always a valid target: picking it just moves this
+    // source variant onto another variant type of the same item. It may not be
+    // is_verified yet because sibling variants are still unresolved.
     const eligibleTargets = modalItem
-        ? lookupItems.filter(candidate => candidate.is_verified && candidate.menu_item_id !== modalItem.menu_item_id)
+        ? lookupItems.filter(candidate => candidate.is_verified || candidate.menu_item_id === modalItem.menu_item_id)
         : [];
 
     const filteredTargets = eligibleTargets.filter(candidate =>
@@ -2027,9 +2070,9 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                     </Card>
                 ))
             )}
-            <CollapsibleCard title="Recent Merge History" defaultCollapsed>
+            <CollapsibleCard title="Resolution History" defaultCollapsed>
                 {mergeHistory.length === 0 ? (
-                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No recent merges to undo.</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No resolutions recorded yet.</p>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {mergeHistory.map(entry => (
@@ -2046,9 +2089,22 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                             >
                                 <div>
                                     <div style={{ color: 'var(--text-color)' }}>
-                                        <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
-                                        {' → '}
-                                        <span style={{ color: '#10B981' }}>{entry.target_name || 'Deleted target'}</span>
+                                        {isVerifyInPlaceEntry(entry) ? (
+                                            <>
+                                                <span style={{ color: '#10B981' }}>✓ {entry.target_name || entry.source_name}</span>
+                                                <span style={{ marginLeft: '8px', fontSize: '0.75em', fontWeight: 600, color: '#10B981', background: 'rgba(16, 185, 129, 0.12)', padding: '2px 8px', borderRadius: '999px' }}>
+                                                    Verified in place
+                                                </span>
+                                            </>
+                                        ) : entry.source_id === entry.target_id ? (
+                                            <span style={{ color: '#10B981' }}>{entry.target_name || entry.source_name}</span>
+                                        ) : (
+                                            <>
+                                                <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
+                                                {' → '}
+                                                <span style={{ color: '#10B981' }}>{entry.target_name || 'Deleted target'}</span>
+                                            </>
+                                        )}
                                     </div>
                                     {renderVariantAssignments(entry.variant_assignments)}
                                     <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
@@ -2064,6 +2120,18 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                 </button>
                             </div>
                         ))}
+                    </div>
+                )}
+                {historyTotal > HISTORY_PAGE_SIZE && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                            Showing {(historyPage - 1) * HISTORY_PAGE_SIZE + 1} - {Math.min(historyPage * HISTORY_PAGE_SIZE, historyTotal)} of {historyTotal}
+                        </span>
+                        <div>
+                            <button disabled={historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)} style={{ marginRight: '5px', padding: '5px 10px', cursor: historyPage <= 1 ? 'not-allowed' : 'pointer' }}>&lt; Prev</button>
+                            <span>Page {historyPage} of {Math.ceil(historyTotal / HISTORY_PAGE_SIZE)}</span>
+                            <button disabled={historyPage >= Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} onClick={() => setHistoryPage(p => p + 1)} style={{ marginLeft: '5px', padding: '5px 10px', cursor: historyPage >= Math.ceil(historyTotal / HISTORY_PAGE_SIZE) ? 'not-allowed' : 'pointer' }}>Next &gt;</button>
+                        </div>
                     </div>
                 )}
             </CollapsibleCard>
@@ -2151,7 +2219,14 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                                     cursor: 'pointer',
                                                 }}
                                             >
-                                                <div style={{ fontWeight: 700 }}>{candidate.name}</div>
+                                                <div style={{ fontWeight: 700 }}>
+                                                    {candidate.name}
+                                                    {modalItem && candidate.menu_item_id === modalItem.menu_item_id && (
+                                                        <span style={{ marginLeft: '8px', fontSize: '0.75em', fontWeight: 600, color: '#3B82F6', background: 'rgba(59, 130, 246, 0.12)', padding: '2px 8px', borderRadius: '999px' }}>
+                                                            This item
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>{candidate.type}</div>
                                             </button>
                                         ))
@@ -2172,7 +2247,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                                 Selected source-variant totals to be absorbed: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
                                             </div>
                                             <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
-                                                Sibling unresolved variants, if any, will remain separate. You can undo target-changing moves from Recent Merge History.
+                                                Sibling unresolved variants, if any, will remain separate. You can undo resolutions from Resolution History.
                                             </div>
                                         </div>
                                     ) : (
@@ -2312,7 +2387,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                     }}
                                 />
                                 <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Type</label>
-                                <input
+                                <select
                                     value={renameType}
                                     onChange={(event) => setRenameType(event.target.value)}
                                     style={{
@@ -2325,7 +2400,15 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                         marginBottom: '12px',
                                         boxSizing: 'border-box',
                                     }}
-                                />
+                                >
+                                    <option value="">Select type</option>
+                                    {(renameType && !typeOptions.includes(renameType)
+                                        ? [renameType, ...typeOptions]
+                                        : typeOptions
+                                    ).map(type => (
+                                        <option key={type} value={type}>{type}</option>
+                                    ))}
+                                </select>
                                 <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Variant Type</label>
                                 <select
                                     value={renameVariantId}
