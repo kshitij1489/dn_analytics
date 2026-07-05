@@ -2,10 +2,12 @@
 Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
 
 Pull order (keep in sync with MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md):
-1. Menu bootstrap (broad catalog / id_maps + cluster_state)
-2. Menu mapping verification events (per-line is_verified on menu_item_variants)
-3. Menu merge events (structural merges / resolution history)
-4. Customer merges
+1. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
+2. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
+   after the catalog exists, before event tails)
+3. Menu mapping verification events (per-line is_verified on menu_item_variants)
+4. Menu merge events (structural merges / resolution history)
+5. Customer merges
 
 Used after POS sync when cloud endpoints are configured; failures are logged, not raised.
 """
@@ -32,9 +34,13 @@ def run_best_effort_cloud_pulls(
         get_customer_merge_pull_endpoint,
         pull_and_apply_customer_merge_events,
     )
+    from src.core.menu_assignment_bootstrap import (
+        bootstrap_menu_assignments_if_needed,
+        get_menu_assignments_snapshot_endpoint,
+    )
     from src.core.menu_bootstrap_sync import (
-        DEFAULT_MENU_BOOTSTRAP_APPLY_MODE,
         fetch_and_apply_menu_bootstrap_snapshot,
+        get_menu_bootstrap_apply_mode,
         get_menu_bootstrap_pull_endpoint,
     )
     from src.core.menu_mapping_verification_sync import (
@@ -49,6 +55,7 @@ def run_best_effort_cloud_pulls(
     summary: Dict[str, Any] = {
         "attempted": False,
         "customer_merges": None,
+        "menu_assignments_bootstrap": None,
         "menu_bootstrap": None,
         "menu_mapping_verifications": None,
         "menu_merges": None,
@@ -64,11 +71,24 @@ def run_best_effort_cloud_pulls(
                 conn,
                 ep_boot,
                 auth=auth_key,
-                apply_mode=DEFAULT_MENU_BOOTSTRAP_APPLY_MODE,
+                apply_mode=get_menu_bootstrap_apply_mode(conn),
             )
         except Exception as e:
             logger.exception("Best-effort menu bootstrap pull failed")
             summary["menu_bootstrap"] = {"error": str(e)}
+
+    ep_assignments = get_menu_assignments_snapshot_endpoint(conn)
+    if ep_assignments:
+        summary["attempted"] = True
+        try:
+            summary["menu_assignments_bootstrap"] = bootstrap_menu_assignments_if_needed(
+                conn,
+                ep_assignments,
+                auth=auth_key,
+            )
+        except Exception as e:
+            logger.exception("Best-effort menu assignments bootstrap failed")
+            summary["menu_assignments_bootstrap"] = {"error": str(e)}
 
     ep_mapping = get_menu_mapping_verification_pull_endpoint(conn)
     if ep_mapping:
@@ -117,7 +137,13 @@ def run_best_effort_cloud_pulls(
         summary["reason"] = "no cloud pull endpoints configured"
         return summary
 
-    for key in ("menu_bootstrap", "menu_mapping_verifications", "menu_merges", "customer_merges"):
+    for key in (
+        "menu_assignments_bootstrap",
+        "menu_bootstrap",
+        "menu_mapping_verifications",
+        "menu_merges",
+        "customer_merges",
+    ):
         block = summary.get(key)
         if isinstance(block, dict) and block.get("error"):
             logger.warning("Cloud pull %s reported error: %s", key, block["error"])

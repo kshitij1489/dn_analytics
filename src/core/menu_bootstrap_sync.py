@@ -7,6 +7,7 @@ optionally relinks historical order_items from the seeded snapshot mappings.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -15,11 +16,44 @@ from src.core.config.cloud_sync_config import get_cloud_sync_config
 from src.core.utils.path_helper import get_resource_path
 
 
-DEFAULT_MENU_BOOTSTRAP_APPLY_MODE = "seed_and_relink_orders"
+# Since Phase C4 (sync conflict plan) the routine pull only seeds the catalog:
+# per-order-item relinking is owned by the assignment sync stream. The relink
+# mode stays available behind an explicit flag for support/restore flows.
+DEFAULT_MENU_BOOTSTRAP_APPLY_MODE = "seed_only"
 SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES = {
     "seed_only",
     "seed_and_relink_orders",
 }
+MENU_BOOTSTRAP_APPLY_MODE_CONFIG_KEY = "menu_bootstrap_apply_mode"
+MENU_BOOTSTRAP_APPLY_MODE_ENV = "MENU_BOOTSTRAP_APPLY_MODE"
+
+
+def get_menu_bootstrap_apply_mode(conn) -> str:
+    """
+    Resolve the apply mode for routine bootstrap pulls: env override first,
+    then the system_config flag, else the seed-only default (plan C4.1).
+    """
+    for raw in (
+        os.environ.get(MENU_BOOTSTRAP_APPLY_MODE_ENV),
+        _get_config_apply_mode(conn),
+    ):
+        mode = str(raw or "").strip()
+        if mode in SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES:
+            return mode
+    return DEFAULT_MENU_BOOTSTRAP_APPLY_MODE
+
+
+def _get_config_apply_mode(conn) -> Optional[str]:
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM system_config WHERE key = ? LIMIT 1",
+            (MENU_BOOTSTRAP_APPLY_MODE_CONFIG_KEY,),
+        ).fetchone()
+    except Exception:
+        return None
+    return str(row[0]) if row and row[0] else None
 
 
 def get_menu_bootstrap_pull_endpoint(conn) -> Optional[str]:
