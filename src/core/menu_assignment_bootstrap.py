@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from src.core.menu_assignment_apply import apply_assignments, coerce_server_seq
 from src.core.menu_merge_sync import (
     _ensure_pull_tables,
+    _run_assignment_batch_epilogue,
     get_menu_merge_pull_cursor,
     set_menu_merge_pull_cursor,
 )
@@ -163,6 +164,106 @@ def bootstrap_menu_assignments_if_needed(
     return {
         "status": "bootstrapped",
         "rows_applied": rows_applied,
+        "rows_missing": rows_missing,
+        "watermark_seq": watermark_seq,
+        "cursor_set": bool(watermark_cursor),
+    }
+
+
+def force_reseed_menu_assignments(
+    conn,
+    endpoint: str,
+    auth: Optional[str] = None,
+    page_limit: int = SNAPSHOT_PAGE_LIMIT,
+) -> Dict[str, Any]:
+    """
+    Operator hard-reset: overwrite this install's cluster state from the server
+    snapshot regardless of prior bootstrap/cursor state (cutover piece 3 of
+    docs/MENU_MERGE_CONFLICT_SYNC_PLAN.md).
+
+    Unlike bootstrap_menu_assignments_if_needed this ignores the bootstrapped
+    flag and the "existing install" short-circuit, so it re-applies the current
+    ground truth over whatever the install currently has. It relies on the seq
+    guard to win: after a baseline import the snapshot's watermark_seq is higher
+    than every local assignment_seq, so every row is rewritten; running it twice
+    with an unchanged watermark is a safe no-op.
+
+    Intended for a coordinated cutover (edits frozen) or to recover a single
+    diverged / quarantined install. Overwrites pending local edits, so do not
+    run it on a machine with unsynced local work you want to keep.
+    """
+    _ensure_pull_tables(conn)
+
+    rows_applied = 0
+    rows_missing = 0
+    rows_stale = 0
+    watermark_seq: Optional[int] = None
+    watermark_cursor: Optional[str] = None
+    after: Optional[str] = None
+    touched_menu_item_ids: set = set()
+
+    while True:
+        page = _fetch_snapshot_page(endpoint, auth, after, page_limit)
+        if page.get("error"):
+            conn.rollback()
+            return {"status": "error", "error": page["error"], "rows_applied": rows_applied}
+
+        if watermark_seq is None:
+            watermark_seq = coerce_server_seq(page.get("watermark_seq"))
+            watermark_cursor = page.get("watermark_cursor") or None
+
+        assignments = []
+        for row in page["assignments"]:
+            if not isinstance(row, dict):
+                continue
+            assignment = {
+                "order_item_id": str(row.get("order_item_id") or "").strip(),
+                "menu_item_id": str(row.get("menu_item_id") or "").strip(),
+                "variant_id": row.get("variant_id"),
+                "is_verified": row.get("is_verified", 1),
+            }
+            if assignment["order_item_id"] and assignment["menu_item_id"]:
+                assignments.append(assignment)
+
+        if assignments:
+            result = apply_assignments(
+                conn,
+                assignments,
+                watermark_seq,
+                event={},
+                detect_supersede=False,
+            )
+            rows_applied += result["rows_applied"]
+            rows_missing += result["rows_missing"]
+            rows_stale += len(result["stale_rows"])
+            touched_menu_item_ids |= set(result.get("touched_menu_item_ids") or ())
+
+        after = page.get("next_page") or None
+        if not after:
+            break
+
+    if watermark_cursor:
+        set_menu_merge_pull_cursor(conn, watermark_cursor)
+    _set_config_value(conn, MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY, "force-reseed")
+    conn.commit()
+
+    # Recompute item stats, GC items left with zero mappings, clear stale
+    # forecast caches, and re-export backups — the same cleanup the normal pull
+    # runs after an assignment batch.
+    if touched_menu_item_ids:
+        _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
+
+    logger.info(
+        "Menu assignments force-reseeded: %d rows applied, %d stale-skipped, %d without local order items, watermark_seq=%s",
+        rows_applied,
+        rows_stale,
+        rows_missing,
+        watermark_seq,
+    )
+    return {
+        "status": "reseeded",
+        "rows_applied": rows_applied,
+        "rows_stale": rows_stale,
         "rows_missing": rows_missing,
         "watermark_seq": watermark_seq,
         "cursor_set": bool(watermark_cursor),
