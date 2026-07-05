@@ -232,5 +232,139 @@ class MenuMergeSyncTests(unittest.TestCase):
         )
 
 
+    @patch("utils.menu_utils.export_to_backups", return_value=True)
+    def test_pull_skips_unappliable_event_and_keeps_going(self, _mock_export) -> None:
+        # First event is un-appliable (merging an item into itself); the pull must
+        # not halt on it. The second, valid event should still apply and the cursor
+        # should advance past the whole page.
+        remote_events = [
+            {
+                "remote_event_id": "remote-bad-1",
+                "schema_version": 1,
+                "event_type": "menu_merge.applied",
+                "occurred_at": "2026-04-14T10:00:00Z",
+                "source_item": {
+                    "menu_item_id": "item_target",
+                    "name": "Cold Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "target_item": {
+                    "menu_item_id": "item_target",
+                    "name": "Cold Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "merge_payload": {"kind": "basic_merge_v1"},
+            },
+            {
+                "remote_event_id": "remote-good-1",
+                "schema_version": 1,
+                "event_type": "menu_merge.applied",
+                "occurred_at": "2026-04-14T10:01:00Z",
+                "source_item": {
+                    "menu_item_id": "item_source",
+                    "name": "Iced Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "target_item": {
+                    "menu_item_id": "item_target",
+                    "name": "Cold Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "merge_payload": {"kind": "basic_merge_v1"},
+            },
+        ]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "events": remote_events,
+            "next_cursor": "cursor-9",
+        }
+
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        # A per-event failure is not a transport error, so error stays None and the
+        # cursor advances so future pulls do not re-fetch the un-appliable event.
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_fetched"], 2)
+        self.assertEqual(result["merge_events_applied"], 1)
+        self.assertEqual(result["events_failed"], 1)
+        self.assertIsNotNone(result["last_event_error"])
+        self.assertEqual(result["cursor_after"], "cursor-9")
+
+        # The good merge landed; the bad one left no partial state behind.
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM menu_merge_remote_events WHERE remote_event_id = 'remote-good-1'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM menu_merge_remote_events WHERE remote_event_id = 'remote-bad-1'"
+            ).fetchone()[0],
+            0,
+        )
+
+    @patch("utils.menu_utils.export_to_backups", return_value=True)
+    def test_pull_backfills_missing_source_item(self, _mock_export) -> None:
+        # Source item is absent locally (already merged away on this device); the
+        # pull should recreate it from the event snapshot and apply the merge.
+        self.conn.execute("DELETE FROM order_items WHERE menu_item_id = 'item_source'")
+        self.conn.execute("DELETE FROM menu_item_variants WHERE menu_item_id = 'item_source'")
+        self.conn.execute("DELETE FROM menu_items WHERE menu_item_id = 'item_source'")
+        self.conn.commit()
+
+        remote_events = [
+            {
+                "remote_event_id": "remote-backfill-1",
+                "schema_version": 1,
+                "event_type": "menu_merge.applied",
+                "occurred_at": "2026-04-14T10:00:00Z",
+                "source_item": {
+                    "menu_item_id": "item_source",
+                    "name": "Iced Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "target_item": {
+                    "menu_item_id": "item_target",
+                    "name": "Cold Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "merge_payload": {"kind": "basic_merge_v1"},
+            }
+        ]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"events": remote_events, "next_cursor": "cursor-3"}
+
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        self.assertEqual(result["events_failed"], 0)
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM menu_merge_remote_events WHERE remote_event_id = 'remote-backfill-1'"
+            ).fetchone()[0],
+            1,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

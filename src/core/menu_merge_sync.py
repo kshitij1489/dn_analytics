@@ -324,7 +324,12 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
     if not source_id or not target_id:
         raise ValueError("Menu merge event is missing source or target menu_item_id")
 
+    # Backfill both endpoints from the event snapshot. The source item may be
+    # absent locally (e.g. already merged away, or this device ingested the menu
+    # later than the origin device); recreating it from the snapshot lets the
+    # merge replay instead of failing with "Source item was not found".
     _ensure_menu_item_exists(conn, target_item)
+    _ensure_menu_item_exists(conn, source_item)
 
     merge_payload = _normalize_merge_payload(event.get("merge_payload"))
     merge_kind = merge_payload["kind"]
@@ -344,6 +349,7 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
             target_variant_id = _normalize_variant_key(mapping.get("target_variant_id"))
             target_variant_name = mapping.get("target_variant_name")
             _ensure_variant_exists(conn, target_variant_id, target_variant_name)
+            _ensure_variant_exists(conn, source_variant_id, mapping.get("source_variant_name"))
             resolved_mappings.append(
                 {
                     "source_variant_id": source_variant_id,
@@ -370,8 +376,10 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
 
         target_variant_id = _normalize_variant_key(resolution.get("target_variant_id"))
         target_variant_name = resolution.get("target_variant_name")
+        source_variant_id = _normalize_variant_key(resolution.get("source_variant_id"))
         _ensure_menu_item_exists(conn, target_item)
         _ensure_variant_exists(conn, target_variant_id, target_variant_name)
+        _ensure_variant_exists(conn, source_variant_id, resolution.get("source_variant_name"))
 
         result = menu_utils.resolve_menu_item_variant(
             conn,
@@ -524,15 +532,21 @@ def pull_and_apply_menu_merge_events(
         "merge_events_applied": 0,
         "undo_events_applied": 0,
         "events_skipped": 0,
+        "events_failed": 0,
         "cursor_before": cursor_before,
         "cursor_after": cursor_before,
         "error": None,
+        "last_event_error": None,
     }
 
     for event in events:
         if not isinstance(event, dict):
-            stats["error"] = "Invalid menu merge event in response payload"
-            return stats
+            # Malformed entry in the response: skip it instead of aborting the
+            # whole page so the remaining events still get a chance to apply.
+            stats["events_failed"] += 1
+            stats["last_event_error"] = "Invalid menu merge event in response payload"
+            logger.warning("Menu merge pull skipping malformed event in response payload")
+            continue
 
         event_type = str(event.get("event_type") or "").strip()
         try:
@@ -552,10 +566,20 @@ def pull_and_apply_menu_merge_events(
                 raise ValueError(f"Unsupported remote event_type '{event_type}'")
             conn.commit()
         except Exception as exc:
+            # A single un-appliable event (divergent local IDs, already-merged
+            # source, an item that can't be merged into itself, etc.) must not
+            # block the entire pull. Roll back just this event, record it as a
+            # failure, and continue so the cursor can still advance past it.
+            # Transport-level problems are handled separately via stats["error"].
             conn.rollback()
-            logger.warning("Menu merge pull failed for event %s: %s", event.get("remote_event_id"), exc)
-            stats["error"] = str(exc)
-            return stats
+            stats["events_failed"] += 1
+            stats["last_event_error"] = str(exc)
+            logger.warning(
+                "Menu merge pull skipping event %s: %s",
+                event.get("remote_event_id"),
+                exc,
+            )
+            continue
 
     cursor_after = cursor_before if next_cursor is None else str(next_cursor)
     try:
