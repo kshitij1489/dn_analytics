@@ -21,6 +21,7 @@ from src.core.queries.customer_query_utils import (
     normalize_phone,
     normalize_text,
 )
+from src.core.sync_cursor_migration import ensure_sync_cursor_schema
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def ensure_customer_merge_pull_tables(conn) -> None:
         );
         """
     )
+    ensure_sync_cursor_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS customer_merge_remote_events (

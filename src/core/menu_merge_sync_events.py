@@ -7,6 +7,7 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
+from src.core.menu_sync_quarantine import ensure_menu_sync_quarantine_table
 from src.core.sync_identity import get_sync_attribution
 from utils import menu_utils
 
@@ -85,6 +86,7 @@ def ensure_menu_merge_sync_tables(conn) -> None:
         ON menu_merge_remote_events(local_merge_id);
         """
     )
+    ensure_menu_sync_quarantine_table(conn)
 
 
 def has_menu_merge_sync_table(conn) -> bool:

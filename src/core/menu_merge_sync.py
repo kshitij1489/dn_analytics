@@ -12,12 +12,21 @@ from src.core.menu_merge_sync_events import (
     EVENT_TYPE_UNDONE,
     ensure_menu_merge_sync_tables,
 )
+from src.core.menu_sync_quarantine import (
+    ensure_menu_sync_quarantine_table,
+    fetch_unresolved_quarantined_events,
+    mark_quarantined_event_resolved,
+    quarantine_event,
+    record_quarantine_retry_failure,
+)
+from src.core.sync_cursor_migration import ensure_sync_cursor_schema
 from utils import menu_utils
 
 
 logger = logging.getLogger(__name__)
 
 MENU_MERGE_PULL_CURSOR_KEY = "menu_merge_pull_cursor"
+QUARANTINE_STREAM_MENU_MERGE = "menu_merge"
 DEFAULT_PULL_LIMIT = 100
 
 
@@ -32,6 +41,7 @@ def get_menu_merge_pull_endpoint(conn) -> Optional[str]:
 
 def _ensure_pull_tables(conn) -> None:
     ensure_menu_merge_sync_tables(conn)
+    ensure_menu_sync_quarantine_table(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS system_config (
@@ -41,6 +51,7 @@ def _ensure_pull_tables(conn) -> None:
         );
         """
     )
+    ensure_sync_cursor_schema(conn)
 
 
 def get_menu_merge_pull_cursor(conn) -> Optional[str]:
@@ -503,6 +514,41 @@ def _fetch_remote_events(
     return {"events": events, "next_cursor": next_cursor, "error": None}
 
 
+def _apply_remote_event_by_type(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
+    event_type = str(event.get("event_type") or "").strip()
+    if event_type == EVENT_TYPE_APPLIED:
+        return _apply_remote_merge_event(conn, event, remote_cursor)
+    if event_type == EVENT_TYPE_UNDONE:
+        return _apply_remote_undo_event(conn, event, remote_cursor)
+    raise ValueError(f"Unsupported remote event_type '{event_type}'")
+
+
+def retry_quarantined_menu_merge_events(conn) -> Dict[str, int]:
+    """
+    Re-attempt quarantined menu merge events at the start of each pull.
+
+    Events that now apply (e.g. the missing peer state has since arrived) are
+    marked resolved; the rest stay quarantined with a bumped fail_count.
+    """
+    stats = {"attempted": 0, "resolved": 0}
+    for row in fetch_unresolved_quarantined_events(conn, QUARANTINE_STREAM_MENU_MERGE):
+        stats["attempted"] += 1
+        remote_event_id = str(row["remote_event_id"])
+        try:
+            event = json.loads(row["payload"])
+            if not isinstance(event, dict):
+                raise ValueError("Quarantined payload is not a JSON object")
+            _apply_remote_event_by_type(conn, event, None)
+            mark_quarantined_event_resolved(conn, remote_event_id)
+            conn.commit()
+            stats["resolved"] += 1
+        except Exception as exc:
+            conn.rollback()
+            record_quarantine_retry_failure(conn, remote_event_id, str(exc))
+            conn.commit()
+    return stats
+
+
 def pull_and_apply_menu_merge_events(
     conn,
     endpoint: str,
@@ -511,6 +557,7 @@ def pull_and_apply_menu_merge_events(
     cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
     _ensure_pull_tables(conn)
+    retry_stats = retry_quarantined_menu_merge_events(conn)
 
     cursor_before = cursor if cursor is not None else get_menu_merge_pull_cursor(conn)
     fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
@@ -520,6 +567,8 @@ def pull_and_apply_menu_merge_events(
             "merge_events_applied": 0,
             "undo_events_applied": 0,
             "events_skipped": 0,
+            "quarantine_retried": retry_stats["attempted"],
+            "quarantine_resolved": retry_stats["resolved"],
             "cursor_before": cursor_before,
             "cursor_after": cursor_before,
             "error": fetch_result["error"],
@@ -533,6 +582,9 @@ def pull_and_apply_menu_merge_events(
         "undo_events_applied": 0,
         "events_skipped": 0,
         "events_failed": 0,
+        "events_quarantined": 0,
+        "quarantine_retried": retry_stats["attempted"],
+        "quarantine_resolved": retry_stats["resolved"],
         "cursor_before": cursor_before,
         "cursor_after": cursor_before,
         "error": None,
@@ -568,14 +620,32 @@ def pull_and_apply_menu_merge_events(
         except Exception as exc:
             # A single un-appliable event (divergent local IDs, already-merged
             # source, an item that can't be merged into itself, etc.) must not
-            # block the entire pull. Roll back just this event, record it as a
-            # failure, and continue so the cursor can still advance past it.
-            # Transport-level problems are handled separately via stats["error"].
+            # block the entire pull. Roll back just this event, quarantine it
+            # for retry/user surfacing, and continue so the cursor can still
+            # advance past it. Transport-level problems are handled separately
+            # via stats["error"].
             conn.rollback()
             stats["events_failed"] += 1
             stats["last_event_error"] = str(exc)
+            remote_event_id = str(event.get("remote_event_id") or "").strip()
+            if remote_event_id:
+                try:
+                    quarantine_event(
+                        conn,
+                        QUARANTINE_STREAM_MENU_MERGE,
+                        remote_event_id,
+                        event,
+                        str(exc),
+                    )
+                    conn.commit()
+                    stats["events_quarantined"] += 1
+                except Exception:
+                    conn.rollback()
+                    logger.exception(
+                        "Failed to quarantine menu merge event %s", remote_event_id
+                    )
             logger.warning(
-                "Menu merge pull skipping event %s: %s",
+                "Menu merge pull quarantined event %s: %s",
                 event.get("remote_event_id"),
                 exc,
             )

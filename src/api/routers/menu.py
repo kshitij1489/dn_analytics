@@ -458,6 +458,28 @@ def pull_menu_mapping_verifications_from_cloud(limit: int = 100, conn=Depends(ge
     }
 
 
+@router.get("/sync-conflicts")
+def get_sync_conflicts(include_resolved: bool = False, conn=Depends(get_db)):
+    """List quarantined sync events (conflicts/poison events) for user review."""
+    from src.core.menu_sync_quarantine import list_sync_conflicts
+
+    conflicts = list_sync_conflicts(conn, include_resolved=include_resolved)
+    unresolved_count = sum(1 for conflict in conflicts if not conflict.get("resolved_at"))
+    return {"count": unresolved_count, "conflicts": conflicts}
+
+
+@router.post("/sync-conflicts/{remote_event_id}/dismiss")
+def dismiss_sync_conflict_endpoint(remote_event_id: str, conn=Depends(get_db)):
+    """Dismiss a quarantined sync event so it stops retrying (kept for audit)."""
+    from src.core.menu_sync_quarantine import dismiss_sync_conflict
+
+    dismissed = dismiss_sync_conflict(conn, remote_event_id)
+    if not dismissed:
+        raise HTTPException(status_code=404, detail="Unresolved sync conflict not found")
+    conn.commit()
+    return {"status": "ok", "remote_event_id": remote_event_id}
+
+
 @router.post("/bootstrap/pull-from-cloud")
 def pull_menu_bootstrap_from_cloud(
     apply_mode: str = "seed_and_relink_orders",

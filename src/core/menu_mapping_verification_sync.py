@@ -23,10 +23,19 @@ from src.core.menu_mapping_verification_sync_events import (
     EVENT_REOPENED,
     EVENT_VERIFIED,
 )
+from src.core.menu_sync_quarantine import (
+    ensure_menu_sync_quarantine_table,
+    fetch_unresolved_quarantined_events,
+    mark_quarantined_event_resolved,
+    quarantine_event,
+    record_quarantine_retry_failure,
+)
+from src.core.sync_cursor_migration import ensure_sync_cursor_schema
 
 logger = logging.getLogger(__name__)
 
 MENU_MAPPING_VERIFICATION_PULL_CURSOR_KEY = "menu_mapping_verification_pull_cursor"
+QUARANTINE_STREAM_MAPPING_VERIFICATION = "mapping_verification"
 DEFAULT_PULL_LIMIT = 100
 
 
@@ -70,6 +79,8 @@ def _ensure_tables(conn) -> None:
         );
         """
     )
+    ensure_menu_sync_quarantine_table(conn)
+    ensure_sync_cursor_schema(conn)
 
 
 def get_menu_mapping_verification_pull_cursor(conn) -> Optional[str]:
@@ -406,6 +417,32 @@ def _fetch_remote_events(
     return {"events": events, "next_cursor": next_cursor, "error": None}
 
 
+def retry_quarantined_menu_mapping_verification_events(conn) -> Dict[str, int]:
+    """
+    Re-attempt quarantined mapping verification events at the start of each pull.
+
+    Mirrors flush_deferred_menu_mapping_verifications, but for events that
+    failed with an error rather than a missing order_item_id row.
+    """
+    stats = {"attempted": 0, "resolved": 0}
+    for row in fetch_unresolved_quarantined_events(conn, QUARANTINE_STREAM_MAPPING_VERIFICATION):
+        stats["attempted"] += 1
+        remote_event_id = str(row["remote_event_id"])
+        try:
+            event = json.loads(row["payload"])
+            if not isinstance(event, dict):
+                raise ValueError("Quarantined payload is not a JSON object")
+            _apply_remote_event(conn, event, None)
+            mark_quarantined_event_resolved(conn, remote_event_id)
+            conn.commit()
+            stats["resolved"] += 1
+        except Exception as exc:
+            conn.rollback()
+            record_quarantine_retry_failure(conn, remote_event_id, str(exc))
+            conn.commit()
+    return stats
+
+
 def pull_and_apply_menu_mapping_verification_events(
     conn,
     endpoint: str,
@@ -414,6 +451,7 @@ def pull_and_apply_menu_mapping_verification_events(
     cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
     _ensure_tables(conn)
+    retry_stats = retry_quarantined_menu_mapping_verification_events(conn)
 
     cursor_before = cursor if cursor is not None else get_menu_mapping_verification_pull_cursor(conn)
     fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
@@ -422,6 +460,8 @@ def pull_and_apply_menu_mapping_verification_events(
             "events_fetched": 0,
             "events_applied": 0,
             "events_skipped": 0,
+            "quarantine_retried": retry_stats["attempted"],
+            "quarantine_resolved": retry_stats["resolved"],
             "cursor_before": cursor_before,
             "cursor_after": cursor_before,
             "error": fetch_result["error"],
@@ -433,16 +473,23 @@ def pull_and_apply_menu_mapping_verification_events(
         "events_fetched": len(events),
         "events_applied": 0,
         "events_skipped": 0,
+        "events_failed": 0,
+        "events_quarantined": 0,
         "deferred": 0,
+        "quarantine_retried": retry_stats["attempted"],
+        "quarantine_resolved": retry_stats["resolved"],
         "cursor_before": cursor_before,
         "cursor_after": cursor_before,
         "error": None,
+        "last_event_error": None,
     }
 
     for event in events:
         if not isinstance(event, dict):
-            stats["error"] = "Invalid mapping verification event in response payload"
-            return stats
+            stats["events_failed"] += 1
+            stats["last_event_error"] = "Invalid mapping verification event in response payload"
+            logger.warning("Menu mapping verification pull skipping malformed event in response payload")
+            continue
 
         try:
             result = _apply_remote_event(conn, event, next_cursor)
@@ -454,14 +501,36 @@ def pull_and_apply_menu_mapping_verification_events(
                 stats["events_skipped"] += 1
             conn.commit()
         except Exception as exc:
+            # One bad event must not stall the stream forever (it previously
+            # aborted the pull without advancing the cursor). Quarantine it and
+            # keep going; the cursor advances past it and the retry pass / user
+            # dismissal handles the quarantined copy.
             conn.rollback()
+            stats["events_failed"] += 1
+            stats["last_event_error"] = str(exc)
+            remote_event_id = str(event.get("remote_event_id") or "").strip()
+            if remote_event_id:
+                try:
+                    quarantine_event(
+                        conn,
+                        QUARANTINE_STREAM_MAPPING_VERIFICATION,
+                        remote_event_id,
+                        event,
+                        str(exc),
+                    )
+                    conn.commit()
+                    stats["events_quarantined"] += 1
+                except Exception:
+                    conn.rollback()
+                    logger.exception(
+                        "Failed to quarantine mapping verification event %s", remote_event_id
+                    )
             logger.warning(
-                "Menu mapping verification pull failed for event %s: %s",
+                "Menu mapping verification pull quarantined event %s: %s",
                 event.get("remote_event_id"),
                 exc,
             )
-            stats["error"] = str(exc)
-            return stats
+            continue
 
     cursor_after = cursor_before if next_cursor is None else str(next_cursor)
     try:
