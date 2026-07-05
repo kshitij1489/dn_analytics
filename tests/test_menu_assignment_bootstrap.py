@@ -17,6 +17,9 @@ from src.core.menu_bootstrap_sync import (
     DEFAULT_MENU_BOOTSTRAP_APPLY_MODE,
     get_menu_bootstrap_apply_mode,
 )
+from src.core.menu_mapping_verification_sync import (
+    get_menu_mapping_verification_pull_cursor,
+)
 from src.core.menu_merge_sync import get_menu_merge_pull_cursor, set_menu_merge_pull_cursor
 from tests.test_menu_assignment_apply import (
     FakeEventServer,
@@ -58,7 +61,13 @@ def _snapshot_rows_from_install(conn):
     ]
 
 
-def _fake_snapshot_fetch(rows, watermark_seq, watermark_cursor, page_size=2):
+def _fake_snapshot_fetch(
+    rows,
+    watermark_seq,
+    watermark_cursor,
+    page_size=2,
+    verification_watermark_cursor=None,
+):
     ordered = sorted(rows, key=lambda row: row["order_item_id"])
 
     def _fetch(endpoint, auth, after, limit):
@@ -69,6 +78,7 @@ def _fake_snapshot_fetch(rows, watermark_seq, watermark_cursor, page_size=2):
             "assignments": page,
             "watermark_seq": watermark_seq,
             "watermark_cursor": watermark_cursor,
+            "verification_watermark_cursor": verification_watermark_cursor,
             "next_page": page[-1]["order_item_id"] if len(page) == page_size else None,
         }
 
@@ -106,17 +116,32 @@ class MenuAssignmentBootstrapTests(unittest.TestCase):
         watermark_seq = len(server.rows)
         watermark_cursor = str(len(server.rows))
 
+        verification_watermark_cursor = "verif-" + str(len(server.rows))
+
         fresh = make_install_db()
         self.addCleanup(fresh.close)
         with patch(
             "src.core.menu_assignment_bootstrap._fetch_snapshot_page",
-            side_effect=_fake_snapshot_fetch(snapshot_rows, watermark_seq, watermark_cursor),
+            side_effect=_fake_snapshot_fetch(
+                snapshot_rows,
+                watermark_seq,
+                watermark_cursor,
+                verification_watermark_cursor=verification_watermark_cursor,
+            ),
         ):
             outcome = bootstrap_menu_assignments_if_needed(fresh, "http://fake/snapshot")
 
         self.assertEqual(outcome["status"], "bootstrapped")
         self.assertTrue(outcome["cursor_set"])
         self.assertEqual(get_menu_merge_pull_cursor(fresh), watermark_cursor)
+        # The verification cursor is seeded to the snapshot's verification
+        # watermark, so the fresh install tails the flag stream instead of
+        # replaying it from zero.
+        self.assertTrue(outcome["verification_cursor_set"])
+        self.assertEqual(
+            get_menu_mapping_verification_pull_cursor(fresh),
+            verification_watermark_cursor,
+        )
 
         # Tail from the watermark fetches nothing new and changes nothing.
         stats = pull_install(fresh, server)

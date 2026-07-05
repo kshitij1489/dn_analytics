@@ -24,6 +24,7 @@ from src.core.menu_mapping_verification_sync_events import (
     EVENT_BULK_VERIFIED,
     EVENT_REOPENED,
     EVENT_VERIFIED,
+    extract_verification_entries,
 )
 from src.core.menu_sync_quarantine import (
     ensure_menu_sync_quarantine_table,
@@ -251,47 +252,22 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
             conn.execute("DELETE FROM menu_mapping_verification_deferred WHERE remote_event_id = ?", (remote_event_id,))
             continue
 
-        event_type = str(payload.get("event_type") or "")
         mids: Set[str] = set()
         ok = False
         all_resolved = True  # tracks if every row in a bulk event was applied
         try:
-            if event_type == EVENT_VERIFIED:
-                oid = str(payload.get("order_item_id") or "").strip()
-                target = int(payload.get("is_verified", 1))
-                if oid:
-                    mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
-                    if mid:
-                        ok = True
-                        mids.add(mid)
-                    else:
-                        all_resolved = False
-            elif event_type == EVENT_BULK_VERIFIED:
-                mappings = payload.get("mappings")
-                if isinstance(mappings, list):
-                    for m in mappings:
-                        if not isinstance(m, dict):
-                            continue
-                        oid = str(m.get("order_item_id") or "").strip()
-                        target = int(m.get("is_verified", 1))
-                        if not oid:
-                            continue
-                        mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
-                        if mid:
-                            ok = True
-                            mids.add(mid)
-                        else:
-                            all_resolved = False
-            elif event_type == EVENT_REOPENED:
-                oid = str(payload.get("order_item_id") or "").strip()
-                target = int(payload.get("is_verified", 0))
-                if oid:
-                    mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
-                    if mid:
-                        ok = True
-                        mids.add(mid)
-                    else:
-                        all_resolved = False
+            for entry in extract_verification_entries(payload) or []:
+                mid = _apply_verification_by_order_item_id(
+                    conn,
+                    entry["order_item_id"],
+                    entry["is_verified"],
+                    server_seq=payload.get("server_seq"),
+                )
+                if mid:
+                    ok = True
+                    mids.add(mid)
+                else:
+                    all_resolved = False
         except Exception:
             conn.rollback()
             raise
@@ -322,77 +298,42 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
     menu_item_ids: Set[str] = set()
     deferred = False
 
-    if event_type == EVENT_VERIFIED:
-        oid = str(event.get("order_item_id") or "").strip()
-        target = int(event.get("is_verified", 1))
-        if not oid:
-            raise ValueError("mapping.verified requires order_item_id")
-        row = conn.execute(
-            "SELECT 1 FROM menu_item_variants WHERE order_item_id = ? LIMIT 1",
-            (oid,),
-        ).fetchone()
-        if not row:
-            deferred = True
-            _defer_event(conn, remote_event_id, event)
-        else:
-            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
-            if not mid:
-                deferred = True
-                _defer_event(conn, remote_event_id, event)
-            else:
-                menu_item_ids.add(mid)
-    elif event_type == EVENT_BULK_VERIFIED:
+    entries = extract_verification_entries(event)
+    if entries is None:
+        raise ValueError(f"Unsupported mapping verification event_type '{event_type}'")
+    is_bulk = event_type == EVENT_BULK_VERIFIED
+    if is_bulk:
         mappings = event.get("mappings")
         if not isinstance(mappings, list) or not mappings:
             raise ValueError("mapping.bulk_verified requires non-empty mappings")
-        # Partial application: apply rows whose order_item_id exists now,
-        # defer the whole event only if ANY row is missing (the deferred
-        # copy will retry all rows; already-applied rows are idempotent UPDATEs).
-        has_missing = False
-        prepared: List[tuple] = []
-        for m in mappings:
-            if not isinstance(m, dict):
-                continue
-            oid = str(m.get("order_item_id") or "").strip()
-            target = int(m.get("is_verified", 1))
-            if not oid:
-                continue
-            row = conn.execute(
-                "SELECT 1 FROM menu_item_variants WHERE order_item_id = ? LIMIT 1",
-                (oid,),
-            ).fetchone()
-            if not row:
-                has_missing = True
-                continue  # skip this row for now, but keep processing others
-            prepared.append((oid, target))
-        for oid, target in prepared:
-            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
-            if mid:
-                menu_item_ids.add(mid)
-        if has_missing:
-            deferred = True
-            _defer_event(conn, remote_event_id, event)
-    elif event_type == EVENT_REOPENED:
-        oid = str(event.get("order_item_id") or "").strip()
-        target = int(event.get("is_verified", 0))
-        if not oid:
-            raise ValueError("mapping.reopened requires order_item_id")
+    elif not entries:
+        raise ValueError(f"{event_type} requires order_item_id")
+
+    # Single events defer the whole event when their row is absent (or carries
+    # no menu_item_id); bulk events apply every present row and defer only to
+    # retry the missing ones. The deferred copy re-applies idempotently.
+    has_missing = False
+    for entry in entries:
+        oid = entry["order_item_id"]
+        target = entry["is_verified"]
         row = conn.execute(
             "SELECT 1 FROM menu_item_variants WHERE order_item_id = ? LIMIT 1",
             (oid,),
         ).fetchone()
         if not row:
-            deferred = True
-            _defer_event(conn, remote_event_id, event)
-        else:
-            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
-            if not mid:
-                deferred = True
-                _defer_event(conn, remote_event_id, event)
-            else:
-                menu_item_ids.add(mid)
-    else:
-        raise ValueError(f"Unsupported mapping verification event_type '{event_type}'")
+            has_missing = True
+            if not is_bulk:
+                break
+            continue
+        mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
+        if mid:
+            menu_item_ids.add(mid)
+        elif not is_bulk:
+            has_missing = True
+            break
+    if has_missing:
+        deferred = True
+        _defer_event(conn, remote_event_id, event)
 
     _record_remote_event(conn, remote_event_id, event_type, event, remote_cursor, occurred_at)
     _sync_menu_items_after_mapping_verified(conn, menu_item_ids)

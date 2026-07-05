@@ -420,6 +420,7 @@ def apply_assignments(
     server_seq: Optional[int],
     event: Dict[str, Any],
     detect_supersede: bool = True,
+    write_is_verified: bool = False,
 ) -> Dict[str, Any]:
     """
     Apply normalized assignments with the per-row seq guard (plan §2.3 step 2).
@@ -429,6 +430,14 @@ def apply_assignments(
     Rows that were pending_local, or whose last write came from one of our own
     events, and whose value actually changes, are reported in "superseded" —
     the caller turns those into user-visible notices when detect_supersede.
+
+    is_verified is seeded on a brand-new row but, by default, left untouched on
+    an existing one: on the incremental merge stream the verification stream is
+    the flag's sole owner (guarded by verification_seq), so rewriting it here
+    would let merge vs verification apply order diverge it across installs. The
+    snapshot bootstrap / force-reseed adopt the server's authoritative full
+    state — including the materialized flag — so they pass write_is_verified so
+    the flag lands on rows this install already had from POS ingest.
 
     Does not commit; the caller owns the per-event transaction.
     """
@@ -481,13 +490,14 @@ def apply_assignments(
             ensure_variant_exists(conn, variant_value, variant_names.get(variant_value))
 
         if row is not None:
+            # is_verified is deliberately NOT part of the change set on an
+            # existing row: the merge stream reassigns the mapping, but the
+            # verification stream is the sole owner of the flag (guarded by its
+            # own verification_seq). Rewriting is_verified here would let merge
+            # vs verification apply order diverge the flag across installs.
             changes = (
                 str(row["menu_item_id"]) != menu_item_id
                 or (variant_specified and row["variant_id"] != variant_value)
-                or (
-                    verify_specified
-                    and int(row["is_verified"] or 0) != int(verify_value or 0)
-                )
             )
             # A pending_local row is overwritten silently: server order will
             # judge, and if our own event lands later its echo re-asserts our
@@ -506,7 +516,7 @@ def apply_assignments(
             if variant_specified:
                 set_clauses.append("variant_id = ?")
                 params.append(variant_value)
-            if verify_specified:
+            if write_is_verified and verify_specified:
                 set_clauses.append("is_verified = ?")
                 params.append(int(verify_value or 0))
             set_clauses += ["assignment_seq = ?", "pending_local = 0", "updated_at = CURRENT_TIMESTAMP"]

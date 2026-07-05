@@ -9,6 +9,9 @@ import logging
 from typing import Any, Dict, Optional
 
 from src.core.menu_assignment_apply import apply_assignments, coerce_server_seq
+from src.core.menu_mapping_verification_sync import (
+    set_menu_mapping_verification_pull_cursor,
+)
 from src.core.menu_merge_sync import (
     _ensure_pull_tables,
     _run_assignment_batch_epilogue,
@@ -107,6 +110,7 @@ def bootstrap_menu_assignments_if_needed(
     rows_missing = 0
     watermark_seq: Optional[int] = None
     watermark_cursor: Optional[str] = None
+    verification_watermark_cursor: Optional[str] = None
     after: Optional[str] = None
 
     while True:
@@ -121,6 +125,7 @@ def bootstrap_menu_assignments_if_needed(
         if watermark_seq is None:
             watermark_seq = coerce_server_seq(page.get("watermark_seq"))
             watermark_cursor = page.get("watermark_cursor") or None
+            verification_watermark_cursor = page.get("verification_watermark_cursor") or None
 
         assignments = []
         for row in page["assignments"]:
@@ -142,6 +147,7 @@ def bootstrap_menu_assignments_if_needed(
                 watermark_seq,
                 event={},
                 detect_supersede=False,
+                write_is_verified=True,
             )
             rows_applied += result["rows_applied"]
             rows_missing += result["rows_missing"]
@@ -152,6 +158,12 @@ def bootstrap_menu_assignments_if_needed(
 
     if watermark_cursor:
         set_menu_merge_pull_cursor(conn, watermark_cursor)
+    # Seed the verification cursor to the snapshot's verification watermark: the
+    # materialized is_verified already reflects every verification event at or
+    # below it, so the tail only needs seq > watermark — no full replay of the
+    # verification stream on a fresh install.
+    if verification_watermark_cursor:
+        set_menu_mapping_verification_pull_cursor(conn, verification_watermark_cursor)
     _set_config_value(conn, MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY, "snapshot")
     conn.commit()
 
@@ -167,6 +179,7 @@ def bootstrap_menu_assignments_if_needed(
         "rows_missing": rows_missing,
         "watermark_seq": watermark_seq,
         "cursor_set": bool(watermark_cursor),
+        "verification_cursor_set": bool(verification_watermark_cursor),
     }
 
 
@@ -199,6 +212,7 @@ def force_reseed_menu_assignments(
     rows_stale = 0
     watermark_seq: Optional[int] = None
     watermark_cursor: Optional[str] = None
+    verification_watermark_cursor: Optional[str] = None
     after: Optional[str] = None
     touched_menu_item_ids: set = set()
 
@@ -211,6 +225,7 @@ def force_reseed_menu_assignments(
         if watermark_seq is None:
             watermark_seq = coerce_server_seq(page.get("watermark_seq"))
             watermark_cursor = page.get("watermark_cursor") or None
+            verification_watermark_cursor = page.get("verification_watermark_cursor") or None
 
         assignments = []
         for row in page["assignments"]:
@@ -232,6 +247,7 @@ def force_reseed_menu_assignments(
                 watermark_seq,
                 event={},
                 detect_supersede=False,
+                write_is_verified=True,
             )
             rows_applied += result["rows_applied"]
             rows_missing += result["rows_missing"]
@@ -244,6 +260,8 @@ def force_reseed_menu_assignments(
 
     if watermark_cursor:
         set_menu_merge_pull_cursor(conn, watermark_cursor)
+    if verification_watermark_cursor:
+        set_menu_mapping_verification_pull_cursor(conn, verification_watermark_cursor)
     _set_config_value(conn, MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY, "force-reseed")
     conn.commit()
 
@@ -267,4 +285,5 @@ def force_reseed_menu_assignments(
         "rows_missing": rows_missing,
         "watermark_seq": watermark_seq,
         "cursor_set": bool(watermark_cursor),
+        "verification_cursor_set": bool(verification_watermark_cursor),
     }

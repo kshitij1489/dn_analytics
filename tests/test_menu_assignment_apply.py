@@ -18,12 +18,18 @@ from src.core.menu_assignment_apply import (
     extract_assignments,
     list_supersede_notices,
 )
+from src.core.menu_mapping_verification_sync_events import extract_verification_entries
 from src.core.menu_merge_sync import pull_and_apply_menu_merge_events
 from src.core.menu_merge_sync_events import ensure_menu_merge_sync_tables
 from utils import menu_utils
 
 
 FIXTURES_PATH = Path(__file__).resolve().parent.parent / "contracts" / "menu_merge_event_fixtures.json"
+VERIFICATION_FIXTURES_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "contracts"
+    / "menu_mapping_verification_event_fixtures.json"
+)
 
 BASE_SCHEMA = """
     CREATE TABLE orders (
@@ -247,6 +253,16 @@ class MenuAssignmentApplyTests(unittest.TestCase):
                     fixture["expected_assignments"],
                 )
 
+    def test_verification_fixture_extraction_parity(self) -> None:
+        fixtures = json.loads(VERIFICATION_FIXTURES_PATH.read_text())["fixtures"]
+        self.assertGreaterEqual(len(fixtures), 10)
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture["name"]):
+                self.assertEqual(
+                    extract_verification_entries(fixture["event"]),
+                    fixture["expected_entries"],
+                )
+
     # --- conflict matrix ----------------------------------------------------
 
     def test_conflicting_resolutions_converge_to_higher_seq_with_loser_notice(self) -> None:
@@ -404,7 +420,9 @@ class MenuAssignmentApplyTests(unittest.TestCase):
             event_new,
         )
         self.assertEqual(result["rows_applied"], 1)
-        self.assertEqual(mapping_state(self.install1, "1"), ("item_b", "variant_x", 1))
+        # Existing row: the merge stream reassigns the mapping but leaves the
+        # is_verified flag to the verification stream, so it keeps its prior 0.
+        self.assertEqual(mapping_state(self.install1, "1"), ("item_b", "variant_x", 0))
 
         event_old = dict(event_new, remote_event_id="ev-old")
         result = apply_assignments(
@@ -415,7 +433,44 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         )
         self.assertEqual(result["rows_applied"], 0)
         self.assertEqual(len(result["stale_rows"]), 1)
-        self.assertEqual(mapping_state(self.install1, "1"), ("item_b", "variant_x", 1))
+        self.assertEqual(mapping_state(self.install1, "1"), ("item_b", "variant_x", 0))
+
+    # --- is_verified single-owner convergence (I5) --------------------------
+
+    def test_is_verified_converges_regardless_of_merge_verification_order(self) -> None:
+        # The reproduced divergence: a merge event carrying is_verified and a
+        # later reopen, applied in opposite relative orders on two installs.
+        # Because the merge stream reassigns the mapping but never rewrites
+        # is_verified on an existing row, both installs converge to the
+        # verification stream's latest word (reopen -> 0).
+        from src.core.menu_mapping_verification_sync import (
+            _apply_verification_by_order_item_id,
+        )
+
+        merge_event = {
+            "remote_event_id": "ev-resolution",
+            "event_type": "menu_merge.applied",
+            "source_item": {"menu_item_id": "item_a", "name": "Iced Coffee", "type": "Beverage"},
+            "target_item": {"menu_item_id": "item_b", "name": "Cold Coffee", "type": "Beverage"},
+            "merge_payload": {"kind": "resolution_variant_v1"},
+        }
+        # order item "2" starts mapped to item_b, is_verified=1 on both installs.
+        merge_assignment = [
+            {"order_item_id": "2", "menu_item_id": "item_b", "variant_id": "variant_x", "is_verified": 1}
+        ]
+
+        # install1: merge (assignment_seq 10) THEN reopen (verification_seq 5).
+        apply_assignments(self.install1, merge_assignment, 10, merge_event, detect_supersede=False)
+        _apply_verification_by_order_item_id(self.install1, "2", 0, server_seq=5)
+        self.install1.commit()
+
+        # install2: reopen (verification_seq 5) THEN merge (assignment_seq 10).
+        _apply_verification_by_order_item_id(self.install2, "2", 0, server_seq=5)
+        apply_assignments(self.install2, merge_assignment, 10, merge_event, detect_supersede=False)
+        self.install2.commit()
+
+        self.assertEqual(mapping_state(self.install1, "2"), ("item_b", "variant_x", 0))
+        self.assertEqual(mapping_state(self.install2, "2"), ("item_b", "variant_x", 0))
 
     # --- v1 legacy events on the wire ----------------------------------------
 

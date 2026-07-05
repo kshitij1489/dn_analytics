@@ -5,6 +5,7 @@
     "The variant_id key is OMITTED when the event does not specify a variant (v1 basic merges: variant stays whatever it currently is).",
     "variant_id null means the SQL NULL variant (the __NULL_VARIANT__ sentinel normalizes to null).",
     "The is_verified key is OMITTED when the event does not specify verification state.",
+    "is_verified in an extracted assignment is a CREATE-ONLY SEED on the merge stream: the applier (client apply_assignments / server _guarded_assignment_write) writes it only when materializing a previously nonexistent assignment row, and never on an UPDATE to an existing row. The mapping-verification stream is the sole owner of the flag on existing rows (plan I5). These fixtures pin EXTRACTION parity only: both extractors still carry is_verified identically, so expected_assignments is unchanged by that apply-layer rule.",
     "expected_assignments null means the event is not derivable and the applier must fall back / reject."
   ],
   "fixtures": [

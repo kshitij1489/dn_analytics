@@ -171,11 +171,14 @@ class MenuMergeSyncTests(unittest.TestCase):
         self.assertEqual(undo_payload["reverts_remote_event_id"], applied_payload["remote_event_id"])
 
     @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_remap_rides_merge_stream_and_applies_on_peer(self, _mock_export) -> None:
-        # A per-order-item remap must emit a merge-stream event whose
-        # assignments carry the new menu/variant (not a flag-only
-        # verification event), so peers receive the full mapping and the
-        # echo of our own event clears pending_local.
+    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
+    def test_remap_rides_merge_stream_and_applies_on_peer(self, _mock_models, _mock_export) -> None:
+        # A per-order-item remap emits a merge-stream event whose assignments
+        # carry the new menu/variant, so peers receive the full mapping and the
+        # echo of our own event clears pending_local. The is_verified flag rides
+        # the SEPARATE verification stream (its sole owner) via a companion
+        # verification event — merge apply only reassigns the mapping and seeds
+        # the flag on brand-new rows, never on an existing one.
         result = menu_utils.remap_order_item_cluster(
             self.conn, "1", "item_target", "variant_1_piece"
         )
@@ -201,24 +204,28 @@ class MenuMergeSyncTests(unittest.TestCase):
             ],
         )
 
-        # No verification-stream event was written for the remap.
-        verification_events = self.conn.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name = 'menu_mapping_verification_sync_events'
-            """
-        ).fetchone()[0]
-        if verification_events:
-            self.assertEqual(
-                self.conn.execute(
-                    "SELECT COUNT(*) FROM menu_mapping_verification_sync_events"
-                ).fetchone()[0],
-                0,
-            )
+        # A companion verification event carries the is_verified=1 decision on
+        # the verification stream (the flag's single owner).
+        verification_payloads = [
+            json.loads(row["payload"])
+            for row in self.conn.execute(
+                "SELECT payload FROM menu_mapping_verification_sync_events"
+            ).fetchall()
+        ]
+        self.assertEqual(len(verification_payloads), 1)
+        self.assertEqual(verification_payloads[0]["order_item_id"], "1")
+        self.assertEqual(verification_payloads[0]["menu_item_id"], "item_target")
+        self.assertEqual(int(verification_payloads[0]["is_verified"]), 1)
 
-        # Apply the event on a peer: the mapping (not just the flag) lands.
+        # Apply the event on a peer: the mapping (menu_item_id / variant_id)
+        # lands via the merge stream, but the flag does NOT — the peer's row
+        # keeps whatever is_verified the verification stream last gave it.
         peer = self._create_db()
         try:
+            peer.execute(
+                "UPDATE menu_item_variants SET is_verified = 0 WHERE order_item_id = '1'"
+            )
+            peer.commit()
             remote_event = dict(payload)
             remote_event["server_seq"] = 41
             mock_response = Mock()
@@ -240,7 +247,8 @@ class MenuMergeSyncTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(peer_row["menu_item_id"], "item_target")
             self.assertEqual(peer_row["variant_id"], "variant_1_piece")
-            self.assertEqual(int(peer_row["is_verified"]), 1)
+            # Merge apply left the flag untouched on the existing row.
+            self.assertEqual(int(peer_row["is_verified"]), 0)
 
             peer_history = peer.execute(
                 "SELECT origin FROM merge_history"
@@ -270,6 +278,60 @@ class MenuMergeSyncTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(own_row["pending_local"] or 0), 0)
         self.assertEqual(int(own_row["assignment_seq"]), 41)
+
+    @patch("utils.menu_utils.export_to_backups", return_value=True)
+    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
+    def test_remap_undo_restores_order_items_after_echo(self, _mock_models, _mock_export) -> None:
+        # Regression: the remap must relink order_items / order_item_addons
+        # locally and record their prior rows, so that after the cloud echo has
+        # moved them to the target, an undo restores all three tables. Before
+        # the fix, undo reverted only menu_item_variants and left order_items
+        # stranded on the target.
+        result = menu_utils.remap_order_item_cluster(
+            self.conn, "1", "item_target", "variant_1_piece"
+        )
+        self.assertEqual(result["status"], "success")
+        merge_id = result["merge_id"]
+
+        # Local relink is immediate (not deferred to the echo).
+        order_row = self.conn.execute(
+            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
+        ).fetchone()
+        self.assertEqual(order_row["menu_item_id"], "item_target")
+        self.assertEqual(order_row["variant_id"], "variant_1_piece")
+
+        # Echo our own event back so the merge stream also lands on the target.
+        payload = json.loads(
+            self.conn.execute(
+                "SELECT payload FROM menu_merge_sync_events WHERE merge_id = ?",
+                (merge_id,),
+            ).fetchone()["payload"]
+        )
+        echo_event = dict(payload, server_seq=41)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"events": [echo_event], "next_cursor": "cursor-echo"}
+        with patch("requests.get", return_value=mock_response):
+            pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        # Undo: every table returns to the pre-remap source mapping.
+        undo = menu_utils.undo_merge(self.conn, merge_id)
+        self.assertEqual(undo["status"], "success", undo.get("message"))
+
+        mapping_row = self.conn.execute(
+            "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id = '1'"
+        ).fetchone()
+        self.assertEqual(mapping_row["menu_item_id"], "item_source")
+        self.assertIsNone(mapping_row["variant_id"])
+
+        order_row = self.conn.execute(
+            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
+        ).fetchone()
+        self.assertEqual(order_row["menu_item_id"], "item_source")
+        self.assertIsNone(order_row["variant_id"])
 
     def test_backfill_skips_remote_origin_history_rows(self) -> None:
         from src.core.menu_merge_sync_events import backfill_menu_merge_sync_events

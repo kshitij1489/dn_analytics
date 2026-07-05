@@ -1,0 +1,167 @@
+{
+  "description": "Shared mapping-verification event fixtures pinning is_verified extraction parity between the desktop analytics client (src/core/menu_mapping_verification_sync_events.extract_verification_entries) and the Dachnona server (desktop_analytics_app_sync/services/assignment_state.extract_verification_entries). Source of truth lives in the analytics repo; the copy in db.dachnona/contracts/ must stay identical. is_verified is verification-stream-owned (plan I5); these events are the ONLY authority for the flag on existing rows.",
+  "notes": [
+    "expected_entries is the ordered list of {order_item_id, is_verified} rows the event targets; is_verified is normalized to 0/1.",
+    "Default is_verified is 1 for mapping.verified and mapping.bulk_verified rows, and 0 for mapping.reopened.",
+    "Entries with a blank order_item_id, or a non-dict bulk mapping, are dropped.",
+    "expected_entries [] means the event is a verification event but derives no rows (e.g. empty mappings, or a single event with no order_item_id); the applier updates nothing.",
+    "expected_entries null means the payload is NOT a verification event (unknown/blank event_type or non-object); the applier returns applied=0."
+  ],
+  "fixtures": [
+    {
+      "name": "verified_single_explicit_flag",
+      "event": {
+        "remote_event_id": "vfx-verified-1",
+        "schema_version": 1,
+        "event_type": "mapping.verified",
+        "occurred_at": "2026-06-01 10:00:00",
+        "order_item_id": "101",
+        "menu_item_id": "item_a",
+        "variant_id": "variant_x",
+        "is_verified": 1
+      },
+      "expected_entries": [
+        {"order_item_id": "101", "is_verified": 1}
+      ]
+    },
+    {
+      "name": "verified_single_defaults_to_1",
+      "event": {
+        "remote_event_id": "vfx-verified-default",
+        "schema_version": 1,
+        "event_type": "mapping.verified",
+        "occurred_at": "2026-06-01 10:05:00",
+        "order_item_id": "102",
+        "menu_item_id": "item_a",
+        "variant_id": null
+      },
+      "expected_entries": [
+        {"order_item_id": "102", "is_verified": 1}
+      ]
+    },
+    {
+      "name": "verified_single_flag_zero",
+      "event": {
+        "remote_event_id": "vfx-verified-zero",
+        "schema_version": 1,
+        "event_type": "mapping.verified",
+        "occurred_at": "2026-06-01 10:10:00",
+        "order_item_id": "103",
+        "is_verified": 0
+      },
+      "expected_entries": [
+        {"order_item_id": "103", "is_verified": 0}
+      ]
+    },
+    {
+      "name": "verified_single_missing_order_item_id",
+      "event": {
+        "remote_event_id": "vfx-verified-no-oid",
+        "schema_version": 1,
+        "event_type": "mapping.verified",
+        "occurred_at": "2026-06-01 10:15:00",
+        "order_item_id": "",
+        "is_verified": 1
+      },
+      "expected_entries": []
+    },
+    {
+      "name": "reopened_defaults_to_0",
+      "event": {
+        "remote_event_id": "vfx-reopened-default",
+        "schema_version": 1,
+        "event_type": "mapping.reopened",
+        "occurred_at": "2026-06-01 11:00:00",
+        "order_item_id": "201"
+      },
+      "expected_entries": [
+        {"order_item_id": "201", "is_verified": 0}
+      ]
+    },
+    {
+      "name": "reopened_explicit_flag_one",
+      "event": {
+        "remote_event_id": "vfx-reopened-one",
+        "schema_version": 1,
+        "event_type": "mapping.reopened",
+        "occurred_at": "2026-06-01 11:05:00",
+        "order_item_id": "202",
+        "is_verified": 1
+      },
+      "expected_entries": [
+        {"order_item_id": "202", "is_verified": 1}
+      ]
+    },
+    {
+      "name": "bulk_verified_multiple",
+      "event": {
+        "remote_event_id": "vfx-bulk-1",
+        "schema_version": 1,
+        "event_type": "mapping.bulk_verified",
+        "occurred_at": "2026-06-01 12:00:00",
+        "mappings": [
+          {"order_item_id": "301", "menu_item_id": "item_b", "variant_id": null, "is_verified": 1},
+          {"order_item_id": "302", "menu_item_id": "item_b", "variant_id": "variant_y", "is_verified": 0},
+          {"order_item_id": "303", "menu_item_id": "item_b", "variant_id": null}
+        ]
+      },
+      "expected_entries": [
+        {"order_item_id": "301", "is_verified": 1},
+        {"order_item_id": "302", "is_verified": 0},
+        {"order_item_id": "303", "is_verified": 1}
+      ]
+    },
+    {
+      "name": "bulk_verified_drops_malformed_rows",
+      "event": {
+        "remote_event_id": "vfx-bulk-malformed",
+        "schema_version": 1,
+        "event_type": "mapping.bulk_verified",
+        "occurred_at": "2026-06-01 12:05:00",
+        "mappings": [
+          "not-a-dict",
+          {"order_item_id": "", "is_verified": 1},
+          {"menu_item_id": "item_b", "is_verified": 1},
+          {"order_item_id": "401", "is_verified": 1}
+        ]
+      },
+      "expected_entries": [
+        {"order_item_id": "401", "is_verified": 1}
+      ]
+    },
+    {
+      "name": "bulk_verified_empty_mappings",
+      "event": {
+        "remote_event_id": "vfx-bulk-empty",
+        "schema_version": 1,
+        "event_type": "mapping.bulk_verified",
+        "occurred_at": "2026-06-01 12:10:00",
+        "mappings": []
+      },
+      "expected_entries": []
+    },
+    {
+      "name": "unknown_event_type_not_verification",
+      "event": {
+        "remote_event_id": "vfx-unknown",
+        "schema_version": 1,
+        "event_type": "mapping.mystery_v9",
+        "occurred_at": "2026-06-01 13:00:00",
+        "order_item_id": "501",
+        "is_verified": 1
+      },
+      "expected_entries": null
+    },
+    {
+      "name": "missing_event_type_not_verification",
+      "event": {
+        "remote_event_id": "vfx-no-type",
+        "schema_version": 1,
+        "occurred_at": "2026-06-01 13:05:00",
+        "order_item_id": "502",
+        "is_verified": 1
+      },
+      "expected_entries": null
+    }
+  ]
+}

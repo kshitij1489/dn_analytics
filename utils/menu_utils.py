@@ -949,6 +949,59 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
                 assignment_seq = NULL
         """, (order_item_id, new_menu_item_id, new_variant_id))
 
+        # 1b. Relink the order_items / order_item_addons rows for this order item
+        # locally, capturing their prior values first. The cloud echo would
+        # eventually move these too, but doing it here keeps the three tables
+        # consistent immediately AND lets undo restore them: undo replays
+        # history["order_items"] / ["order_item_addons"], so without these rows
+        # an undo would revert menu_item_variants while leaving order_items and
+        # order_item_addons pointing at the target.
+        cursor.execute(
+            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = ?",
+            (str(order_item_id),),
+        )
+        order_items_history = [
+            {
+                "order_item_id": str(order_item_id),
+                "old_menu_item_id": row[0],
+                "old_variant_id": row[1],
+                "new_menu_item_id": str(new_menu_item_id),
+                "new_variant_id": new_variant_id,
+            }
+            for row in cursor.fetchall()
+        ]
+        cursor.execute(
+            "SELECT order_item_addon_id, menu_item_id, variant_id FROM order_item_addons WHERE order_item_id = ?",
+            (str(order_item_id),),
+        )
+        order_item_addons_history = [
+            {
+                "order_item_addon_id": row[0],
+                "old_menu_item_id": row[1],
+                "old_variant_id": row[2],
+                "new_menu_item_id": str(new_menu_item_id),
+                "new_variant_id": new_variant_id,
+            }
+            for row in cursor.fetchall()
+        ]
+
+        cursor.execute(
+            """
+            UPDATE order_items
+            SET menu_item_id = ?, variant_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE order_item_id = ?
+            """,
+            (str(new_menu_item_id), new_variant_id, str(order_item_id)),
+        )
+        cursor.execute(
+            """
+            UPDATE order_item_addons
+            SET menu_item_id = ?, variant_id = ?
+            WHERE order_item_id = ?
+            """,
+            (str(new_menu_item_id), new_variant_id, str(order_item_id)),
+        )
+
         if prev_menu_item_id and prev_menu_item_id != str(new_menu_item_id):
             ensure_menu_item_has_variant_mapping(conn, prev_menu_item_id, cursor=cursor)
         ensure_menu_item_has_variant_mapping(conn, new_menu_item_id, cursor=cursor)
@@ -983,6 +1036,8 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
                     "new_is_verified": 1,
                 }
             ],
+            "order_items": order_items_history,
+            "order_item_addons": order_item_addons_history,
         }
         merge_id = _insert_merge_history(
             cursor,
@@ -996,6 +1051,27 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
         from src.core.menu_merge_sync_events import record_menu_merge_applied_event
 
         record_menu_merge_applied_event(conn, merge_id)
+
+        # The mapping (menu_item_id / variant_id) rides the merge stream, but
+        # the verification flag rides the verification stream, its sole owner.
+        # Merge apply seeds is_verified only when creating a row, never on an
+        # existing one, so emit a verification event to carry is_verified=1 to
+        # peers whose assignment row already exists.
+        from src.core.menu_mapping_verification_sync_events import (
+            record_menu_mapping_verification_events_chunked,
+        )
+
+        record_menu_mapping_verification_events_chunked(
+            conn,
+            [
+                {
+                    "order_item_id": str(order_item_id),
+                    "menu_item_id": str(new_menu_item_id),
+                    "variant_id": new_variant_id,
+                    "is_verified": 1,
+                }
+            ],
+        )
 
         conn.commit()
 
@@ -1713,6 +1789,35 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                 history_dict,
                 occurred_at=datetime.now(timezone.utc).isoformat(),
             )
+
+        # Undo of a flag-deciding operation (resolution / remap) must restore
+        # is_verified on peers too. That flag is owned by the verification
+        # stream — the undone merge event only reasserts the mapping, and merge
+        # apply never rewrites is_verified on an existing row — so emit a
+        # verification event carrying each row's restored (old) flag.
+        if emit_sync_event and history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
+            from src.core.menu_mapping_verification_sync_events import (
+                record_menu_mapping_verification_events_chunked,
+            )
+
+            undo_verify_rows = []
+            for mapping_row in (history_payload.get("mapping_rows", []) if isinstance(history_payload, dict) else []):
+                if not isinstance(mapping_row, dict):
+                    continue
+                oid = str(mapping_row.get("order_item_id") or "").strip()
+                old_menu_item_id = str(mapping_row.get("old_menu_item_id") or source_id or "").strip()
+                if not oid or not old_menu_item_id:
+                    continue
+                undo_verify_rows.append(
+                    {
+                        "order_item_id": oid,
+                        "menu_item_id": old_menu_item_id,
+                        "variant_id": mapping_row.get("old_variant_id"),
+                        "is_verified": int(mapping_row.get("old_is_verified", 0) or 0),
+                    }
+                )
+            if undo_verify_rows:
+                record_menu_mapping_verification_events_chunked(conn, undo_verify_rows)
 
         ensure_menu_item_has_variant_mapping(conn, source_id, cursor=cursor)
         ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)

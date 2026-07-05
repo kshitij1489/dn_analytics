@@ -1,8 +1,8 @@
 # Dachnona Cloud Sync API Contract
 
 **Audience:** Dachnona backend engineers / Codex agent implementing the cloud-side sync work  
-**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. **Section 16** describes **additional** server work required for [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification replay + richer catalog snapshots).  
-**Scope:** Original document: merge + bootstrap + attribution sync. Additive extensions: mapping verification and/or versioned catalog payloads as specified in Section 16.
+**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. The **single-source-of-truth** work first sketched in Section 16 has since been **implemented** — but via the assignment-applier + materialized-ground-truth design in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md), which **supersedes** the Section 16 options. The authoritative, as-built wire contract — and the **freeze target for handoff** — is **Section 17**. Sections 5–15 remain accurate for the baseline; Section 16 is retained only as historical design context.  
+**Scope:** merge + bootstrap + attribution sync (Sections 5–15), plus the as-built assignment/verification sync in Section 17. Section 16 is superseded — do not implement against it.
 
 ## 1. Purpose
 
@@ -18,7 +18,7 @@ The analytics client already implements:
 
 **Baseline (Section 5):** The endpoints and persistence described in **Section 5** and the detailed sections through **Section 15** are **already implemented** on the Dachnona central server (ingest + cursor pull for customer/menu merges, menu-bootstrap latest, attribution persistence). Treat that work as **complete** for collaboration sync.
 
-**Extensions (Section 16):** Further **Dachnona** implementation is required if the product adopts the **single source of truth** plan (verification events and/or richer bootstrap snapshots). The desktop client changes described in [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) **depend** on those server extensions.
+**Single source of truth (now Section 17, implemented):** The verification-replay and richer-snapshot needs are **built and live** on the central server, using the assignment-applier design in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md). See **Section 17** for the as-built contract (server-ordered `server_seq`, per-event accept/reject ingest, the mapping-verification stream, the materialized `order_item_assignments` ground truth, and the assignment snapshot endpoint). **Section 16 below is superseded** and kept only for history.
 
 This document is intentionally **additive**, not a rewrite request. The backend Codex agent should:
 
@@ -925,12 +925,16 @@ The following **baseline** items are **done** on the Dachnona central server (al
 - Dachnona backend menu merge ingest endpoint  
 - Dachnona backend menu merge delta endpoint  
 
-### 14.2 Single source of truth extensions (open — Section 16)
+### 14.2 Assignment / verification sync (implemented — Section 17)
 
-Track implementation of **Section 16** separately (and update [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) phases when shipped):
+Delivered on the central server via the [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) design (supersedes the Section 16 options). Full wire contract in **Section 17**:
 
-- [ ] Mapping verification ingest + pull (or agreed alternative)  
-- [ ] Optional: versioned / extended menu bootstrap or catalog snapshot API  
+- [x] Server-ordered replay: `(ingested_at, id)`, v2 cursors, `server_seq` / `server_ingested_at` injected into every delta event  
+- [x] Per-event accept/reject ingest (`accepted` / `rejected`; one bad event never 400s the batch)  
+- [x] Menu merge events carry an explicit `assignments` list (schema v2); v1 derivation pinned by `contracts/menu_merge_event_fixtures.json`  
+- [x] Mapping verification ingest + pull; the verification stream is the **sole owner** of `is_verified` (merge only seeds it on insert); shape pinned by `contracts/menu_mapping_verification_event_fixtures.json`  
+- [x] Materialized `order_item_assignments` ground truth + `rebuild_order_item_assignments` + `import_menu_assignment_baseline`  
+- [x] `GET /menu-assignments/snapshot` for fresh-install seeding (both merge and verification watermarks + cursors)  
 - [ ] Optional: server-side compaction / retention policy for high-volume verification events  
 
 ## 15. Final Compatibility Summary
@@ -944,11 +948,15 @@ For the current analytics client to work without further changes, the backend mu
 - menu bootstrap latest returns `id_maps` and `cluster_state` either at top-level or under `snapshot`
 - merge pull responses preserve event payloads, including attribution and undo links
 
+The current client also depends on the **Section 17** surfaces (server_seq ordering, the verification stream, and the assignment snapshot). Those are the freeze target; the bullets above are the older baseline floor.
+
 Anything beyond that may follow existing Dachnona backend conventions.
 
 ---
 
-## 16. Extensions for menu single source of truth (Dachnona — to implement)
+## 16. Extensions for menu single source of truth (SUPERSEDED — historical)
+
+> **Superseded by Section 17.** This section captured three candidate designs (verification stream / richer snapshot / hosted reference DB) before the approach was settled. The product shipped **Option A** (the mapping-verification event stream) **plus** a materialized `order_item_assignments` ground truth and an assignment snapshot endpoint — see [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) and **Section 17** for what is actually built and frozen. Do not implement against Section 16; it is retained for design history only.
 
 **Goal:** Allow a **second install** (or a device after **reset orders + sync**) to **converge** on the same **verified catalog + mapping** state as a **reference** desktop, as described in [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md).
 
@@ -1013,3 +1021,105 @@ The desktop **Option A** client work for **Section 16.1** is implemented in this
 - Do **not** require the desktop to send new **mandatory** auth headers beyond existing Bearer usage (**Section 4.1**).  
 - Do **not** strip raw payloads for verification events; replay fidelity matters.  
 - Prefer **additive** tables/columns over breaking existing merge/bootstrap tables.
+
+---
+
+## 17. As-built assignment & verification sync (implemented — freeze target)
+
+This section is the **authoritative, as-built wire contract** for the collaboration-sync redesign in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md). It is what the central server runs today and what the desktop client depends on. **Freeze this before handoff.** It reuses **Section 4** (auth, tenant scope, idempotency, raw-payload preservation) unchanged.
+
+### 17.1 Server ordering, cursors, and per-event ingest
+
+Applies to all three replay streams (customer merges, menu merges, mapping verifications) — they share one delta/ingest engine.
+
+- **Replay order is server ingestion order only: `(ingested_at, id)`.** Client `occurred_at` is display metadata and is **not** used for ordering (an offline install's backlog must still reach peers whose cursors have advanced).
+- **`server_seq` = the event row's autoincrement `id`.** Every delta event is returned with two injected keys: `"server_seq"` and `"server_ingested_at"` (ISO-8601). These are additive; the client keys conflict resolution on `server_seq`.
+- **Cursors are opaque v2 tokens**: base64url of `{"v":2,"ingested_at":<iso>,"id":<int>}`. A v1 (or otherwise unparseable) cursor **must** be rejected with HTTP 400 and a distinct message (the client resets its cursor and re-pulls). Each stream has its **own** cursor and its **own** id space — never compare a `server_seq` from one stream against a row guarded by another.
+- **Ingest is per-event, not all-or-nothing.** `POST .../ingest` validates and persists each event independently and returns:
+
+  ```json
+  {"status":"ok","schema_version":2,"ingested_count":N,"duplicate_count":M,
+   "accepted":["<remote_event_id>", ...],
+   "rejected":[{"remote_event_id":"...","error":"..."}]}
+  ```
+
+  A malformed event lands in `rejected`; its batch siblings still ingest. Dedupe is by `(scope_key, remote_event_id)`.
+
+### 17.2 Menu merge events carry explicit `assignments`
+
+Menu merge events (schema v2) include an explicit assignment list so any peer applies them without needing the source cluster to still exist:
+
+```json
+"merge_payload": {
+  "kind": "resolution_variant_v1",
+  "assignments": [
+    {"order_item_id": "…", "menu_item_id": "<target>", "variant_id": "<id-or-null>", "is_verified": 1}
+  ]
+}
+```
+
+- A normalized assignment always carries `order_item_id` + `menu_item_id`; `variant_id` / `is_verified` are **omitted** when the event does not specify them; `variant_id: null` is the SQL NULL variant (`__NULL_VARIANT__` normalizes to null).
+- Legacy v1 events (no `assignments`) are derived from `history_payload` (`mapping_rows`, or `affected_order_item_ids` + target).
+- **Extraction parity is pinned by `contracts/menu_merge_event_fixtures.json`, which must be byte-identical in both repos.** Client extractor: `src/core/menu_assignment_apply.extract_assignments`; server extractor: `services/assignment_state.extract_assignments`. Both are tested against the fixtures.
+
+### 17.3 Materialized ground truth (`order_item_assignments`)
+
+The server maintains a per-scope, per-`order_item_id` row `→ (menu_item_id, variant_id, is_verified)` as events ingest:
+
+- **Merge apply** (`apply_menu_merge_event_to_assignments`) upserts guarded by `last_seq < server_seq` (a conditional UPDATE, else INSERT). It writes `menu_item_id` / `variant_id` on every apply, but writes **`is_verified` only on INSERT** (a create-only seed).
+- The table is the queryable ground truth and the source for the snapshot endpoint. `rebuild_order_item_assignments` replays the whole log (all merges, then all verifications) to reconstruct it identically; `import_menu_assignment_baseline` publishes a golden install's full state as authoritative v2 events.
+
+### 17.4 `is_verified` has a single owning stream
+
+**Invariant (plan I5):** the mapping-verification stream is the **sole** authority for `is_verified` on an existing row. The merge stream may only *seed* it when it first creates a row; it must never rewrite the flag on UPDATE. This removes any cross-stream ordering hazard — the flag can no longer diverge on merge-vs-verification interleaving.
+
+Consequences the server enforces / relies on:
+
+- The verification apply (`apply_menu_mapping_verification_event_to_assignments`) is guarded by **`last_verification_seq`** (the verification table's own id space), **never** by `last_seq`.
+- Every flag-changing desktop operation — resolve, remap, verify/reopen, bulk actions, and undo — emits a verification event. `import_menu_assignment_baseline` therefore emits **both** merge events (mapping) **and** verification events (the golden flag), so a cutover converges `is_verified` on already-materialized rows.
+- Snapshot bootstrap / force-reseed adopt the flag from the full-state snapshot; that is the one non-verification path that sets the flag, and it reads the server's already-materialized value.
+
+### 17.5 Mapping verification stream
+
+- **Ingest**: `POST /desktop-analytics-sync/menu-mapping-verifications/ingest` — same envelope and per-event accept/reject as §17.1.
+- **Pull**: `GET /desktop-analytics-sync/menu-mapping-verifications` — `cursor`, `limit`; returns `{"events":[...],"next_cursor":...}` with `server_seq` injected (§17.1).
+- **Event shapes** (top-level fields, `schema_version: 1`):
+  - `mapping.verified` — `order_item_id`, `menu_item_id`, `variant_id`, `is_verified` (default 1).
+  - `mapping.reopened` — `order_item_id`, `is_verified` (default 0).
+  - `mapping.bulk_verified` — `mappings: [{order_item_id, menu_item_id, variant_id, is_verified}, ...]` (each default 1).
+- The normalization from an event to its `(order_item_id, is_verified)` rows is **pinned by `contracts/menu_mapping_verification_event_fixtures.json`** (byte-identical in both repos). Client helper: `src/core/menu_mapping_verification_sync_events.extract_verification_entries`; server helper: `services/assignment_state.extract_verification_entries`. Verification apply is flag-only — it never rewrites `menu_item_id` / `variant_id`.
+
+### 17.6 Assignment snapshot endpoint (fresh-install seeding)
+
+`GET /desktop-analytics-sync/menu-assignments/snapshot` — auth per §4.1.
+
+- **Query params**: `limit` (bounded), `after` = last `order_item_id` of the previous page.
+- **Response**:
+
+  ```json
+  {
+    "assignments": [
+      {"order_item_id":"…","menu_item_id":"…","variant_id":null,
+       "is_verified":1,"last_seq":123,"last_verification_seq":45,"last_event_id":"…"}
+    ],
+    "watermark_seq": 123, "watermark_cursor": "<v2 merge cursor>",
+    "verification_watermark_seq": 45, "verification_watermark_cursor": "<v2 verification cursor>",
+    "next_page": "<order_item_id or null>"
+  }
+  ```
+
+- **Two independent watermarks, one per stream.** The client seeds its **merge** cursor from `watermark_cursor` and its **verification** cursor from `verification_watermark_cursor`, then tails each with `seq > watermark`. Because the streams have separate id spaces, both are required — omitting the verification watermark forces fresh installs to replay the entire verification stream.
+- **Both watermarks are captured *before* the page is read**, so a cursor can never sit ahead of a row's materialized state; anything newer is re-delivered by the tail and re-applied idempotently under the per-row seq guard.
+
+### 17.7 Freeze checklist for the central server team
+
+Frozen surfaces the client relies on (changing any is a breaking change):
+
+1. `(ingested_at, id)` replay order; v2 cursors; v1 rejected with 400.
+2. `server_seq` + `server_ingested_at` on every delta event.
+3. Per-event `accepted` / `rejected` ingest result.
+4. `order_item_assignments` upsert rules: merge guarded by `last_seq`, `is_verified` seeded on INSERT only; verification guarded by `last_verification_seq`, flag-only.
+5. Snapshot response fields incl. **both** watermarks + cursors and per-row `last_seq` / `last_verification_seq`.
+6. The two contract fixtures, kept byte-identical across repos.
+
+Additive changes (new response keys, new event kinds behind new `kind` values, new nullable columns) remain safe under §4.6.

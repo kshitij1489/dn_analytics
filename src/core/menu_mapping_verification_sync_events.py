@@ -15,6 +15,59 @@ EVENT_BULK_VERIFIED = "mapping.bulk_verified"
 EVENT_REOPENED = "mapping.reopened"
 
 
+VERIFICATION_EVENT_TYPES = (EVENT_VERIFIED, EVENT_BULK_VERIFIED, EVENT_REOPENED)
+
+
+def extract_verification_entries(event: Any) -> Optional[List[Dict[str, Any]]]:
+    """
+    Normalize a mapping-verification event to the (order_item_id, is_verified)
+    rows it targets — the single derivation shared by the emitter, both client
+    apply paths (pull + deferred retry), and the server, pinned by
+    contracts/menu_mapping_verification_event_fixtures.json so the wire shape
+    cannot drift across repos.
+
+    Returns None when the event is not a verification event (unknown/blank
+    event_type), else the list of {"order_item_id", "is_verified"} rows (0/1),
+    dropping entries with a blank order_item_id or an unparseable is_verified.
+    The default flag is 0 for mapping.reopened and 1 for verified / bulk. The
+    list is empty when nothing is derivable (e.g. a single event with no
+    order_item_id, or a bulk event with no usable mappings); callers decide
+    whether an empty result is an error.
+    """
+    if not isinstance(event, dict):
+        return None
+    event_type = str(event.get("event_type") or "").strip()
+    if event_type not in VERIFICATION_EVENT_TYPES:
+        return None
+
+    def _row(raw: Dict[str, Any], default_verified: int) -> Optional[Dict[str, Any]]:
+        order_item_id = str(raw.get("order_item_id") or "").strip()
+        if not order_item_id:
+            return None
+        try:
+            is_verified = 1 if int(raw.get("is_verified", default_verified)) else 0
+        except (TypeError, ValueError):
+            return None
+        return {"order_item_id": order_item_id, "is_verified": is_verified}
+
+    if event_type == EVENT_BULK_VERIFIED:
+        mappings = event.get("mappings")
+        if not isinstance(mappings, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for raw in mappings:
+            if not isinstance(raw, dict):
+                continue
+            row = _row(raw, 1)
+            if row is not None:
+                out.append(row)
+        return out
+
+    default_verified = 0 if event_type == EVENT_REOPENED else 1
+    row = _row(event, default_verified)
+    return [row] if row is not None else []
+
+
 def _table_exists(conn, table_name: str) -> bool:
     row = conn.execute(
         """
