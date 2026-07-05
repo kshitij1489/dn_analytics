@@ -1,7 +1,7 @@
 # Menu merge conflict resolution & multi-install convergence — implementation plan
 
 **Audience:** Engineers working on desktop analytics (this repo) and Dachnona cloud (`db.dachnona`).
-**Status:** Phases S1, C1, C2 implemented (2026-07-05, branch `sync-conflict-phase-1` in both repos); S2+, C3+ not started.
+**Status:** Phases S1, C1, C2 implemented (2026-07-05, branch `sync-conflict-phase-1` in both repos). Phases C3, S2, C4, C5 implemented (2026-07-05, branch `sync-conflict-phase-2` in both repos; server migration 0012 created but not applied to any real DB). C6/S3 (convergence digest) not started.
 **Related:** [CLOUD_SYNC_DIVERGENCE.md](./CLOUD_SYNC_DIVERGENCE.md) (symptom analysis), [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification-event groundwork, partially implemented), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md).
 
 ---
@@ -110,6 +110,8 @@ Tests (`tests.py`): cursor v2 round-trip; offline-device scenario (ingest event 
 
 ### Phase S2 — materialized ground truth + snapshot endpoint
 
+> **Status: implemented** (db.dachnona branch `sync-conflict-phase-2`). `OrderItemAssignment` model + migration 0012 (**created, not applied to any real DB** — run `migrate` + `rebuild_order_item_assignments` at deploy); `services/assignment_state.py` applies menu merge events at ingest under the `id > last_seq` guard and verification events flag-only; snapshot endpoint at `GET /desktop-analytics-sync/menu-assignments/snapshot?after=&limit=` (paged by `order_item_id`; returns `watermark_seq` **and** a ready-to-use `watermark_cursor` for the tail); bootstrap demotion honors `snapshot_role: "seed_only"` and the `MENU_BOOTSTRAP_TRUST_CLIENT_CLUSTER_STATE` env toggle (id_maps still merge forward; first-ever push may still seed cluster_state). Deviation from S2.5: `menu_bootstrap_latest` is *frozen* rather than regenerated from assignments — the cluster_state format carries per-row detail (`type_id`, name tuples) that assignments don't, and C4 clients no longer consume it for relinking. Fixtures shared with the client live in `contracts/menu_merge_event_fixtures.json` (source of truth in the analytics repo). Tests in `desktop_analytics_app_sync/tests.py` (`OrderItemAssignmentTests`).
+
 1. **Model** (`models.py` + migration):
 
 ```python
@@ -183,6 +185,8 @@ Tests: mixed accepted/rejected batch; old-server response shape; malformed local
 
 ### Phase C3 — assignment-based apply (the core fix)
 
+> **Status: implemented** (branch `sync-conflict-phase-2`). Schema via conditional ALTERs in `src/core/menu_assignment_schema.py` (called from every ensure path) plus fresh-install DDL in `database/schema_sqlite.sql`; extraction + seq-guarded applier + supersede notices in `src/core/menu_assignment_apply.py`; `SCHEMA_VERSION = 2` with `assignments` on all kinds and undo (signatures unchanged); local edit paths stamp `pending_local = 1, assignment_seq = NULL`; `menu_merge_sync.py` routes both event types through the assignment applier behind `MENU_SYNC_ASSIGNMENT_APPLY` (default on, env off-switch), with echo/ack, batch epilogue and `merge_history.origin='remote'`; legacy cluster replay remains only as a loudly-logged fallback for events with no derivable assignments. One refinement to §2.3 step 2: overwriting a *pending* row does **not** notify immediately — the notice fires either at ack time (row outranked between edit and echo) or when a peer's event overwrites an already-acknowledged local decision (matched via the outbox↔remote-events `server_seq` join). Supersede notices surface in `GET /api/menu/sync-conflicts` (+ acknowledge endpoint). Verification stream seq guard added (skip if event `server_seq` < row `assignment_seq`; `assignment_seq` is not stamped from that stream). Conflict-matrix tests in `tests/test_menu_assignment_apply.py`.
+
 1. **Schema** (`ensure_menu_merge_sync_tables` or the central migration in `src/core/db`): `ALTER TABLE menu_item_variants ADD COLUMN assignment_seq INTEGER; ALTER TABLE menu_item_variants ADD COLUMN pending_local INTEGER DEFAULT 0;` plus index on `(order_item_id)` if not present. New table `menu_sync_supersede_notices (order_item_id, local_merge_id, superseded_by_event_id, attribution, created_at, acknowledged_at)`.
 2. **Emit side** (`src/core/menu_merge_sync_events.py`): `_build_merge_payload` adds the `assignments` array for all three kinds (from `mapping_rows` / `affected_order_item_ids` — for basic merges, join current `variant_id` per order item at emit time). `record_menu_merge_undone_event` includes prior assignments. `SCHEMA_VERSION = 2`. Signature computation (`operation_signature`, `_event_signature`) stays on the existing fields so v1↔v2 dedupe keeps matching.
 3. **Local edit paths** (`utils/menu_utils.py`: `merge_menu_items`, `merge_menu_items_with_variant_mappings`, `resolve_menu_item_variant`, `remap_order_item_cluster`, `undo_merge`): set `pending_local = 1, assignment_seq = NULL` on every `menu_item_variants` row they rewrite (one extra SET clause in the existing UPDATEs; no behavioral change otherwise).
@@ -205,6 +209,8 @@ Tests: the full conflict matrix —
 
 ### Phase C4 — bootstrap demotion + fresh-install fast path
 
+> **Status: implemented** (branch `sync-conflict-phase-2`). Fresh-install seed in `src/core/menu_assignment_bootstrap.py` (runs from the orchestrator after the catalog bootstrap): pages the snapshot, applies rows via the same applier at `server_seq = watermark`, sets the menu-merge cursor to the server's `watermark_cursor`, marks `menu_assignments_bootstrapped`; installs that already have a pull cursor are marked without reseeding. `DEFAULT_MENU_BOOTSTRAP_APPLY_MODE` is now `seed_only`; relink only via `MENU_BOOTSTRAP_APPLY_MODE` env / `menu_bootstrap_apply_mode` config (the manual `/bootstrap/pull-from-cloud` route keeps its explicit parameter for restore flows). Shipper sends `snapshot_role: "seed_only"` and skips pushes while the `id_maps` sha256 (stored in `data/menu_bootstrap_last_push_hash.txt`) is unchanged. Tests in `tests/test_menu_assignment_bootstrap.py` (snapshot digest == replay digest, clean tail, restore flag).
+
 1. `src/core/services/cloud_pull_orchestrator.py`:
    - New step 0: if `system_config['menu_assignments_bootstrapped']` unset **and** the server snapshot endpoint is configured → page through `GET /menu-assignments/snapshot`, apply rows (same `_apply_assignments`, `server_seq = watermark`), set the menu-merge pull cursor to the watermark, mark bootstrapped. Fresh installs no longer replay history and cannot hit I4.
    - Menu bootstrap pull: change `DEFAULT_MENU_BOOTSTRAP_APPLY_MODE` to `"seed_only"` (no `_relink_order_items_from_snapshot`) once assignments are live; keep `seed_and_relink_orders` behind an explicit config flag for support/restore flows. Fixes client half of **I6** (both the clobber and the `order_items`-only inconsistency).
@@ -213,6 +219,8 @@ Tests: the full conflict matrix —
 Tests: fresh-DB bootstrap → identical assignments to an install that replayed the log; relink disabled by default; restore flag still works.
 
 ### Phase C5 — background pull + shrink the window
+
+> **Status: implemented** (branch `sync-conflict-phase-2`), except the optional item 2 (pull-before-edit on tab focus — UI work, not done). The 5-minute scheduler runs `run_best_effort_cloud_pulls` after its push phase under a process-wide `CLOUD_PULL_LOCK` (`blocking=False`, so it skips while the Sync DB job pulls); local merge/resolution/undo commits fire `src/core/menu_merge_push_nudge.py` (daemon thread, no-op without cloud config). Tests in `tests/test_cloud_pull_lock_and_nudge.py`.
 
 1. `src/core/services/cloud_sync_scheduler.py`: after the push phase each cycle, run `run_best_effort_cloud_pulls(conn)` guarded by a process-wide lock shared with the Sync DB job (reuse/extend `JobManager` or a simple `threading.Lock` in the orchestrator module) so a button-triggered sync and the scheduler never interleave pulls on one install. Fixes **I11**.
 2. Optional UX: trigger a lightweight merge-events pull when the Menu Matrix / Resolutions tab gains focus ("pull-before-edit"), via the existing `POST /api/menu/…/pull` route in `src/api/routers/menu.py`.
