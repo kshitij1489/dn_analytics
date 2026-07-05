@@ -322,6 +322,55 @@ class CustomerMergeSyncTests(unittest.TestCase):
         self.assertIsNotNone(row["uploaded_at"])
         self.assertIsNone(row["last_error"])
 
+    @patch("requests.post")
+    def test_upload_pending_quarantines_server_rejected_events(self, mock_post: Mock) -> None:
+        merge_customers(
+            self.conn,
+            "1",
+            "2",
+            similarity_score=0.95,
+            model_name="duplicate_matcher_v1",
+            reasons=["same phone"],
+        )
+        event_id = str(
+            self.conn.execute(
+                "SELECT event_id FROM customer_merge_sync_events LIMIT 1"
+            ).fetchone()[0]
+        )
+
+        mock_response = Mock(status_code=200)
+        mock_response.json.return_value = {
+            "status": "ok",
+            "accepted": [],
+            "rejected": [{"remote_event_id": event_id, "error": "Use a valid datetime value."}],
+        }
+        mock_post.return_value = mock_response
+
+        result = upload_pending(
+            self.conn,
+            endpoint="https://cloud.example.com/desktop-analytics-sync/customer-merges/ingest",
+            auth="secret-token",
+        )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_sent"], 0)
+        self.assertEqual(result["events_rejected"], 1)
+
+        # The rejected event leaves the push queue but keeps the server error,
+        # and a quarantine copy stays visible for review.
+        row = self.conn.execute(
+            "SELECT uploaded_at, last_error FROM customer_merge_sync_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        self.assertIsNotNone(row["uploaded_at"])
+        self.assertEqual(row["last_error"], "Use a valid datetime value.")
+        quarantine_row = self.conn.execute(
+            "SELECT stream, resolved_at FROM menu_sync_event_quarantine WHERE remote_event_id = ?",
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(quarantine_row["stream"], "customer_merge_push")
+        self.assertIsNone(quarantine_row["resolved_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

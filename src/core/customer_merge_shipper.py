@@ -9,7 +9,7 @@ Follows the same pattern as the existing cloud shippers:
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.config.client_learning_config import (
     CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL,
@@ -19,13 +19,16 @@ from src.core.customer_merge_sync_events import (
     backfill_customer_merge_sync_events,
     has_customer_merge_sync_table,
 )
+from src.core.sync_push_results import apply_per_event_ingest_results
 
 BATCH_LIMIT_EVENTS = 200
+QUARANTINE_STREAM = "customer_merge_push"
+UNPARSEABLE_PAYLOAD_ERROR = "Local event payload is not valid JSON"
 
 
-def _select_unsent_events(conn, limit: int = BATCH_LIMIT_EVENTS) -> List[Dict[str, Any]]:
+def _select_unsent_events(conn, limit: int = BATCH_LIMIT_EVENTS) -> Tuple[List[Dict[str, Any]], List[str]]:
     if not has_customer_merge_sync_table(conn):
-        return []
+        return [], []
 
     rows = conn.execute(
         """
@@ -39,14 +42,16 @@ def _select_unsent_events(conn, limit: int = BATCH_LIMIT_EVENTS) -> List[Dict[st
     ).fetchall()
 
     events: List[Dict[str, Any]] = []
+    invalid_event_ids: List[str] = []
     for row in rows:
         try:
             payload = json.loads(row["payload"])
         except (TypeError, json.JSONDecodeError):
+            invalid_event_ids.append(str(row["event_id"]))
             continue
         payload.setdefault("remote_event_id", row["event_id"])
         events.append(payload)
-    return events
+    return events, invalid_event_ids
 
 
 def _mark_events(conn, event_ids: List[str], uploaded_at: Optional[str], error: Optional[str]) -> None:
@@ -91,7 +96,16 @@ def upload_pending(
         }
 
     backfill_counts = backfill_customer_merge_sync_events(conn)
-    events = _select_unsent_events(conn)
+    events, invalid_event_ids = _select_unsent_events(conn)
+    if invalid_event_ids:
+        # Mark locally-unparseable payload rows as errored (uploaded_at set) so
+        # they leave the queue instead of sitting unsent forever.
+        _mark_events(
+            conn,
+            invalid_event_ids,
+            uploaded_at=datetime.now(timezone.utc).isoformat(),
+            error=UNPARSEABLE_PAYLOAD_ERROR,
+        )
     if not events:
         return {
             "events_sent": 0,
@@ -135,6 +149,28 @@ def upload_pending(
             "error": error,
         }
 
+    try:
+        response_data = response.json()
+    except Exception:
+        response_data = None
+
+    per_event_results = apply_per_event_ingest_results(
+        conn,
+        events,
+        response_data,
+        _mark_events,
+        QUARANTINE_STREAM,
+    )
+    if per_event_results is not None:
+        return {
+            "events_sent": per_event_results["accepted"],
+            "events_rejected": per_event_results["rejected"],
+            "backfilled_applied": backfill_counts["applied"],
+            "backfilled_undone": backfill_counts["undone"],
+            "error": None,
+        }
+
+    # Old server without per-event results: a 200 means the whole batch landed.
     uploaded_at = datetime.now(timezone.utc).isoformat()
     _mark_events(conn, event_ids, uploaded_at=uploaded_at, error=None)
     return {
