@@ -1,13 +1,48 @@
 # Menu single source of truth — implementation plan
 
 **Audience:** Product + engineers (desktop analytics repo + Dachnona cloud)  
-**Status:** Design / implementation plan (not implemented)  
+**Status:** Phases 0, 1, and 3 (C1) **implemented and shipping against prod**; Phase 2 (Option B) **partially superseded** by the verification event stream + bootstrap watermark cursor; Phase 4 (Option C) not built. **Cross-device convergence (S2) not yet validated** — only one install exists as of 2026-07-06. See **§0. As-built status** below.  
 **Goal:** Move toward **one authoritative representation of “clean menu + mapping + verification state”** so a **fresh install** (or **reset orders + seed**) followed by **sync/pull** can **converge** to the same catalog and resolution state as a **reference machine** (e.g. dev), within explicit limits.
 
 This doc complements:
 
 - [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) — merge + bootstrap ingest/pull contracts  
+- [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) — the conflict/LWW plan under which Option A actually landed (phases C1–C5)  
 - [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) — broader sync overview  
+
+---
+
+## 0. As-built status (2026-07-06)
+
+This section records what is **actually implemented**, verified against the live install
+(`dn-analytics`, pointed at `webhooks.db1-prod-dachnona.store`) after the cloud API-contract
+changes were deployed.
+
+| Plan item | State | Notes |
+|-----------|-------|-------|
+| **Option A — verification events** (§4, Phase 1) | ✅ Implemented | `menu_mapping_verification_sync_events.py` (emit), `menu_mapping_verification_shipper.py` (push), `menu_mapping_verification_sync.py` (pull/apply, LWW by `verification_seq`) |
+| Emit on verify **and** undo (§1.1 gap) | ✅ Closed | `utils/menu_utils.py` calls `record_menu_mapping_verification_events_chunked` on verify and reopen |
+| Pull ordering (§8.2) | ✅ Wired | `cloud_pull_orchestrator.py`: bootstrap → mapping verifications → menu merges |
+| Cursor + migration (§4.4/5) | ✅ Done | `menu_mapping_verification_pull_cursor`, `sync_cursor_migration.py` |
+| Deferred apply (§4.5, order_item_id not yet imported) | ✅ Done | `menu_mapping_verification_deferred` table + retry pass |
+| Tests (§4.4/6) | ✅ Green | 36 passing across the 4 verification/assignment/merge suites |
+| **Phase 0** — instrumentation hygiene / grep gate | ✅ Clean | no `debug-56943a` / `#region agent log` / `.cursor/debug-` / local ingest URLs in `src`/`services`/`utils`/`scripts` |
+| **Phase 3 (C1)** — clustering inherits verified status | ✅ Done | `services/clustering_service.py` sets `is_verified=1` on insert when `(menu_item_id, variant_id)` is verified elsewhere |
+| **Option B** — versioned catalog snapshot (Phase 2) | ◑ Superseded | verification truth now carried by the event stream + bootstrap watermark cursor / catalog-only bootstrap, not an `is_verified` snapshot overlay |
+| **Option C** — packaged DB (Phase 4) | ○ Not built | closest artifact is the baseline export / force-reseed cutover tooling |
+
+**Single-install validation (confirmed via one SyncDB against prod):**
+
+- Push: 70 verification events emitted, **70 uploaded, 0 pending, 0 errored**.
+- Pull: 78 remote verification events applied; pull cursor advanced (Jul 5 14:27).
+- Deferred applies: 0. Resolutions backlog: **574 verified / 0 unverified** → **S1 satisfied**.
+
+**Known open issue (blocks clean multi-install bring-up):** 4 `menu_merge` remote events are
+stuck in `menu_sync_event_quarantine` (`Cannot merge item into itself`, ~48 retries). These are
+this device's own April `mapping_audit_v1` addon-consolidation events (source `menu_item_id` ==
+target by design), echoed back on pull and rejected by the item-level self-merge guard. Benign on
+this install (already applied in April) but they will also fail to apply on a fresh install B — the
+apply path should treat same-item `mapping_audit_v1` events as idempotent no-ops rather than raising.
 
 ---
 
@@ -211,7 +246,7 @@ Does **not** stay current with cloud or POS unless repeated. Best as **bootstrap
 
 ## 7. Recommended phased roadmap
 
-### Phase 0 — Instrumentation, metrics, and debug-session cleanup (1–3 days)
+### Phase 0 — Instrumentation, metrics, and debug-session cleanup (1–3 days) — ✅ IMPLEMENTED (grep gate clean)
 
 **Product metrics (forward work)**
 
@@ -239,19 +274,19 @@ The following files **were** instrumented for session `56943a` and are **restore
 
 **Policy:** No merge may ship **absolute paths** to a developer machine (e.g. `/Users/.../.cursor/debug-....log`) in application code. Future Phase 0 metrics should use existing logging (`logging` + optional file in userData) if needed.
 
-### Phase 1 — Make “verify” cloud-visible (Option A minimal) (1–2 weeks)
+### Phase 1 — Make “verify” cloud-visible (Option A minimal) (1–2 weeks) — ✅ IMPLEMENTED
 
 - Emit events for **`verify_item`** and **successful `resolve_menu_item_variant`** outcomes that change verification.  
 - Cloud ingest + pull + client apply (small batches).  
 - **Delivers:** S4 auditability; partial S1 if combined with ordering rules.
 
-### Phase 2 — Snapshot checkpoints (Option B) (2–4 weeks)
+### Phase 2 — Snapshot checkpoints (Option B) (2–4 weeks) — ◑ PARTIALLY SUPERSEDED (event stream + bootstrap watermark)
 
 - Versioned snapshot including **`is_verified`** in mapping representation.  
 - Apply after seed on fresh installs + nightly “repair” job on client.  
 - **Delivers:** faster convergence; reduced event replay cost.
 
-### Phase 3 — Clustering alignment (parallel track)
+### Phase 3 — Clustering alignment (parallel track) — ✅ IMPLEMENTED (C1 heuristic)
 
 Even with A+B, clustering currently inserts **`is_verified = 0`** for new POS lines. Pick one:
 
@@ -261,7 +296,7 @@ Even with A+B, clustering currently inserts **`is_verified = 0`** for new POS li
 
 Document the chosen approach in `item_clustering.md` follow-up.
 
-### Phase 4 — Optional packaged DB (Option C)
+### Phase 4 — Optional packaged DB (Option C) — ○ NOT BUILT
 
 Support / enterprise only.
 
@@ -322,7 +357,7 @@ This document is the implementation plan; next step is product sign-off on **Pha
 
 Before opening a PR that touched sync, menu, or seeding:
 
-- [ ] No `#region agent log` / session-specific NDJSON writers remain.  
-- [ ] No hard-coded `.cursor/debug-` paths or local ingest URLs in `src/`, `services/`, `utils/`, or `scripts/`.  
-- [ ] If metrics are needed permanently, they use **`logging`** or a **configurable** sink, not a fixed workspace path.  
+- [x] No `#region agent log` / session-specific NDJSON writers remain. _(grep gate clean, 2026-07-06)_  
+- [x] No hard-coded `.cursor/debug-` paths or local ingest URLs in `src/`, `services/`, `utils/`, or `scripts/`. _(grep gate clean, 2026-07-06)_  
+- [x] If metrics are needed permanently, they use **`logging`** or a **configurable** sink, not a fixed workspace path.  
 - [ ] Document new metrics in `TROUBLESHOOTING.md` or this file under Phase 0.

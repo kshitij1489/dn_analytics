@@ -1,8 +1,9 @@
 # Menu merge conflict resolution & multi-install convergence — implementation plan
 
 **Audience:** Engineers working on desktop analytics (this repo) and Dachnona cloud (`db.dachnona`).
-**Status:** Phases S1, C1, C2 implemented (2026-07-05, branch `sync-conflict-phase-1` in both repos). Phases C3, S2, C4, C5 implemented (2026-07-05, branch `sync-conflict-phase-2` in both repos; server migration 0012 created but not applied to any real DB). C6/S3 (convergence digest) not started.
-**Related:** [CLOUD_SYNC_DIVERGENCE.md](./CLOUD_SYNC_DIVERGENCE.md) (symptom analysis), [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification-event groundwork, partially implemented), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md).
+**Status:** Phases S1–S2 (server) and C1–C5 (client) **implemented and deployed to production** (2026-07-05). Server branches merged to `main` on `db.dachnona` live prod; migrations 0011/0012/0013 applied and the `rebuild_order_item_assignments` backfill run; a one-time baseline cutover seeded the server's `OrderItemAssignment` ground truth from the golden install. The **I5 single-owner refinement** — `is_verified` is owned solely by the mapping-verification stream (guarded by its own `verification_seq` / `last_verification_seq`; migration 0013), and the merge stream only *seeds* the flag on INSERT — is implemented on both sides (server deployed; client changes committed on branch `sync-conflict-phase-2`, 13 commits ahead of `main` — not yet merged). Client sync suite 45 tests green, server sync suite 21 green, contract fixtures byte-identical across repos (verified 2026-07-06). Open follow-up from the cutover: 27 server-only `order_item_assignments` rows to reconcile. C6/S3 (convergence digest) not started.
+**Scope note:** This document is now the single source for menu sync-conflict work **and** the operational runbook it used to link out to. The former `CLOUD_SYNC_DIVERGENCE.md` (symptom analysis, diagnostics, customer-side notes) has been folded in here — see §8 (operational runbook), §9 (customer-merge divergence, out of scope for the menu fix but tracked), and §10 (goals & non-goals).
+**Related:** [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification-event groundwork, partially implemented), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md), [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md).
 
 ---
 
@@ -97,7 +98,7 @@ Local edits keep using the existing code paths (`merge_menu_items`, `resolve_men
 
 ### Phase S1 — ordering, seq exposure, per-event ingest results *(prerequisite for everything; backward compatible)*
 
-> **Status: implemented** (db.dachnona branch `sync-conflict-phase-1`). Delta replay is ordered by `(ingested_at, id)`; cursors are v2 (`{"v":2, ingested_at, id}`) and v1 cursors get a 400 `"Unsupported cursor version."`; `server_seq`/`server_ingested_at` injected into every delta event; ingest returns `accepted`/`rejected` per event (plus the legacy `ingested_count`/`duplicate_count`); naive `occurred_at` parsed as UTC; `(scope_key, ingested_at, id)` indexes added via migration 0011 (not yet applied to any DB). Covered in `desktop_analytics_app_sync/tests.py`.
+> **Status: implemented** (db.dachnona branch `sync-conflict-phase-1`). Delta replay is ordered by `(ingested_at, id)`; cursors are v2 (`{"v":2, ingested_at, id}`) and v1 cursors get a 400 `"Unsupported cursor version."`; `server_seq`/`server_ingested_at` injected into every delta event; ingest returns `accepted`/`rejected` per event (plus the legacy `ingested_count`/`duplicate_count`); naive `occurred_at` parsed as UTC; `(scope_key, ingested_at, id)` indexes added via migration 0011 (**applied to production 2026-07-05**). Covered in `desktop_analytics_app_sync/tests.py`.
 
 `backend/desktop_analytics_app_sync/services/merge_events.py`:
 
@@ -112,7 +113,7 @@ Tests (`tests.py`): cursor v2 round-trip; offline-device scenario (ingest event 
 
 ### Phase S2 — materialized ground truth + snapshot endpoint
 
-> **Status: implemented** (db.dachnona branch `sync-conflict-phase-2`). `OrderItemAssignment` model + migration 0012 (**created, not applied to any real DB** — run `migrate` + `rebuild_order_item_assignments` at deploy); `services/assignment_state.py` applies menu merge events at ingest under the `id > last_seq` guard and verification events flag-only; snapshot endpoint at `GET /desktop-analytics-sync/menu-assignments/snapshot?after=&limit=` (paged by `order_item_id`; returns `watermark_seq` **and** a ready-to-use `watermark_cursor` for the tail); bootstrap demotion honors `snapshot_role: "seed_only"` and the `MENU_BOOTSTRAP_TRUST_CLIENT_CLUSTER_STATE` env toggle (id_maps still merge forward; first-ever push may still seed cluster_state). S2.4/S2.5 below describe the as-built contract (incl. the deliberate frozen-cluster-state deviation). Fixtures shared with the client live in `contracts/menu_merge_event_fixtures.json` (source of truth in the analytics repo). Tests in `desktop_analytics_app_sync/tests.py` (`OrderItemAssignmentTests`).
+> **Status: implemented** (db.dachnona branch `sync-conflict-phase-2`). `OrderItemAssignment` model + migration 0012 (plus 0013 `last_verification_seq` for the I5 single-owner refinement) — **applied to production and backfilled via `rebuild_order_item_assignments` on 2026-07-05**; `services/assignment_state.py` applies menu merge events at ingest under the `id > last_seq` guard and verification events flag-only (guarded by `last_verification_seq`, the verification stream's own id space); snapshot endpoint at `GET /desktop-analytics-sync/menu-assignments/snapshot?after=&limit=` (paged by `order_item_id`; returns `watermark_seq` **and** a ready-to-use `watermark_cursor` for the tail); bootstrap demotion honors `snapshot_role: "seed_only"` and the `MENU_BOOTSTRAP_TRUST_CLIENT_CLUSTER_STATE` env toggle (id_maps still merge forward; first-ever push may still seed cluster_state). S2.4/S2.5 below describe the as-built contract (incl. the deliberate frozen-cluster-state deviation). Fixtures shared with the client live in `contracts/menu_merge_event_fixtures.json` (source of truth in the analytics repo). Tests in `desktop_analytics_app_sync/tests.py` (`OrderItemAssignmentTests`).
 
 1. **Model** (`models.py` + migration):
 
@@ -187,7 +188,7 @@ Tests: mixed accepted/rejected batch; old-server response shape; malformed local
 
 ### Phase C3 — assignment-based apply (the core fix)
 
-> **Status: implemented** (branch `sync-conflict-phase-2`). Schema via conditional ALTERs in `src/core/menu_assignment_schema.py` (called from every ensure path) plus fresh-install DDL in `database/schema_sqlite.sql`; extraction + seq-guarded applier + supersede notices in `src/core/menu_assignment_apply.py`; `SCHEMA_VERSION = 2` with `assignments` on all kinds and undo (signatures unchanged); local edit paths stamp `pending_local = 1, assignment_seq = NULL`; `menu_merge_sync.py` routes both event types through the assignment applier behind `MENU_SYNC_ASSIGNMENT_APPLY` (default on, env off-switch), with echo/ack, batch epilogue and `merge_history.origin='remote'`; legacy cluster replay remains only as a loudly-logged fallback for events with no derivable assignments. §2.3 above has been updated to the as-built algorithm (notice timing, echo authorship via the outbox join). Supersede notices surface in `GET /api/menu/sync-conflicts` (+ acknowledge endpoint). Verification stream seq guard added (skip if event `server_seq` < row `assignment_seq`; `assignment_seq` is not stamped from that stream). Conflict-matrix tests in `tests/test_menu_assignment_apply.py`.
+> **Status: implemented** (branch `sync-conflict-phase-2`). Schema via conditional ALTERs in `src/core/menu_assignment_schema.py` (called from every ensure path) plus fresh-install DDL in `database/schema_sqlite.sql`; extraction + seq-guarded applier + supersede notices in `src/core/menu_assignment_apply.py`; `SCHEMA_VERSION = 2` with `assignments` on all kinds and undo (signatures unchanged); local edit paths stamp `pending_local = 1, assignment_seq = NULL`; `menu_merge_sync.py` routes both event types through the assignment applier behind `MENU_SYNC_ASSIGNMENT_APPLY` (default on, env off-switch), with echo/ack, batch epilogue and `merge_history.origin='remote'`; legacy cluster replay remains only as a loudly-logged fallback for events with no derivable assignments. §2.3 above has been updated to the as-built algorithm (notice timing, echo authorship via the outbox join). Supersede notices surface in `GET /api/menu/sync-conflicts` (+ acknowledge endpoint). Verification stream seq guard added (skip if event `server_seq` < row `verification_seq` — the verification stream's own id space, distinct from `assignment_seq`, which this stream never stamps); the merge apply seeds `is_verified` create-only (I5). Conflict-matrix tests in `tests/test_menu_assignment_apply.py`.
 
 1. **Schema** (`ensure_menu_merge_sync_tables` or the central migration in `src/core/db`): `ALTER TABLE menu_item_variants ADD COLUMN assignment_seq INTEGER; ALTER TABLE menu_item_variants ADD COLUMN pending_local INTEGER DEFAULT 0;` plus index on `(order_item_id)` if not present. New table `menu_sync_supersede_notices (order_item_id, local_merge_id, superseded_by_event_id, attribution, created_at, acknowledged_at)`.
 2. **Emit side** (`src/core/menu_merge_sync_events.py`): `_build_merge_payload` adds the `assignments` array for all three kinds (from `mapping_rows` / `affected_order_item_ids` — for basic merges, join current `variant_id` per order item at emit time). `record_menu_merge_undone_event` includes prior assignments. `SCHEMA_VERSION = 2`. Signature computation (`operation_signature`, `_event_signature`) stays on the existing fields so v1↔v2 dedupe keeps matching.
@@ -260,3 +261,156 @@ Create `contracts/menu_merge_event_fixtures.json` in **both** repos (source of t
 5. Undoing a merge on install 1 restores the prior assignments on install 2. *(I10)*
 6. Sync DB never rewrites `order_items` from another install's bootstrap snapshot (default config). *(I6)*
 7. Server `OrderItemAssignment` digest matches every up-to-date install's digest. *(ground truth, I5)*
+
+---
+
+## 8. Operational runbook (symptoms, diagnostics, support)
+
+*(Folded in from the former `CLOUD_SYNC_DIVERGENCE.md`. Applies to a running fleet: how to recognise and diagnose a divergence, menu or customer.)*
+
+### 8.1 What "divergence" means here
+
+Sync is **not** full multi-master replication of the local SQLite database. Two layers separate:
+
+| Layer | What syncs | Role |
+|-------|------------|------|
+| **Orders** | Incremental order stream from the configured integration | Builds/updates `orders`, customers derived from POS, etc. |
+| **Cloud collaboration** | Append-only **events** (customer merges, menu merges, mapping verifications, menu bootstrap snapshots) | Converges **human-driven** catalog and identity decisions across installs |
+
+**Divergence** = two installs both complete Sync DB "successfully" (orders OK, HTTP 200) but their SQLite still differs in ways that make cloud pull replay log errors or land events in quarantine. Cloud pulls are **best-effort** by design: per-stream failures are logged (and, for menu streams, quarantined), not raised, so the job finishes "successfully" while individual events fail ([`src/core/services/cloud_pull_orchestrator.py`](../src/core/services/cloud_pull_orchestrator.py)).
+
+### 8.2 Log signatures and cursor behavior
+
+During/after sync, look for:
+
+1. **Per-event warnings** from [`menu_merge_sync.py`](../src/core/menu_merge_sync.py) / [`customer_merge_sync.py`](../src/core/customer_merge_sync.py) when applying one remote event throws. Menu-merge failures are quarantined (see C1/§3.4-equivalent); the messages include legacy `Menu merge pull failed … Source or Target item not found` and `Customer merge pull failed … Could not resolve source customer …`.
+2. **Summary warnings** from `run_best_effort_cloud_pulls`: `Cloud pull <stream> reported error: <message>`.
+3. **Quarantine rows** in `menu_sync_event_quarantine` or via `GET /api/menu/sync-conflicts` — unresolved events with `fail_count`, `error`, `remote_event_id`.
+4. **Supersede notices** (menu only, post–assignment apply): a peer's resolution outranked a locally acknowledged decision; listed in the same API response.
+
+**Menu-stream cursors advance past failed events** (post-C1): check `menu_merge_pull_cursor` / `menu_mapping_verification_pull_cursor` in `system_config` — they move forward even when `events_quarantined > 0`. **Customer stream still uses the older batch semantics:** a top-level exception can leave the cursor unchanged and retry the same head of the queue.
+
+### 8.3 SQLite diagnostic queries
+
+Run these on `analytics.db` (substitute IDs from your logs):
+
+**Menu merge — does the referenced `menu_item_id` exist?**
+
+```sql
+SELECT menu_item_id, name, type
+FROM menu_items
+WHERE menu_item_id IN ('<source_uuid>', '<target_uuid>');
+```
+
+On current clients, assignment-based apply ([`menu_assignment_apply.py`](../src/core/menu_assignment_apply.py)) can `_ensure_menu_item_exists` from the event snapshot, so missing catalog rows are rarer than under legacy cluster replay. If both rows are absent and the payload lacks snapshot fields, the event may quarantine until catalog bootstrap catches up.
+
+**Menu merge — assignment state for a disputed order line**
+
+```sql
+SELECT miv.order_item_id, miv.menu_item_id, miv.variant_id, miv.is_verified,
+       miv.assignment_seq, miv.pending_local
+FROM menu_item_variants miv
+WHERE miv.order_item_id = '<order_item_id_from_event>';
+```
+
+`assignment_seq` is the highest `server_seq` applied; `pending_local = 1` means a local edit not yet echoed from the server.
+
+**Customer merge — ambiguous resolution**
+
+```sql
+SELECT customer_id, name, phone, address, total_orders, total_spent
+FROM customers
+WHERE lower(trim(name)) = lower(trim('<name_from_event>'));
+```
+
+Many rows with the same normalized name and **no** usable `customer_identity_key` / phone / address hashes in the remote payload → local resolver cannot pick a unique source/target ([`_resolve_customer_id`](../src/core/customer_merge_sync.py)).
+
+**Orders vs merge intent** — compare `orders.customer_id` for the portable order refs in the cloud payload (`petpooja_order_id`, `event_id`) with `local_refs.source_customer_id` / `target_customer_id` from the originating machine. **Integer customer IDs are not portable** across databases; a mismatch is expected when portable locators are weak.
+
+### 8.4 Support playbook
+
+1. **For a stuck event id, capture:** cloud payload (redacted); local `menu_items` rows for the UUIDs; the `menu_sync_event_quarantine` row (menu) or pull error (customer); count of name-colliding customers; pull cursor values; and `GET /api/menu/sync-conflicts` output.
+2. **Document expected warnings** in release notes when portable locators are sparse (anonymous customers, duplicate names).
+3. **Manual convergence is dangerous and rare** — only with a backup (e.g. insert a missing stub `menu_items` row, reconcile duplicates under guidance). Prefer the engineering fixes in §9 over hand-editing.
+
+### 8.5 References (implementation)
+
+| Topic | Location |
+|-------|----------|
+| Best-effort cloud pull orchestration | [`src/core/services/cloud_pull_orchestrator.py`](../src/core/services/cloud_pull_orchestrator.py) |
+| Menu merge pull/apply | [`src/core/menu_merge_sync.py`](../src/core/menu_merge_sync.py) |
+| Assignment extraction + seq-guarded apply | [`src/core/menu_assignment_apply.py`](../src/core/menu_assignment_apply.py) |
+| Fresh-install assignment snapshot seed | [`src/core/menu_assignment_bootstrap.py`](../src/core/menu_assignment_bootstrap.py) |
+| Quarantine helpers | [`src/core/menu_sync_quarantine.py`](../src/core/menu_sync_quarantine.py) |
+| Sync conflicts API | [`src/api/routers/menu.py`](../src/api/routers/menu.py) (`/api/menu/sync-conflicts`) |
+| Customer merge pull/apply | [`src/core/customer_merge_sync.py`](../src/core/customer_merge_sync.py) |
+| Portable locators for customer events | [`src/core/customer_merge_sync_events.py`](../src/core/customer_merge_sync_events.py) (`_build_portable_locators`) |
+| Menu / customer merge upload | [`src/core/menu_merge_shipper.py`](../src/core/menu_merge_shipper.py), [`src/core/customer_merge_shipper.py`](../src/core/customer_merge_shipper.py) |
+| Background pull scheduler | [`src/core/services/cloud_sync_scheduler.py`](../src/core/services/cloud_sync_scheduler.py) |
+
+---
+
+## 9. Customer-merge divergence (out of scope for the menu fix — tracked, open)
+
+The menu redesign (§2–§7) deliberately excludes customer merge conflict semantics (§2.4). Customer merges **do** inherit the server ingest-ordering fix (S1) automatically, but they have **no** assignment-based applier and **no** quarantine parity with the menu streams. This section records the standing analysis and the open remediation so it isn't lost.
+
+### 9.1 Mechanism and causes
+
+Replay resolves customers via [`_resolve_customer_id`](../src/core/customer_merge_sync.py) using `portable_locators` and normalized snapshots — **not** `local_refs.source_customer_id` from another machine as the primary key.
+
+| Cause | Explanation |
+|-------|-------------|
+| **Autoincrement `customer_id` is local** | The event's `local_refs` integers describe the **origin** SQLite only; other installs must infer rows from locators. |
+| **Weak locators** | `customer_identity_key` absent or stripped for `anon:*` keys; `phone_hash` / `name_address_hash` null; many customers share a normalized name → resolver returns **ambiguous** and raises. |
+| **Order reassignment drift** | The order cited in `moved_orders` may attach to a **different** local `customer_id` than on the originating machine if imports or prior merges differed. |
+
+### 9.2 Open remediation
+
+| Item | Purpose | Status |
+|------|---------|--------|
+| **Order-anchor tie-break** | Use order anchors from `moved_orders.portable_refs` when there's a name-only collision | **Open** |
+| **Enrich portable locators on emit** | Include phone/address hashes when any linked address row has them (partially supported today via address-book paths in `_resolve_customer_id`) | **Open / partial** |
+| **Promote stable keys** | Prefer persisting non-anonymous `customer_identity_key` where business rules allow; reduce name-only matching | **Open (policy)** |
+| **Customer-stream quarantine** | Mirror menu C1: per-event dead-letter + cursor advance instead of a batch-level abort that leaves the cursor stalled | **Open** — needs Dachnona backend work (menu-only today) |
+| **Avoid exporting merges without mandatory locators** | Product decision; may block legitimate merges | **Open (product)** |
+
+Backend/contract extensions to discuss with Dachnona owners (see [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md)): customer-stream quarantine (above); dead-letter/compensate (mark events failed store-wide with reason, optionally emit compensating events); compacting redundant merges (largely solved for menu by materialized assignments; may still help the customer or legacy-v1 tails).
+
+---
+
+## 10. Goals, non-goals, and open follow-ups
+
+### 10.1 Success criteria per scope
+
+| Scope | Goal | Menu status | Customer status |
+|-------|------|-------------|-----------------|
+| **G1 — User-visible** | Sync completes; orders correct; failures surfaced with actionable detail | API shipped; **UI badge open** | Warnings in logs only |
+| **G2 — Convergence** | Installs eventually apply the same decisions when prerequisites are satisfied | **Implemented** (assignment LWW + snapshot seed + bootstrap demotion) | **Open** (locator / resolver work, §9) |
+| **G3 — Strict parity** | Equivalent critical rows at same cloud cursors + same POS stream | Monitoring via **C6/S3 digest (not started)** | Not targeted |
+
+Bit-identical SQLite across installs (G3) remains hard without approaching full replication or stronger snapshots ([MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md)); it's pursued only if the product requires it.
+
+### 10.2 Non-goals
+
+- Promising **bit-identical SQLite** across all installs without G3-level infrastructure and monitoring.
+- Treating every cloud pull warning as a **failed orders sync** — orders and collaboration replay are separate stages ([`src/api/routers/operations.py`](../src/api/routers/operations.py)).
+- Customer merge conflict semantics and full SQLite replication (see §2.4).
+
+### 10.3 Open follow-ups (consolidated)
+
+- **C6 / S3 convergence digest** — the standing "are all installs in sync?" audit. **Not started** (§3 S3, §4 C6).
+- **27 server-only `order_item_assignments` rows** from the baseline cutover — still to reconcile.
+- **UI badge** for `/api/menu/sync-conflicts` (quarantine + supersede notices) — API only today (C1).
+- **Customer-side divergence** — all items in §9.2 (order-anchor tie-break, locator enrichment, customer-stream quarantine).
+- **Client branch `sync-conflict-phase-2`** (I5 single-owner refinement + C3/C4/C5) — committed, **not yet merged to `main`**; server half already on live prod.
+
+---
+
+## Document history
+
+| Date | Change |
+|------|--------|
+| 2026-04-30 | Divergence definition, root causes, solution tiers, cross-links (originally in `CLOUD_SYNC_DIVERGENCE.md`). |
+| 2026-07-05 | Refresh after menu merge conflict work (C1–C5, S1–S2): assignment-based apply, quarantine/cursor behavior, implementation-status tables. |
+| 2026-07-06 | Verified actual state against both repos post-deploy: server merged to `main`/live prod (migrations 0011–0013 applied, backfill run, 21 tests green); client committed on `sync-conflict-phase-2` (45 tests green), not yet merged; contract fixtures byte-identical. Corrected stale "migration must be applied" notes. |
+| 2026-07-06 | **Merged `CLOUD_SYNC_DIVERGENCE.md` into this plan** (operational runbook §8, customer-merge divergence §9, goals/non-goals/open follow-ups §10). Deleted the standalone doc; no unique content dropped. |
