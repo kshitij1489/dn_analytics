@@ -68,7 +68,6 @@ a = Analysis(
         'services',
         'services.load_orders',
         'services.clustering_service',
-        'services.ai_service',
         'utils',
         'utils.api_client',
         'utils.id_generator',

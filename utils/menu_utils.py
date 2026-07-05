@@ -918,16 +918,24 @@ def merge_menu_items(
 def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, new_variant_id: str) -> Dict[str, Any]:
     """
     Remap an individual order item to a different menu_item cluster.
+
+    The remap rides the menu-merge assignment stream (order_item_remap_v1):
+    it records a merge_history row and emits a menu_merge.applied event whose
+    assignments carry the new menu/variant, so peers and server ground truth
+    receive the full mapping (not just a verified flag) and the echo of our
+    own event clears pending_local.
     """
     ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = ?",
+            "SELECT menu_item_id, variant_id, is_verified FROM menu_item_variants WHERE order_item_id = ?",
             (str(order_item_id),),
         )
         prev_row = cursor.fetchone()
         prev_menu_item_id = str(prev_row[0]) if prev_row else None
+        prev_variant_id = prev_row[1] if prev_row else None
+        prev_is_verified = int(prev_row[2] or 0) if prev_row else 0
 
         # 1. Update Mapping (SQLite UPSERT); provisional until the echo acks it
         cursor.execute("""
@@ -945,26 +953,56 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
             ensure_menu_item_has_variant_mapping(conn, prev_menu_item_id, cursor=cursor)
         ensure_menu_item_has_variant_mapping(conn, new_menu_item_id, cursor=cursor)
 
-        # Emit verification event so the remap propagates to other installs
-        from src.core.menu_mapping_verification_sync_events import (
-            record_menu_mapping_verification_events_chunked,
+        # 2. Record the remap in merge_history and emit a merge-stream event.
+        # A previously-unmapped order item has no prior state to restore, so
+        # its old_* fields mirror the new values (undo becomes a no-op write).
+        source_menu_item_id = prev_menu_item_id or str(new_menu_item_id)
+        old_variant_for_history = prev_variant_id if prev_row else new_variant_id
+        old_verified_for_history = prev_is_verified if prev_row else 1
+        cursor.execute(
+            "SELECT name, type FROM menu_items WHERE menu_item_id = ?",
+            (source_menu_item_id,),
+        )
+        source_item_row = cursor.fetchone()
+        source_name = str(source_item_row[0]) if source_item_row else source_menu_item_id
+        source_type = str(source_item_row[1]) if source_item_row else "Unknown"
+
+        history_payload = {
+            "kind": "order_item_remap_v1",
+            "order_item_id": str(order_item_id),
+            "source_variant_id": _normalize_variant_key(old_variant_for_history),
+            "target_variant_id": _normalize_variant_key(new_variant_id),
+            "mapping_rows": [
+                {
+                    "order_item_id": str(order_item_id),
+                    "old_menu_item_id": source_menu_item_id,
+                    "old_variant_id": old_variant_for_history,
+                    "old_is_verified": old_verified_for_history,
+                    "new_menu_item_id": str(new_menu_item_id),
+                    "new_variant_id": new_variant_id,
+                    "new_is_verified": 1,
+                }
+            ],
+        }
+        merge_id = _insert_merge_history(
+            cursor,
+            source_menu_item_id,
+            str(new_menu_item_id),
+            source_name,
+            source_type,
+            history_payload,
         )
 
-        record_menu_mapping_verification_events_chunked(conn, [
-            {
-                "order_item_id": str(order_item_id),
-                "menu_item_id": str(new_menu_item_id),
-                "variant_id": str(new_variant_id) if new_variant_id else None,
-                "is_verified": 1,
-            }
-        ])
+        from src.core.menu_merge_sync_events import record_menu_merge_applied_event
+
+        record_menu_merge_applied_event(conn, merge_id)
 
         conn.commit()
-        
-        # 2. Update Backups
+
+        # 3. Update Backups
         export_to_backups(conn)
-        
-        return {"status": "success", "message": "Order item remapped successfully"}
+
+        return {"status": "success", "message": "Order item remapped successfully", "merge_id": merge_id}
     except Exception as e:
         conn.rollback()
         return {"status": "error", "message": str(e)}
@@ -1578,7 +1616,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                     SET menu_item_id = ?, variant_id = ?
                     WHERE order_item_addon_id = ?
                 """, (source_id, addon_row["old_variant_id"], addon_row["order_item_addon_id"]))
-        elif history_kind == "resolution_variant_v1":
+        elif history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
             for mapping_row in history_payload.get("mapping_rows", []):
                 cursor.execute("""
                     UPDATE menu_item_variants
@@ -1643,7 +1681,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
         for mid in [target_id, source_id]:
             _recalculate_menu_item_stats(cursor, mid)
 
-        if history_kind == "resolution_variant_v1":
+        if history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
             for mid in [target_id, source_id]:
                 _sync_menu_item_resolution_state(cursor, mid)
 
@@ -1659,7 +1697,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
         }
         clear_item_models = False
         clear_volume_models = False
-        if history_kind == "resolution_variant_v1" and source_id == target_id:
+        if history_kind in ("resolution_variant_v1", "order_item_remap_v1") and source_id == target_id:
             cleared_volume_caches = _clear_volume_forecast_cache(cursor)
             clear_volume_models = True
         else:

@@ -88,22 +88,6 @@ class ResolveVariantRequest(BaseModel):
     new_variant_name: Optional[str] = None
 
 
-# --- Resolutions Models ---
-
-class ResolutionMergeRequest(BaseModel):
-    """Request to merge menu items via resolutions endpoint"""
-    menu_item_id: str
-    target_menu_item_id: str
-
-
-class RenameRequest(BaseModel):
-    """Request to rename a menu item"""
-    menu_item_id: str
-    new_name: str
-    new_type: str
-
-
-
 # --- AI Mode Models ---
 
 class AIQueryRequest(BaseModel):

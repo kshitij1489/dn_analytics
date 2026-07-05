@@ -80,6 +80,47 @@ class MenuMappingVerificationSyncTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(row["is_verified"]), 1)
 
+    def test_verification_guard_uses_own_stream_sequence(self) -> None:
+        # assignment_seq comes from the menu-merge table's id space; a
+        # verification event with a numerically smaller id from its OWN table
+        # must still apply (the two sequences are not comparable).
+        from src.core.menu_assignment_schema import ensure_assignment_sync_schema
+        from src.core.menu_mapping_verification_sync import (
+            _apply_verification_by_order_item_id,
+        )
+
+        ensure_assignment_sync_schema(self.conn)
+        self.conn.execute(
+            "UPDATE menu_item_variants SET assignment_seq = 100 WHERE order_item_id = 'oid-1'"
+        )
+        self.conn.commit()
+
+        mid = _apply_verification_by_order_item_id(self.conn, "oid-1", 1, server_seq=5)
+        self.assertEqual(mid, "m1")
+        row = self.conn.execute(
+            "SELECT is_verified, verification_seq, assignment_seq FROM menu_item_variants WHERE order_item_id = 'oid-1'"
+        ).fetchone()
+        self.assertEqual(int(row["is_verified"]), 1)
+        self.assertEqual(int(row["verification_seq"]), 5)
+        self.assertEqual(int(row["assignment_seq"]), 100)
+
+        # A verification event older than the last one in its own stream is
+        # skipped as stale.
+        _apply_verification_by_order_item_id(self.conn, "oid-1", 0, server_seq=3)
+        row = self.conn.execute(
+            "SELECT is_verified, verification_seq FROM menu_item_variants WHERE order_item_id = 'oid-1'"
+        ).fetchone()
+        self.assertEqual(int(row["is_verified"]), 1)
+        self.assertEqual(int(row["verification_seq"]), 5)
+
+        # A newer one applies.
+        _apply_verification_by_order_item_id(self.conn, "oid-1", 0, server_seq=7)
+        row = self.conn.execute(
+            "SELECT is_verified, verification_seq FROM menu_item_variants WHERE order_item_id = 'oid-1'"
+        ).fetchone()
+        self.assertEqual(int(row["is_verified"]), 0)
+        self.assertEqual(int(row["verification_seq"]), 7)
+
     def test_pull_idempotent(self) -> None:
         record_menu_mapping_verification_events(
             self.conn,

@@ -231,7 +231,11 @@ def apply_menu_bootstrap_snapshot(
     assignments = _extract_snapshot_assignments(cluster_state)
     _write_menu_bootstrap_backups(id_maps, cluster_state)
 
-    if not perform_seeding(conn):
+    # seed_only pulls seed the catalog only: menu_item_variants rows are per-
+    # order-item assignments owned by the assignment sync stream, and a frozen
+    # snapshot must never roll them back past the assignment cursor (I6).
+    seed_mappings = apply_mode == "seed_and_relink_orders"
+    if not perform_seeding(conn, seed_mappings=seed_mappings):
         return {
             "items_seeded": 0,
             "variants_seeded": 0,

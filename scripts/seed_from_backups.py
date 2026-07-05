@@ -14,8 +14,15 @@ from src.core.utils.path_helper import get_resource_path
 from utils.menu_item_variant_enforcement import backfill_menu_items_missing_variant_mappings
 from utils.variant_metadata import infer_variant_metadata
 
-def perform_seeding(conn):
-    """Restore menu data from JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json)."""
+def perform_seeding(conn, seed_mappings=True):
+    """Restore menu data from JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json).
+
+    seed_mappings=False seeds the catalog only (menu_items, variants) and skips
+    the per-order-item menu_item_variants upserts. Routine cloud pulls use this
+    so a frozen snapshot can never overwrite assignments owned by the
+    assignment sync stream (sync conflict plan C4.1); explicit restore flows
+    keep the default full behavior.
+    """
     # Paths
     archive_dir = Path(get_resource_path("data"))
     cluster_state_path = archive_dir / "cluster_state_backup.json"
@@ -79,24 +86,27 @@ def perform_seeding(conn):
             variants_count += 1
             
         # 3. Insert Mappings (menu_item_variants)
-        print("Seeding Mappings...")
         mappings_count = 0
-        for key, orders in cluster_state.items():
-            menu_item_id = key.split(":")[0]
-            for order_item_id, items in orders.items():
-                seen_variants = set()
-                for _, variant_id in items:
-                    if variant_id not in seen_variants:
-                        cursor.execute("""
-                            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-                            VALUES (?, ?, ?, 1)
-                            ON CONFLICT (order_item_id) DO UPDATE SET
-                                menu_item_id = excluded.menu_item_id,
-                                variant_id = excluded.variant_id,
-                                is_verified = 1
-                        """, (str(order_item_id), menu_item_id, variant_id))
-                        seen_variants.add(variant_id)
-                        mappings_count += 1
+        if seed_mappings:
+            print("Seeding Mappings...")
+            for key, orders in cluster_state.items():
+                menu_item_id = key.split(":")[0]
+                for order_item_id, items in orders.items():
+                    seen_variants = set()
+                    for _, variant_id in items:
+                        if variant_id not in seen_variants:
+                            cursor.execute("""
+                                INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
+                                VALUES (?, ?, ?, 1)
+                                ON CONFLICT (order_item_id) DO UPDATE SET
+                                    menu_item_id = excluded.menu_item_id,
+                                    variant_id = excluded.variant_id,
+                                    is_verified = 1
+                            """, (str(order_item_id), menu_item_id, variant_id))
+                            seen_variants.add(variant_id)
+                            mappings_count += 1
+        else:
+            print("Skipping mapping seed (catalog-only mode)...")
         
         stub_count = backfill_menu_items_missing_variant_mappings(conn, cursor=cursor)
         conn.commit()

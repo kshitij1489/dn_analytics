@@ -33,7 +33,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 [FastAPI - routers/ai.py]
          │
          ▼
-[services/ai_service.py - process_chat]
+[ai_mode/orchestrator.py - process_chat]
          │
          ├─► (NEW) Spelling correction
          ├─► Intent recognition (classify_intent)
@@ -51,17 +51,17 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 
 ### Spelling correction & pipeline
 
-- [x] **1.1** Add a spelling/grammar correction step in `ai_service.py` (before `classify_intent`).
+- [x] **1.1** Add a spelling/grammar correction step in `ai_mode/orchestrator.py` (before `classify_intent`).
   - Input: raw user `prompt`; output: corrected string.
   - Use a small/fast LLM call (e.g. same model with a short system prompt, or a dedicated small model) so latency stays low.
-- [x] **1.2** Add a prompt in `services/prompts.py` for correction (e.g. “Correct typos and fix obvious grammar; preserve meaning and return only the corrected question”).
+- [x] **1.2** Add a prompt in `ai_mode/prompts/prompt_ai_mode.py` for correction (e.g. “Correct typos and fix obvious grammar; preserve meaning and return only the corrected question”).
 - [x] **1.3** Use the corrected text for all downstream steps (intent, SQL, chart, etc.) and optionally log both raw and corrected in `ai_logs` for debugging.
 
 ### Intent & action vocabulary
 
 - [x] **2.1** Define an explicit list of **actions** (e.g. `RUN_SQL`, `GENERATE_CHART`, `GENERATE_SUMMARY`, `GENERATE_REPORT`, `GENERAL_CHAT`, `ASK_CLARIFICATION`). Map current intents to these.
-- [x] **2.2** Extend the router prompt in `prompts.py` so the LLM returns **intent + suggested sequence** (e.g. one or more actions in order), or a single action for now.
-- [x] **2.3** Add a simple **action planner** in `ai_service.py`: given intent (and later, multiple intents), return an ordered list of action identifiers.
+- [x] **2.2** Extend the router prompt in `ai_mode/prompts/prompt_ai_mode.py` so the LLM returns **intent + suggested sequence** (e.g. one or more actions in order), or a single action for now.
+- [x] **2.3** Add a simple **action planner** in `ai_mode/orchestrator.py`: given intent (and later, multiple intents), return an ordered list of action identifiers.
 
 ### Multi-step execution
 
@@ -271,7 +271,7 @@ Use this to trace code paths when reviewing the implementation.
 │  API — src/api/routers/ai.py                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  POST /chat → process_chat(prompt, conn, history, last_ai_was_clarification)      │
-│  (from services.ai_service → ai_mode.orchestrator.process_chat)                    │
+│  (ai_mode.orchestrator.process_chat)                                                │
 └─────────────────────────────────────────────────────────────────────────────────┘
                                         │
                                         ▼

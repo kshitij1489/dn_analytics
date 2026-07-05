@@ -107,6 +107,63 @@ class MenuBootstrapPullTests(unittest.TestCase):
         self.assertEqual(variant["unit"], "ML")
         self.assertEqual(variant["value"], 750)
 
+    def test_apply_menu_bootstrap_snapshot_seed_only_never_touches_assignments(self) -> None:
+        # Routine pulls run seed_only: the frozen snapshot may carry stale
+        # per-order-item mappings and must only seed the catalog (I6).
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
+            VALUES ('101', 'item_newer_truth', 'variant_newer', 1)
+            """
+        )
+        self.conn.commit()
+
+        id_maps = {
+            "menu_id_to_str": {"item_cold_coffee": "Cold Coffee"},
+            "variant_id_to_str": {"variant_large": "Large"},
+            "variant_id_to_meta": {"variant_large": {"unit": "ML", "value": 750}},
+            "type_id_to_str": {"type_beverage": "Beverage"},
+        }
+        cluster_state = {
+            "item_cold_coffee:type_beverage": {
+                "101": [["101", "variant_large"]],
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
+                "scripts.seed_from_backups.get_resource_path",
+                return_value=str(data_dir),
+            ):
+                result = apply_menu_bootstrap_snapshot(
+                    self.conn,
+                    id_maps,
+                    cluster_state,
+                    apply_mode="seed_only",
+                )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["order_items_relinked"], 0)
+
+        # Catalog seeded...
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_cold_coffee'"
+            ).fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM variants WHERE variant_id = 'variant_large'"
+            ).fetchone()
+        )
+        # ...but the assignment row is untouched by the snapshot.
+        mapping = self.conn.execute(
+            "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id = '101'"
+        ).fetchone()
+        self.assertEqual(mapping["menu_item_id"], "item_newer_truth")
+        self.assertEqual(mapping["variant_id"], "variant_newer")
+
     def test_apply_menu_bootstrap_snapshot_infers_variant_metadata_for_legacy_snapshots(self) -> None:
         id_maps = {
             "menu_id_to_str": {"item_family_tub": "Family Tub"},

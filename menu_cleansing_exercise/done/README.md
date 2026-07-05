@@ -9,7 +9,6 @@
 | Path | Note |
 |------|------|
 | `combo_cluster_review/` | Frozen export snapshot (CSV + Markdown). Historical reference only. |
-| `combo_cluster_review_test/` | Alternate / test export snapshot. Historical reference only. |
 | `analytics.before_cluster_fix_1_2.db` | SQLite snapshot before merges **61–62** (see section below). |
 | `analytics.before_banoffee_sample_fix.db` | SQLite snapshot before merge **63** (Banoffee row). |
 | `drinks_cluster_review/` | Drinks-only cluster export (`--type Drinks`). Moved from earlier `tmp/` layouts; see **Drinks** section below. |

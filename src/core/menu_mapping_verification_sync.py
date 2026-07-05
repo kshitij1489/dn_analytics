@@ -181,15 +181,16 @@ def _apply_verification_by_order_item_id(
     Set is_verified on the mapping row keyed by order_item_id (POS-canonical).
     Returns menu_item_id if the event was handled (row exists), else None.
 
-    Last-write-wins in stream order, with the assignment seq guard (plan C3.5):
-    if the row already carries an assignment_seq higher than this event's
-    server_seq, the flag write is skipped as stale. Still flag-only by design —
-    mapping corrections ride the merge stream. assignment_seq is not stamped
-    here because verification events sequence on a different server table.
+    Last-write-wins in stream order, guarded by verification_seq — the
+    verification stream's own server id space. assignment_seq belongs to the
+    separate menu-merge table and is never compared against (the two id spaces
+    are independent, so a cross-stream comparison could permanently skip valid
+    flag updates). Still flag-only by design — mapping corrections ride the
+    merge stream.
     """
     row = conn.execute(
         """
-        SELECT menu_item_id, assignment_seq
+        SELECT menu_item_id, verification_seq
         FROM menu_item_variants
         WHERE order_item_id = ?
         LIMIT 1
@@ -200,20 +201,21 @@ def _apply_verification_by_order_item_id(
         return None
 
     menu_item_id = str(row["menu_item_id"]) if row["menu_item_id"] else None
-    row_seq = coerce_server_seq(row["assignment_seq"])
+    row_seq = coerce_server_seq(row["verification_seq"])
     event_seq = coerce_server_seq(server_seq)
     if row_seq is not None and event_seq is not None and event_seq < row_seq:
-        # Stale relative to a newer assignment; treat as handled without writing.
+        # Stale relative to a newer verification event; treat as handled.
         return menu_item_id
 
     conn.execute(
         """
         UPDATE menu_item_variants
         SET is_verified = ?,
+            verification_seq = COALESCE(?, verification_seq),
             updated_at = CURRENT_TIMESTAMP
         WHERE order_item_id = ?
         """,
-        (is_verified, order_item_id),
+        (is_verified, event_seq, order_item_id),
     )
     return menu_item_id
 

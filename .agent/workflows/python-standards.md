@@ -50,9 +50,8 @@ src/api/
 ├── job_manager.py      # Async job handling
 └── routers/
     ├── insights.py     # /api/insights/* endpoints
-    ├── menu.py         # /api/menu/* endpoints
-    ├── orders.py       # /api/orders/* endpoints
-    └── resolutions.py  # /api/resolutions/* endpoints
+    ├── menu.py         # /api/menu/* endpoints (includes /resolutions/*)
+    └── orders.py       # /api/orders/* endpoints
 ```
 
 ---

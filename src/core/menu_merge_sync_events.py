@@ -267,7 +267,9 @@ def _build_emit_assignments(
     destination = source_id if undo else target_id
     assignments: List[Dict[str, Any]] = []
 
-    if kind == "resolution_variant_v1" and isinstance(history_payload, dict):
+    # order_item_remap_v1 shares the resolution shape: mapping_rows carry the
+    # explicit old/new per-order-item state.
+    if kind in ("resolution_variant_v1", "order_item_remap_v1") and isinstance(history_payload, dict):
         for row in history_payload.get("mapping_rows", []):
             if not isinstance(row, dict):
                 continue
@@ -359,6 +361,22 @@ def _build_merge_payload(conn, history_row: Dict[str, Any], undo: bool = False) 
                 "source_variant_name": history_payload.get("source_variant_name") or _lookup_variant_name(conn, source_variant_id),
                 "target_variant_id": target_variant_id,
                 "target_variant_name": history_payload.get("target_variant_name") or _lookup_variant_name(conn, target_variant_id),
+            },
+            "history_payload": history_payload,
+        }
+    elif history_kind == "order_item_remap_v1":
+        source_variant_id = _normalize_variant_key(history_payload.get("source_variant_id"))
+        target_variant_id = _normalize_variant_key(history_payload.get("target_variant_id"))
+        # order_item_id participates in the signature so two remaps between the
+        # same clusters but for different order items never dedupe together.
+        payload = {
+            "kind": "order_item_remap_v1",
+            "remap": {
+                "order_item_id": str(history_payload.get("order_item_id") or ""),
+                "source_variant_id": source_variant_id,
+                "source_variant_name": _lookup_variant_name(conn, source_variant_id),
+                "target_variant_id": target_variant_id,
+                "target_variant_name": _lookup_variant_name(conn, target_variant_id),
             },
             "history_payload": history_payload,
         }
@@ -465,8 +483,16 @@ def backfill_menu_merge_sync_events(conn) -> Dict[str, int]:
     ensure_menu_merge_sync_tables(conn)
 
     counts = {"applied": 0}
+    # Only locally-authored history rows belong in the outbox. Rows written by
+    # the remote applier carry origin='remote' (older local rows predate the
+    # column and are NULL); re-emitting them would republish a peer's decision
+    # under a new event id / server_seq and duplicate or reorder it.
     rows = conn.execute(
-        "SELECT merge_id FROM merge_history ORDER BY merge_id ASC"
+        """
+        SELECT merge_id FROM merge_history
+        WHERE COALESCE(origin, 'local') != 'remote'
+        ORDER BY merge_id ASC
+        """
     ).fetchall()
     for row in rows:
         merge_id = int(row["merge_id"])

@@ -5,6 +5,10 @@ Adds the columns and tables the assignment-based applier needs on top of the
 long-lived local schema:
 
 - menu_item_variants.assignment_seq: highest server_seq applied to this row.
+- menu_item_variants.verification_seq: highest verification-stream server_seq
+  applied to this row's is_verified flag. Kept separate from assignment_seq
+  because the merge and verification event tables have independent server id
+  spaces and their sequences are not comparable.
 - menu_item_variants.pending_local: row was rewritten locally and not yet
   acknowledged by the server echo of our own event.
 - merge_history.origin: 'remote' for rows written by the remote applier, NULL
@@ -42,6 +46,7 @@ def _ensure_column(conn, table_name: str, column_name: str, ddl: str) -> None:
 
 def ensure_assignment_sync_schema(conn) -> None:
     _ensure_column(conn, "menu_item_variants", "assignment_seq", "assignment_seq INTEGER")
+    _ensure_column(conn, "menu_item_variants", "verification_seq", "verification_seq INTEGER")
     _ensure_column(conn, "menu_item_variants", "pending_local", "pending_local INTEGER DEFAULT 0")
     _ensure_column(conn, "merge_history", "origin", "origin TEXT")
     _ensure_column(conn, "menu_merge_remote_events", "server_seq", "server_seq INTEGER")

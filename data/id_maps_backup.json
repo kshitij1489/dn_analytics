@@ -91,7 +91,6 @@
     "0e2da5f7-b937-544d-94b6-d638bcb9d21e": "Salted Caramel Ice Cream",
     "558c20ea-f932-51de-ad32-685ed61bcb3a": "200 Pidge/Porter Delivery Charges",
     "2f7af73a-b420-5c75-9f9b-80e20b67b88f": "Dates Rose And Nuts (80gm)",
-    "be8d8dcf-6163-5ef5-ba7f-c08f8e599005": "Old Fashioned Vanilla Ice Cream ( Recommended )",
     "8b27ef93-5983-5d38-9b2a-db7c28694e8a": "Coffee With Almonds (80gm)",
     "364d43ea-529c-5542-b7dc-e3841c0f1476": "Coffee With Almonds",
     "2676bad5-9815-5142-bd7a-eef037e9d2d5": "Water 500ml",
@@ -100,7 +99,13 @@
     "437904ea-db4b-5359-8aa3-944e72b81c2e": "Salted Caramel (80gm)",
     "6fdcc758-554e-5920-94be-78dd00671556": "Pistachio (80gm)",
     "a42ca64e-7139-5832-8bc3-a8a41f0e3a9a": "Pistachio (110gm)",
-    "fb97e613-0581-5ef7-893c-0bc332497aaa": "Salted Caramel (60gm)"
+    "fb97e613-0581-5ef7-893c-0bc332497aaa": "Salted Caramel (60gm)",
+    "94ef9647-4895-5e12-8c73-dc56f3b16e89": "Paan & Gulkand Ice Cream",
+    "24e0b4d4-6535-58e6-b9a7-b7ffbb565770": "Chocolate Overload",
+    "9d84af2f-7d38-53d7-9c66-cd95853bdf44": "Coconut & Pineapple",
+    "4eb61886-91d1-5648-96e8-a6f662ff1683": "Dates & Chocolate",
+    "eb6da8ab-301c-5723-8cc9-696d41ab7917": "Dates With Fig & Orange",
+    "00ee108c-d7e8-59c1-a247-5898b5407e7d": "Old Fashion Vanilla"
   },
   "variant_id_to_str": {
     "0a41ed3b-37e4-540b-bc5c-407631835802": "PERFECT_PLENTY_200GMS",

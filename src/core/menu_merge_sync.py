@@ -131,6 +131,16 @@ def _event_signature(source_id: str, target_id: str, merge_payload: Dict[str, An
             "source_variant_id": _normalize_variant_key(resolution.get("source_variant_id")),
             "target_variant_id": _normalize_variant_key(resolution.get("target_variant_id")),
         }
+    elif kind == "order_item_remap_v1":
+        remap = merge_payload.get("remap", {})
+        if not isinstance(remap, dict):
+            remap = {}
+        # order_item_id keeps two remaps between the same clusters distinct.
+        signature["remap"] = {
+            "order_item_id": str(remap.get("order_item_id") or ""),
+            "source_variant_id": _normalize_variant_key(remap.get("source_variant_id")),
+            "target_variant_id": _normalize_variant_key(remap.get("target_variant_id")),
+        }
     return signature
 
 
@@ -163,6 +173,12 @@ def _history_signature(history_row: Dict[str, Any]) -> Dict[str, Any]:
         merge_payload["variant_mappings"] = list(deduped.values())
     elif history_kind == "resolution_variant_v1":
         merge_payload["resolution"] = {
+            "source_variant_id": _normalize_variant_key(history_payload.get("source_variant_id")),
+            "target_variant_id": _normalize_variant_key(history_payload.get("target_variant_id")),
+        }
+    elif history_kind == "order_item_remap_v1":
+        merge_payload["remap"] = {
+            "order_item_id": str(history_payload.get("order_item_id") or ""),
             "source_variant_id": _normalize_variant_key(history_payload.get("source_variant_id")),
             "target_variant_id": _normalize_variant_key(history_payload.get("target_variant_id")),
         }
