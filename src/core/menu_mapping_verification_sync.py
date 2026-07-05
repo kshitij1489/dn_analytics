@@ -18,6 +18,8 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from src.core.config.cloud_sync_config import get_cloud_sync_config
+from src.core.menu_assignment_apply import coerce_server_seq
+from src.core.menu_assignment_schema import ensure_assignment_sync_schema
 from src.core.menu_mapping_verification_sync_events import (
     EVENT_BULK_VERIFIED,
     EVENT_REOPENED,
@@ -81,6 +83,7 @@ def _ensure_tables(conn) -> None:
     )
     ensure_menu_sync_quarantine_table(conn)
     ensure_sync_cursor_schema(conn)
+    ensure_assignment_sync_schema(conn)
 
 
 def get_menu_mapping_verification_pull_cursor(conn) -> Optional[str]:
@@ -168,15 +171,42 @@ def _sync_menu_items_after_mapping_verified(conn, menu_item_ids: Set[str]) -> No
         )
 
 
-def _apply_verification_by_order_item_id(conn, order_item_id: str, is_verified: int) -> Optional[str]:
+def _apply_verification_by_order_item_id(
+    conn,
+    order_item_id: str,
+    is_verified: int,
+    server_seq: Optional[int] = None,
+) -> Optional[str]:
     """
     Set is_verified on the mapping row keyed by order_item_id (POS-canonical).
-    Returns menu_item_id if a row was updated, else None.
+    Returns menu_item_id if the event was handled (row exists), else None.
 
-    Uses last-write-wins: the value is overwritten unconditionally without
-    comparing occurred_at timestamps.  See module docstring for rationale.
+    Last-write-wins in stream order, with the assignment seq guard (plan C3.5):
+    if the row already carries an assignment_seq higher than this event's
+    server_seq, the flag write is skipped as stale. Still flag-only by design —
+    mapping corrections ride the merge stream. assignment_seq is not stamped
+    here because verification events sequence on a different server table.
     """
-    cur = conn.execute(
+    row = conn.execute(
+        """
+        SELECT menu_item_id, assignment_seq
+        FROM menu_item_variants
+        WHERE order_item_id = ?
+        LIMIT 1
+        """,
+        (order_item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    menu_item_id = str(row["menu_item_id"]) if row["menu_item_id"] else None
+    row_seq = coerce_server_seq(row["assignment_seq"])
+    event_seq = coerce_server_seq(server_seq)
+    if row_seq is not None and event_seq is not None and event_seq < row_seq:
+        # Stale relative to a newer assignment; treat as handled without writing.
+        return menu_item_id
+
+    conn.execute(
         """
         UPDATE menu_item_variants
         SET is_verified = ?,
@@ -185,13 +215,7 @@ def _apply_verification_by_order_item_id(conn, order_item_id: str, is_verified: 
         """,
         (is_verified, order_item_id),
     )
-    if not cur.rowcount:
-        return None
-    row = conn.execute(
-        "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = ? LIMIT 1",
-        (order_item_id,),
-    ).fetchone()
-    return str(row["menu_item_id"]) if row and row["menu_item_id"] else None
+    return menu_item_id
 
 
 def _defer_event(conn, remote_event_id: str, payload: Dict[str, Any]) -> None:
@@ -234,7 +258,7 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                 oid = str(payload.get("order_item_id") or "").strip()
                 target = int(payload.get("is_verified", 1))
                 if oid:
-                    mid = _apply_verification_by_order_item_id(conn, oid, target)
+                    mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
                     if mid:
                         ok = True
                         mids.add(mid)
@@ -250,7 +274,7 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                         target = int(m.get("is_verified", 1))
                         if not oid:
                             continue
-                        mid = _apply_verification_by_order_item_id(conn, oid, target)
+                        mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
                         if mid:
                             ok = True
                             mids.add(mid)
@@ -260,7 +284,7 @@ def flush_deferred_menu_mapping_verifications(conn) -> Dict[str, int]:
                 oid = str(payload.get("order_item_id") or "").strip()
                 target = int(payload.get("is_verified", 0))
                 if oid:
-                    mid = _apply_verification_by_order_item_id(conn, oid, target)
+                    mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=payload.get("server_seq"))
                     if mid:
                         ok = True
                         mids.add(mid)
@@ -309,7 +333,7 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
             deferred = True
             _defer_event(conn, remote_event_id, event)
         else:
-            mid = _apply_verification_by_order_item_id(conn, oid, target)
+            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
             if not mid:
                 deferred = True
                 _defer_event(conn, remote_event_id, event)
@@ -340,7 +364,7 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
                 continue  # skip this row for now, but keep processing others
             prepared.append((oid, target))
         for oid, target in prepared:
-            mid = _apply_verification_by_order_item_id(conn, oid, target)
+            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
             if mid:
                 menu_item_ids.add(mid)
         if has_missing:
@@ -359,7 +383,7 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
             deferred = True
             _defer_event(conn, remote_event_id, event)
         else:
-            mid = _apply_verification_by_order_item_id(conn, oid, target)
+            mid = _apply_verification_by_order_item_id(conn, oid, target, server_seq=event.get("server_seq"))
             if not mid:
                 deferred = True
                 _defer_event(conn, remote_event_id, event)

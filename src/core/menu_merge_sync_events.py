@@ -7,12 +7,15 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
+from src.core.menu_assignment_schema import ensure_assignment_sync_schema
 from src.core.menu_sync_quarantine import ensure_menu_sync_quarantine_table
 from src.core.sync_identity import get_sync_attribution
 from utils import menu_utils
 
 
-SCHEMA_VERSION = 1
+# v2 events additionally carry merge_payload.assignments (explicit per-order-item
+# rows) so peers can apply them without the source cluster still existing.
+SCHEMA_VERSION = 2
 EVENT_TYPE_APPLIED = "menu_merge.applied"
 EVENT_TYPE_UNDONE = "menu_merge.undone"
 
@@ -87,6 +90,7 @@ def ensure_menu_merge_sync_tables(conn) -> None:
         """
     )
     ensure_menu_sync_quarantine_table(conn)
+    ensure_assignment_sync_schema(conn)
 
 
 def has_menu_merge_sync_table(conn) -> bool:
@@ -227,7 +231,108 @@ def _dedupe_variant_mappings(conn, rows: List[Dict[str, Any]]) -> List[Dict[str,
     return list(deduped.values())
 
 
-def _build_merge_payload(conn, history_row: Dict[str, Any]) -> Dict[str, Any]:
+def _current_mapping_state(conn, order_item_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT variant_id, is_verified
+        FROM menu_item_variants
+        WHERE order_item_id = ?
+        LIMIT 1
+        """,
+        (str(order_item_id),),
+    ).fetchone()
+    if not row:
+        return None
+    return {"variant_id": row["variant_id"], "is_verified": int(row["is_verified"] or 0)}
+
+
+def _build_emit_assignments(
+    conn,
+    history_row: Dict[str, Any],
+    history_payload: Any,
+    kind: str,
+    undo: bool,
+) -> List[Dict[str, Any]]:
+    """
+    Build the explicit per-order-item assignment list for a v2 event
+    (plan §2.2). Emit is called inside the same transaction as the merge (or
+    undo), after its row updates, so reading current row state gives the
+    post-operation values — the applier can stay stateless.
+
+    For undo events the list is the PRIOR assignments (the state the undo
+    restored), so a peer applies the undo as an ordinary LWW write.
+    """
+    source_id = str(history_row["source_id"])
+    target_id = str(history_row["target_id"])
+    destination = source_id if undo else target_id
+    assignments: List[Dict[str, Any]] = []
+
+    if kind == "resolution_variant_v1" and isinstance(history_payload, dict):
+        for row in history_payload.get("mapping_rows", []):
+            if not isinstance(row, dict):
+                continue
+            order_item_id = str(row.get("order_item_id") or "").strip()
+            if not order_item_id:
+                continue
+            if undo:
+                menu_item_id = str(row.get("old_menu_item_id") or source_id)
+                variant_value = row.get("old_variant_id")
+                verified = int(row.get("old_is_verified", 0) or 0)
+            else:
+                menu_item_id = str(row.get("new_menu_item_id") or target_id)
+                variant_value = row.get("new_variant_id")
+                verified = int(row.get("new_is_verified", 1) or 0)
+            assignments.append(
+                {
+                    "order_item_id": order_item_id,
+                    "menu_item_id": menu_item_id,
+                    "variant_id": None if variant_value in (None, "None", menu_utils.NULL_VARIANT_SENTINEL) else str(variant_value),
+                    "is_verified": verified,
+                }
+            )
+        return assignments
+
+    if kind == "variant_merge_v1" and isinstance(history_payload, dict):
+        for row in history_payload.get("mapping_rows", []):
+            if not isinstance(row, dict):
+                continue
+            order_item_id = str(row.get("order_item_id") or "").strip()
+            if not order_item_id:
+                continue
+            variant_value = row.get("old_variant_id") if undo else row.get("new_variant_id")
+            assignment: Dict[str, Any] = {
+                "order_item_id": order_item_id,
+                "menu_item_id": destination,
+                "variant_id": None if variant_value in (None, "None", menu_utils.NULL_VARIANT_SENTINEL) else str(variant_value),
+            }
+            state = _current_mapping_state(conn, order_item_id)
+            if state is not None:
+                assignment["is_verified"] = state["is_verified"]
+            assignments.append(assignment)
+        return assignments
+
+    # basic_merge_v1 (and legacy list payloads): affected ids move wholesale;
+    # emit the row's current variant/verify values so the applier is stateless.
+    if isinstance(history_payload, dict):
+        affected_ids = history_payload.get("affected_order_item_ids", [])
+    elif isinstance(history_payload, list):
+        affected_ids = history_payload
+    else:
+        affected_ids = []
+    for order_item_id in affected_ids or []:
+        normalized_id = str(order_item_id or "").strip()
+        if not normalized_id:
+            continue
+        assignment = {"order_item_id": normalized_id, "menu_item_id": destination}
+        state = _current_mapping_state(conn, normalized_id)
+        if state is not None:
+            assignment["variant_id"] = state["variant_id"]
+            assignment["is_verified"] = state["is_verified"]
+        assignments.append(assignment)
+    return assignments
+
+
+def _build_merge_payload(conn, history_row: Dict[str, Any], undo: bool = False) -> Dict[str, Any]:
     history_payload = _normalize_history_payload(history_row.get("affected_order_items"))
     if isinstance(history_payload, dict):
         history_kind = str(history_payload.get("kind") or "").strip()
@@ -268,9 +373,18 @@ def _build_merge_payload(conn, history_row: Dict[str, Any]) -> Dict[str, Any]:
         "target_id": str(history_row["target_id"]),
         "merge_payload": payload,
     }
+    # Signature is computed BEFORE assignments are attached so v1↔v2 events for
+    # the same operation keep matching in dedupe (plan C3.2).
     payload["operation_signature"] = hashlib.sha256(
         json.dumps(signature_payload, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+    payload["assignments"] = _build_emit_assignments(
+        conn,
+        history_row,
+        history_payload,
+        str(payload["kind"]),
+        undo=undo,
+    )
     return payload
 
 
@@ -290,7 +404,7 @@ def _build_event_payload(conn, history_row: Dict[str, Any], event_type: str, rev
         "attribution": get_sync_attribution(conn),
         "source_item": source_item,
         "target_item": target_item,
-        "merge_payload": _build_merge_payload(conn, history_row),
+        "merge_payload": _build_merge_payload(conn, history_row, undo=(event_type == EVENT_TYPE_UNDONE)),
         "local_refs": {
             "merge_id": int(history_row["merge_id"]),
         },

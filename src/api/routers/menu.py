@@ -460,12 +460,31 @@ def pull_menu_mapping_verifications_from_cloud(limit: int = 100, conn=Depends(ge
 
 @router.get("/sync-conflicts")
 def get_sync_conflicts(include_resolved: bool = False, conn=Depends(get_db)):
-    """List quarantined sync events (conflicts/poison events) for user review."""
+    """List quarantined sync events and supersede notices for user review."""
+    from src.core.menu_assignment_apply import list_supersede_notices
     from src.core.menu_sync_quarantine import list_sync_conflicts
 
     conflicts = list_sync_conflicts(conn, include_resolved=include_resolved)
     unresolved_count = sum(1 for conflict in conflicts if not conflict.get("resolved_at"))
-    return {"count": unresolved_count, "conflicts": conflicts}
+    notices = list_supersede_notices(conn, include_acknowledged=include_resolved)
+    open_notices = sum(1 for notice in notices if not notice.get("acknowledged_at"))
+    return {
+        "count": unresolved_count + open_notices,
+        "conflicts": conflicts,
+        "supersede_notices": notices,
+    }
+
+
+@router.post("/sync-conflicts/notices/{notice_id}/acknowledge")
+def acknowledge_supersede_notice_endpoint(notice_id: int, conn=Depends(get_db)):
+    """Acknowledge a 'your resolution was superseded' notice."""
+    from src.core.menu_assignment_apply import acknowledge_supersede_notice
+
+    acknowledged = acknowledge_supersede_notice(conn, notice_id)
+    if not acknowledged:
+        raise HTTPException(status_code=404, detail="Open supersede notice not found")
+    conn.commit()
+    return {"status": "ok", "notice_id": notice_id}
 
 
 @router.post("/sync-conflicts/{remote_event_id}/dismiss")

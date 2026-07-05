@@ -4,9 +4,17 @@ Remote pull/apply for menu merge collaboration events.
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from src.core.config.cloud_sync_config import get_cloud_sync_config
+from src.core.menu_assignment_apply import (
+    apply_assignments,
+    coerce_server_seq,
+    extract_assignments,
+    insert_supersede_notice,
+    is_assignment_apply_enabled,
+    lookup_event_by_server_seq,
+)
 from src.core.menu_merge_sync_events import (
     EVENT_TYPE_APPLIED,
     EVENT_TYPE_UNDONE,
@@ -226,6 +234,7 @@ def _record_remote_event(
     remote_cursor: Optional[str],
     occurred_at: Optional[str],
     reverts_remote_event_id: Optional[str] = None,
+    server_seq: Optional[int] = None,
 ) -> None:
     conn.execute(
         """
@@ -236,9 +245,10 @@ def _record_remote_event(
             local_merge_id,
             payload,
             remote_cursor,
-            occurred_at
+            occurred_at,
+            server_seq
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             remote_event_id,
@@ -248,6 +258,7 @@ def _record_remote_event(
             json.dumps(payload, sort_keys=True, default=str),
             remote_cursor,
             occurred_at,
+            server_seq,
         ),
     )
 
@@ -305,7 +316,252 @@ def _ensure_variant_exists(conn, variant_id: Any, variant_name: Any) -> None:
     )
 
 
+def _merge_has_local_event(conn, merge_id: int) -> bool:
+    """
+    True when this merge_history row has an outbox event — i.e. the merge was
+    authored on this install (remote-applied merges never emit outbox events).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM menu_merge_sync_events WHERE merge_id = ? LIMIT 1",
+        (int(merge_id),),
+    ).fetchone()
+    return row is not None
+
+
+def _insert_remote_merge_history(
+    conn,
+    event: Dict[str, Any],
+    assignments: List[Dict[str, Any]],
+) -> Optional[int]:
+    """
+    Record a merge_history row (origin='remote') for an applied remote event so
+    Resolution History and undo keep working without replaying through
+    menu_utils (plan §2.3 step 4).
+    """
+    source_item = event.get("source_item") if isinstance(event.get("source_item"), dict) else {}
+    target_item = event.get("target_item") if isinstance(event.get("target_item"), dict) else {}
+    source_id = str(source_item.get("menu_item_id") or "").strip()
+    target_id = str(target_item.get("menu_item_id") or "").strip()
+    if not source_id or not target_id:
+        return None
+
+    merge_payload = _normalize_merge_payload(event.get("merge_payload"))
+    history_payload = merge_payload.get("history_payload")
+    if not isinstance(history_payload, (dict, list)):
+        history_payload = {
+            "kind": merge_payload["kind"],
+            "assignments": assignments,
+            "synthesized_from": "assignments_v2",
+        }
+
+    cur = conn.execute(
+        """
+        INSERT INTO merge_history (
+            source_id, target_id, source_name, source_type,
+            affected_order_items, merged_at, origin
+        )
+        VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), 'remote')
+        """,
+        (
+            source_id,
+            target_id,
+            str(source_item.get("name") or source_id),
+            str(source_item.get("type") or "Unknown"),
+            json.dumps(history_payload, sort_keys=True, default=str),
+            str(event.get("occurred_at") or "") or None,
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _notice_for_stale_rows(conn, stale_rows: List[Dict[str, Any]], local_merge_id: Optional[int]) -> None:
+    """
+    Our own event echoed back, but some rows already carry a higher server_seq:
+    a peer's later decision outranked ours between our edit and our ack. The
+    winning value is already on the rows; tell the user (fixes I13's loser
+    notification).
+    """
+    for stale in stale_rows:
+        winner = lookup_event_by_server_seq(conn, stale.get("assignment_seq"))
+        insert_supersede_notice(
+            conn,
+            stale["order_item_id"],
+            local_merge_id,
+            winner["remote_event_id"] if winner else None,
+            winner["attribution"] if winner else None,
+        )
+
+
+def _apply_remote_merge_event_assignments(
+    conn,
+    event: Dict[str, Any],
+    remote_cursor: Optional[str],
+) -> Dict[str, Any]:
+    """Assignment-based apply (plan §2.3) for menu_merge.applied events."""
+    remote_event_id = str(event.get("remote_event_id") or "").strip()
+    if not remote_event_id:
+        raise ValueError("Menu merge event is missing remote_event_id")
+    if _remote_event_exists(conn, remote_event_id):
+        return {"status": "duplicate", "local_merge_id": _lookup_remote_local_merge_id(conn, remote_event_id)}
+
+    assignments = extract_assignments(event)
+    if assignments is None:
+        logger.error(
+            "Menu merge event %s carries no derivable assignments; using legacy cluster replay",
+            remote_event_id,
+        )
+        return _apply_remote_merge_event_legacy(conn, event, remote_cursor)
+
+    server_seq = coerce_server_seq(event.get("server_seq"))
+
+    existing_merge_id = _find_matching_local_merge(conn, event)
+    if existing_merge_id is not None:
+        # Same operation already exists locally. Stamp the server's ordering on
+        # the affected rows and clear pending_local; when it is the echo of our
+        # own event and some rows were meanwhile outranked, notify the user.
+        result = apply_assignments(conn, assignments, server_seq, event, detect_supersede=False)
+        if _merge_has_local_event(conn, existing_merge_id):
+            _notice_for_stale_rows(conn, result["stale_rows"], existing_merge_id)
+        _record_remote_event(
+            conn,
+            remote_event_id=remote_event_id,
+            event_type=EVENT_TYPE_APPLIED,
+            local_merge_id=existing_merge_id,
+            payload=event,
+            remote_cursor=remote_cursor,
+            occurred_at=str(event.get("occurred_at") or ""),
+            server_seq=server_seq,
+        )
+        return {
+            "status": "duplicate",
+            "local_merge_id": existing_merge_id,
+            "touched_menu_item_ids": result["touched_menu_item_ids"],
+        }
+
+    source_item = event.get("source_item")
+    target_item = event.get("target_item")
+    if isinstance(target_item, dict):
+        _ensure_menu_item_exists(conn, target_item)
+    if isinstance(source_item, dict):
+        _ensure_menu_item_exists(conn, source_item)
+
+    result = apply_assignments(conn, assignments, server_seq, event, detect_supersede=True)
+    # Include both endpoints so the batch epilogue garbage-collects a source
+    # item resurrected from the snapshot that ends up with no mappings.
+    for endpoint_item in (source_item, target_item):
+        if isinstance(endpoint_item, dict):
+            endpoint_id = str(endpoint_item.get("menu_item_id") or "").strip()
+            if endpoint_id:
+                result["touched_menu_item_ids"].add(endpoint_id)
+    for superseded in result["superseded"]:
+        insert_supersede_notice(
+            conn,
+            superseded["order_item_id"],
+            None,
+            remote_event_id,
+            event.get("attribution"),
+        )
+
+    local_merge_id = _insert_remote_merge_history(conn, event, assignments)
+    _record_remote_event(
+        conn,
+        remote_event_id=remote_event_id,
+        event_type=EVENT_TYPE_APPLIED,
+        local_merge_id=local_merge_id,
+        payload=event,
+        remote_cursor=remote_cursor,
+        occurred_at=str(event.get("occurred_at") or ""),
+        server_seq=server_seq,
+    )
+    return {
+        "status": "applied",
+        "local_merge_id": local_merge_id,
+        "rows_applied": result["rows_applied"],
+        "rows_stale": len(result["stale_rows"]),
+        "touched_menu_item_ids": result["touched_menu_item_ids"],
+    }
+
+
+def _apply_remote_undo_event_assignments(
+    conn,
+    event: Dict[str, Any],
+    remote_cursor: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Assignment-based apply for menu_merge.undone: the undo is just another LWW
+    write of the prior assignments at its own server_seq (fixes I10 — no need
+    for the original merge to have applied locally).
+    """
+    remote_event_id = str(event.get("remote_event_id") or "").strip()
+    if not remote_event_id:
+        raise ValueError("Menu merge undo event is missing remote_event_id")
+    if _remote_event_exists(conn, remote_event_id):
+        return {"status": "duplicate", "local_merge_id": _lookup_remote_local_merge_id(conn, remote_event_id)}
+
+    assignments = extract_assignments(event)
+    if assignments is None:
+        logger.error(
+            "Menu merge undo event %s carries no derivable assignments; using legacy undo replay",
+            remote_event_id,
+        )
+        return _apply_remote_undo_event_legacy(conn, event, remote_cursor)
+
+    server_seq = coerce_server_seq(event.get("server_seq"))
+    reverted_remote_event_id = str(event.get("reverts_remote_event_id") or "").strip() or None
+
+    local_merge_id = None
+    if reverted_remote_event_id:
+        local_merge_id = _lookup_remote_local_merge_id(conn, reverted_remote_event_id)
+    if local_merge_id is None:
+        local_merge_id = _find_matching_local_merge(conn, event)
+
+    result = apply_assignments(conn, assignments, server_seq, event, detect_supersede=True)
+    for endpoint_key in ("source_item", "target_item"):
+        endpoint_item = event.get(endpoint_key)
+        if isinstance(endpoint_item, dict):
+            endpoint_id = str(endpoint_item.get("menu_item_id") or "").strip()
+            if endpoint_id:
+                result["touched_menu_item_ids"].add(endpoint_id)
+    for superseded in result["superseded"]:
+        insert_supersede_notice(
+            conn,
+            superseded["order_item_id"],
+            local_merge_id,
+            remote_event_id,
+            event.get("attribution"),
+        )
+
+    if local_merge_id is not None:
+        # Mirror local undo semantics: the reverted merge leaves Resolution History.
+        conn.execute("DELETE FROM merge_history WHERE merge_id = ?", (local_merge_id,))
+
+    _record_remote_event(
+        conn,
+        remote_event_id=remote_event_id,
+        event_type=EVENT_TYPE_UNDONE,
+        local_merge_id=local_merge_id,
+        payload=event,
+        remote_cursor=remote_cursor,
+        occurred_at=str(event.get("occurred_at") or ""),
+        reverts_remote_event_id=reverted_remote_event_id,
+        server_seq=server_seq,
+    )
+    return {
+        "status": "applied",
+        "local_merge_id": local_merge_id,
+        "rows_applied": result["rows_applied"],
+        "rows_stale": len(result["stale_rows"]),
+        "touched_menu_item_ids": result["touched_menu_item_ids"],
+    }
+
+
 def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
+    if is_assignment_apply_enabled():
+        return _apply_remote_merge_event_assignments(conn, event, remote_cursor)
+    return _apply_remote_merge_event_legacy(conn, event, remote_cursor)
+
+
+def _apply_remote_merge_event_legacy(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
     remote_event_id = str(event.get("remote_event_id") or "").strip()
     if not remote_event_id:
         raise ValueError("Menu merge event is missing remote_event_id")
@@ -429,6 +685,12 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
 
 
 def _apply_remote_undo_event(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
+    if is_assignment_apply_enabled():
+        return _apply_remote_undo_event_assignments(conn, event, remote_cursor)
+    return _apply_remote_undo_event_legacy(conn, event, remote_cursor)
+
+
+def _apply_remote_undo_event_legacy(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
     remote_event_id = str(event.get("remote_event_id") or "").strip()
     if not remote_event_id:
         raise ValueError("Menu merge undo event is missing remote_event_id")
@@ -523,14 +785,50 @@ def _apply_remote_event_by_type(conn, event: Dict[str, Any], remote_cursor: Opti
     raise ValueError(f"Unsupported remote event_type '{event_type}'")
 
 
-def retry_quarantined_menu_merge_events(conn) -> Dict[str, int]:
+def _run_assignment_batch_epilogue(conn, touched_menu_item_ids: Set[str]) -> None:
+    """
+    Batch epilogue after assignment-based applies (plan §2.3 step 3): stats
+    recompute + resolution-state sync (which garbage-collects menu items left
+    with zero mappings and zero usage), forecast cache clears, one backup
+    export. Best-effort — a failure here must not fail the pull.
+    """
+    menu_item_ids = sorted({str(mid) for mid in touched_menu_item_ids if mid})
+    if not menu_item_ids:
+        return
+
+    cursor = conn.cursor()
+    try:
+        for menu_item_id in menu_item_ids:
+            menu_utils._recalculate_menu_item_stats(cursor, menu_item_id)
+        for menu_item_id in menu_item_ids:
+            menu_utils._sync_menu_item_resolution_state(cursor, menu_item_id)
+        menu_utils._clear_item_and_volume_forecast_cache(cursor, menu_item_ids)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("Assignment apply epilogue failed for items %s", menu_item_ids)
+        return
+    finally:
+        cursor.close()
+
+    try:
+        menu_utils._clear_impacted_models(clear_item_models=True, clear_volume_models=True)
+    except Exception:
+        logger.exception("Assignment apply epilogue could not clear model artifacts")
+    try:
+        menu_utils.export_to_backups(conn)
+    except Exception:
+        logger.exception("Assignment apply epilogue could not export backups")
+
+
+def retry_quarantined_menu_merge_events(conn) -> Dict[str, Any]:
     """
     Re-attempt quarantined menu merge events at the start of each pull.
 
     Events that now apply (e.g. the missing peer state has since arrived) are
     marked resolved; the rest stay quarantined with a bumped fail_count.
     """
-    stats = {"attempted": 0, "resolved": 0}
+    stats: Dict[str, Any] = {"attempted": 0, "resolved": 0, "touched_menu_item_ids": set()}
     for row in fetch_unresolved_quarantined_events(conn, QUARANTINE_STREAM_MENU_MERGE):
         stats["attempted"] += 1
         remote_event_id = str(row["remote_event_id"])
@@ -538,10 +836,12 @@ def retry_quarantined_menu_merge_events(conn) -> Dict[str, int]:
             event = json.loads(row["payload"])
             if not isinstance(event, dict):
                 raise ValueError("Quarantined payload is not a JSON object")
-            _apply_remote_event_by_type(conn, event, None)
+            result = _apply_remote_event_by_type(conn, event, None)
             mark_quarantined_event_resolved(conn, remote_event_id)
             conn.commit()
             stats["resolved"] += 1
+            if isinstance(result, dict):
+                stats["touched_menu_item_ids"] |= set(result.get("touched_menu_item_ids") or ())
         except Exception as exc:
             conn.rollback()
             record_quarantine_retry_failure(conn, remote_event_id, str(exc))
@@ -558,10 +858,13 @@ def pull_and_apply_menu_merge_events(
 ) -> Dict[str, Any]:
     _ensure_pull_tables(conn)
     retry_stats = retry_quarantined_menu_merge_events(conn)
+    touched_menu_item_ids: Set[str] = set(retry_stats.get("touched_menu_item_ids") or ())
 
     cursor_before = cursor if cursor is not None else get_menu_merge_pull_cursor(conn)
     fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
     if fetch_result.get("error"):
+        if touched_menu_item_ids and is_assignment_apply_enabled():
+            _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
         return {
             "events_fetched": 0,
             "merge_events_applied": 0,
@@ -616,6 +919,7 @@ def pull_and_apply_menu_merge_events(
                     stats["events_skipped"] += 1
             else:
                 raise ValueError(f"Unsupported remote event_type '{event_type}'")
+            touched_menu_item_ids |= set(result.get("touched_menu_item_ids") or ())
             conn.commit()
         except Exception as exc:
             # A single un-appliable event (divergent local IDs, already-merged
@@ -660,5 +964,9 @@ def pull_and_apply_menu_merge_events(
         conn.rollback()
         stats["error"] = str(exc)
         return stats
+
+    if touched_menu_item_ids and is_assignment_apply_enabled():
+        _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
+        stats["epilogue_menu_item_ids"] = len(touched_menu_item_ids)
 
     return stats

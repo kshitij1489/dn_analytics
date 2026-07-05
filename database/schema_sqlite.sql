@@ -173,7 +173,9 @@ CREATE TABLE IF NOT EXISTS menu_item_variants (
     delivery_eligible BOOLEAN DEFAULT 1,
     is_verified BOOLEAN DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    assignment_seq INTEGER,           -- highest cloud server_seq applied to this row
+    pending_local INTEGER DEFAULT 0   -- locally rewritten, awaiting server echo ack
 );
 
 -- ============================================================================
@@ -358,7 +360,18 @@ CREATE TABLE IF NOT EXISTS merge_history (
     source_name TEXT NOT NULL,
     source_type TEXT NOT NULL,
     affected_order_items TEXT NOT NULL, -- JSONB as TEXT
-    merged_at TEXT DEFAULT CURRENT_TIMESTAMP
+    merged_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    origin TEXT                         -- 'remote' when written by the sync applier
+);
+
+CREATE TABLE IF NOT EXISTS menu_sync_supersede_notices (
+    notice_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_item_id TEXT NOT NULL,
+    local_merge_id INTEGER,
+    superseded_by_event_id TEXT,
+    attribution TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    acknowledged_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS menu_merge_sync_events (
@@ -383,6 +396,7 @@ CREATE TABLE IF NOT EXISTS menu_merge_remote_events (
     remote_cursor TEXT,
     occurred_at TEXT,
     applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    server_seq INTEGER,                 -- cloud ingestion order of this event
     CHECK (event_type IN ('menu_merge.applied', 'menu_merge.undone'))
 );
 

@@ -10,6 +10,7 @@ from typing import Dict, Any, Tuple, Optional, List
 import json
 from datetime import datetime, timezone
 from scripts.seed_from_backups import export_to_backups
+from src.core.menu_assignment_schema import ensure_assignment_sync_schema
 from utils.id_generator import generate_deterministic_id
 from utils.menu_item_variant_enforcement import ensure_menu_item_has_variant_mapping
 from utils.variant_metadata import infer_variant_metadata
@@ -504,16 +505,19 @@ def _update_rows_for_variant_mapping(
     source_variant_key: str,
 ) -> None:
     decoded_variant_id = _decode_variant_key(source_variant_key)
+    # Mapping rows rewritten locally become provisional until the server echo
+    # acknowledges them (assignment sync, plan Phase C3).
+    pending_clause = ", pending_local = 1, assignment_seq = NULL" if table_name == "menu_item_variants" else ""
     if decoded_variant_id is None:
         cursor.execute(f"""
             UPDATE {table_name}
-            SET menu_item_id = ?, variant_id = ?
+            SET menu_item_id = ?, variant_id = ?{pending_clause}
             WHERE menu_item_id = ? AND variant_id IS NULL
         """, (set_menu_item_id, set_variant_id, source_menu_item_id))
     else:
         cursor.execute(f"""
             UPDATE {table_name}
-            SET menu_item_id = ?, variant_id = ?
+            SET menu_item_id = ?, variant_id = ?{pending_clause}
             WHERE menu_item_id = ? AND variant_id = ?
         """, (set_menu_item_id, set_variant_id, source_menu_item_id, decoded_variant_id))
 
@@ -671,6 +675,7 @@ def merge_menu_items_with_variant_mappings(
         ]
         return {"status": "error", "message": f"Missing variant mapping for: {', '.join(missing_names)}"}
 
+    ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         source = _fetch_menu_item_record(cursor, source_id)
@@ -805,7 +810,8 @@ def merge_menu_items(
     """
     if source_id == target_id:
         return {"status": "error", "message": "Cannot merge item into itself"}
-        
+
+    ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         # 1. Get Details
@@ -850,10 +856,10 @@ def merge_menu_items(
             WHERE menu_item_id = ?
         """, (target_id, source_id))
         
-        # 5. Relink Mappings
+        # 5. Relink Mappings (provisional until the server echo acks them)
         cursor.execute("""
-            UPDATE menu_item_variants 
-            SET menu_item_id = ? 
+            UPDATE menu_item_variants
+            SET menu_item_id = ?, pending_local = 1, assignment_seq = NULL
             WHERE menu_item_id = ?
         """, (target_id, source_id))
         mappings_updated = cursor.rowcount
@@ -905,6 +911,7 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
     """
     Remap an individual order item to a different menu_item cluster.
     """
+    ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -914,14 +921,16 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
         prev_row = cursor.fetchone()
         prev_menu_item_id = str(prev_row[0]) if prev_row else None
 
-        # 1. Update Mapping (SQLite UPSERT)
+        # 1. Update Mapping (SQLite UPSERT); provisional until the echo acks it
         cursor.execute("""
-            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-            VALUES (?, ?, ?, 1)
+            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified, pending_local, assignment_seq)
+            VALUES (?, ?, ?, 1, 1, NULL)
             ON CONFLICT (order_item_id) DO UPDATE SET
                 menu_item_id = excluded.menu_item_id,
                 variant_id = excluded.variant_id,
-                is_verified = 1
+                is_verified = 1,
+                pending_local = 1,
+                assignment_seq = NULL
         """, (order_item_id, new_menu_item_id, new_variant_id))
 
         if prev_menu_item_id and prev_menu_item_id != str(new_menu_item_id):
@@ -1135,6 +1144,7 @@ def resolve_menu_item_variant(
     if not target_variant_id and not normalized_new_variant_name:
         return {"status": "error", "message": "Choose an existing target variant or provide a new variant name"}
 
+    ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         source_item = _fetch_menu_item_record(cursor, source_menu_item_id)
@@ -1311,6 +1321,8 @@ def resolve_menu_item_variant(
                 f"""
                 UPDATE menu_item_variants
                 SET is_verified = 1,
+                    pending_local = 1,
+                    assignment_seq = NULL,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE menu_item_id = ? AND {variant_clause}
                 """,
@@ -1323,6 +1335,8 @@ def resolve_menu_item_variant(
                 SET menu_item_id = ?,
                     variant_id = ?,
                     is_verified = 1,
+                    pending_local = 1,
+                    assignment_seq = NULL,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE menu_item_id = ? AND {variant_clause}
                 """,
@@ -1497,6 +1511,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
     4. Recalculate stats for both items
     5. Delete history record
     """
+    ensure_assignment_sync_schema(conn)
     cursor = conn.cursor()
     try:
         # 1. Get History Entry
@@ -1534,7 +1549,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
             for mapping_row in history_payload.get("mapping_rows", []):
                 cursor.execute("""
                     UPDATE menu_item_variants
-                    SET menu_item_id = ?, variant_id = ?
+                    SET menu_item_id = ?, variant_id = ?, pending_local = 1, assignment_seq = NULL
                     WHERE order_item_id = ?
                 """, (source_id, mapping_row["old_variant_id"], mapping_row["order_item_id"]))
 
@@ -1555,7 +1570,7 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
             for mapping_row in history_payload.get("mapping_rows", []):
                 cursor.execute("""
                     UPDATE menu_item_variants
-                    SET menu_item_id = ?, variant_id = ?, is_verified = ?, updated_at = CURRENT_TIMESTAMP
+                    SET menu_item_id = ?, variant_id = ?, is_verified = ?, pending_local = 1, assignment_seq = NULL, updated_at = CURRENT_TIMESTAMP
                     WHERE order_item_id = ?
                 """, (
                     mapping_row["old_menu_item_id"],
@@ -1593,8 +1608,8 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
             if affected_ids:
                 in_clause, params = _build_in_clause(affected_ids)
                 cursor.execute(f"""
-                    UPDATE menu_item_variants 
-                    SET menu_item_id = ? 
+                    UPDATE menu_item_variants
+                    SET menu_item_id = ?, pending_local = 1, assignment_seq = NULL
                     WHERE order_item_id {in_clause}
                 """, [source_id] + params)
                 
