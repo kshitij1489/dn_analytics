@@ -763,6 +763,10 @@ def merge_menu_items_with_variant_mappings(
 
         conn.commit()
         export_to_backups(conn)
+        if emit_sync_event:
+            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
+
+            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
 
         message = f"Merged '{source_name}' into '{target[1]}' with variant mapping"
@@ -875,9 +879,13 @@ def merge_menu_items(
             record_menu_merge_applied_event(conn, merge_id)
         
         conn.commit()
-        
+
         # 7. Update Backups
         export_to_backups(conn)
+        if emit_sync_event:
+            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
+
+            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
 
         message = f"Merged '{source_name}' into '{target_name}'"
@@ -1425,6 +1433,10 @@ def resolve_menu_item_variant(
 
         conn.commit()
         export_to_backups(conn)
+        if emit_sync_event:
+            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
+
+            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(
             clear_item_models=clear_item_models,
             clear_volume_models=clear_volume_models,
@@ -1671,9 +1683,13 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
         cursor.execute("DELETE FROM merge_history WHERE merge_id = ?", (merge_id,))
         
         conn.commit()
-        
+
         # 8. Update Backups
         export_to_backups(conn)
+        if emit_sync_event:
+            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
+
+            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(
             clear_item_models=clear_item_models,
             clear_volume_models=clear_volume_models,

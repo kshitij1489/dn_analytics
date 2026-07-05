@@ -13,22 +13,50 @@ Used after POS sync when cloud endpoints are configured; failures are logged, no
 """
 
 import logging
+import threading
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
 MERGE_EVENTS_LIMIT = 100
 
+# One pull at a time per install (plan C5.1): the 5-minute scheduler and the
+# button-triggered Sync DB job share this lock so their pulls never interleave.
+CLOUD_PULL_LOCK = threading.Lock()
+
 
 def run_best_effort_cloud_pulls(
     conn,
     *,
     merge_events_limit: int = MERGE_EVENTS_LIMIT,
+    blocking: bool = True,
 ) -> Dict[str, Any]:
     """
     Run cloud pull steps when their pull URLs are configured.
     Returns a summary dict; sets attempted=True if any pull was invoked.
+
+    blocking=False (the scheduler) skips the cycle when another pull holds the
+    lock instead of queueing behind it.
     """
+    if not CLOUD_PULL_LOCK.acquire(blocking=blocking):
+        return {
+            "attempted": False,
+            "skipped": True,
+            "reason": "another cloud pull is in progress",
+        }
+    try:
+        return _run_best_effort_cloud_pulls_locked(
+            conn, merge_events_limit=merge_events_limit
+        )
+    finally:
+        CLOUD_PULL_LOCK.release()
+
+
+def _run_best_effort_cloud_pulls_locked(
+    conn,
+    *,
+    merge_events_limit: int = MERGE_EVENTS_LIMIT,
+) -> Dict[str, Any]:
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.customer_merge_sync import (
         get_customer_merge_pull_endpoint,

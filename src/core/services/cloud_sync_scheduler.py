@@ -125,13 +125,29 @@ async def background_sync_task():
                 # Run Conversation Sync (Async function)
                 try:
                     res_conv = await run_conversation_sync(
-                        conn, 
-                        base_url=base_url, 
+                        conn,
+                        base_url=base_url,
                         auth=cloud_sync_api_key
                     )
                     # print(f"[Cloud Sync] Conversations: {res_conv}")
                 except Exception as e:
                     print(f"[Cloud Sync] Convers. Sync Failed: {e}")
+
+                # --- 3. Cloud Pull (plan C5.1: background pull, not just push) ---
+                # blocking=False: if a button-triggered Sync DB run holds the
+                # shared pull lock, skip this cycle instead of queueing.
+                try:
+                    from src.core.services.cloud_pull_orchestrator import (
+                        run_best_effort_cloud_pulls,
+                    )
+
+                    res_pull = await asyncio.to_thread(
+                        run_best_effort_cloud_pulls, conn, blocking=False
+                    )
+                    if res_pull.get("skipped"):
+                        print(f"[Cloud Sync] Pull skipped: {res_pull.get('reason')}")
+                except Exception as e:
+                    print(f"[Cloud Sync] Cloud pull failed: {e}")
                     
             finally:
                 conn.close()
