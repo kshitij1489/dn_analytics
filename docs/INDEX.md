@@ -33,7 +33,7 @@ Read files **in order** for the task at hand. Stop when you have enough context;
 | **macOS app won't open / signing / quarantine** | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) |
 | **AI Mode (chat, intent, LLM)** | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) → relevant `src/ai_mode/` source |
 | **Item clustering / parsing / merge UX** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [item_clustering.md](./item_clustering.md) |
-| **Merge child-variant dedupe (open work)** | [pending task.md](./pending%20task.md) → merge code in `src/core/` / `services/` |
+| **Merge child-variant dedupe (open work)** | [pending_task.md](./pending_task.md) → merge code in `src/core/` / `services/` |
 | **General bug fix / unfamiliar area** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → grep codebase → [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) if runtime/deploy |
 
 ---
@@ -63,7 +63,7 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Baseline contract (§5–15) **implemented**. Assignment/verification sync in **§17 implemented**; §16 **superseded**. |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | **All phases complete.** |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Combined forecasting + cloud ingest reference; last updated Feb 2026. |
-| [pending task.md](./pending%20task.md) | **Open:** child-variant dedupe/reconcile during parent menu-item merge. |
+| [pending_task.md](./pending_task.md) | **Open:** child-variant dedupe/reconcile during parent menu-item merge. |
 | [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) | Operational — release build via `./scripts/build_release.sh`. |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Operational — macOS Gatekeeper, signing, backend startup. |
 | [item_clustering.md](./item_clustering.md) | Conceptual reference for clustering hierarchy (no implementation status). |
@@ -89,4 +89,4 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 | [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) | Build and share .dmg |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | macOS / app runtime issues |
 | [item_clustering.md](./item_clustering.md) | Clustering logic explained |
-| [pending task.md](./pending%20task.md) | Open merge dedupe task |
+| [pending_task.md](./pending_task.md) | Open merge dedupe task |

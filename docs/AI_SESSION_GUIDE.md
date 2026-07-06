@@ -87,4 +87,4 @@ Estimated weight = approximate token cost if loaded whole.
 
 **Do not** rewrite long plans for small fixes. **Do** add a one-line status note to the plan header and INDEX snapshot when a phase ships or is abandoned.
 
-**Filename note:** [pending task.md](./pending%20task.md) has a space in the name — use the exact path when linking.
+**Filename note:** the open merge dedupe task lives at [pending_task.md](./pending_task.md).
