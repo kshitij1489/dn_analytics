@@ -36,10 +36,13 @@ def reset_database():
              
         conn.commit()
         
-        # 4. Auto-seed menu data from backups (menu_items, variants, menu_item_variants)
+        # 4. Auto-seed menu catalog from backups (menu_items, variants only).
+        # Per-order-item assignments are not seeded here: the central server is
+        # ground truth for those, and a fresh install picks them up from the
+        # server's watermarked snapshot on the next sync (menu_assignment_bootstrap.py).
         try:
-            if perform_seeding(conn):
-                seed_msg = " Menu data seeded from backups."
+            if perform_seeding(conn, seed_mappings=False):
+                seed_msg = " Menu catalog seeded from backups."
             else:
                 seed_msg = " Menu seeding skipped (no backup files)."
         except Exception as seed_err:

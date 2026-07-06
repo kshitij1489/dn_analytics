@@ -13,6 +13,7 @@ class ConfigUpdate(BaseModel):
     settings: Dict[str, str]
 
 from src.core.db.connection import get_db_connection
+from src.core.menu_assignment_bootstrap import MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY
 from src.core.sync_identity import get_sync_attribution
 from utils.api_client import (
     normalize_integration_orders_base_url,
@@ -294,21 +295,29 @@ def reset_db_section(data: Dict[str, str]):
                 conn.execute("PRAGMA foreign_keys = ON")
 
             # Clear cloud-pull cursors so a fresh sync re-pulls from the beginning
-            # instead of resuming at a stale position after the data wipe.
+            # instead of resuming at a stale position after the data wipe. Also
+            # clear menu_assignments_bootstrapped: bootstrap_menu_assignments_if_needed()
+            # short-circuits on this flag before looking at the cursor above, so
+            # leaving it set would silently skip the fresh-install snapshot pull
+            # and leave menu_item_variants empty until a manual force-reseed.
             for cursor_key in (
                 "menu_merge_pull_cursor",
                 "menu_mapping_verification_pull_cursor",
                 "customer_merge_pull_cursor",
+                MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY,
             ):
                 conn.execute("DELETE FROM system_config WHERE key = ?", (cursor_key,))
             conn.commit()
             
-            # Re-seed menu from backups if available
+            # Re-seed menu catalog from backups if available. Assignments are not
+            # seeded here: the central server is ground truth for those, and the
+            # next sync now re-triggers the fresh-install snapshot pull thanks to
+            # the cursor/flag clears above.
             from scripts.seed_from_backups import perform_seeding
             seed_status = "Data cleared."
             try:
-                if perform_seeding(conn):
-                    seed_status += " Menu re-seeded from backups."
+                if perform_seeding(conn, seed_mappings=False):
+                    seed_status += " Menu catalog re-seeded from backups."
                 else:
                     seed_status += " Menu seeding skipped (no backups)."
             except Exception as e:

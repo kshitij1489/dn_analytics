@@ -1,5 +1,0 @@
-parent_cluster_name,parent_cluster_type,child_cluster_name,menu_item_id,variant_id,source_item_id,source_item_kind,item_row_count,addon_row_count,raw_name_count,raw_names,mapping_is_verified,historical_merged_source_names
-Americano,Drinks,1_PIECE,f26d1392-a216-540e-8a84-3615e579ed86,f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc,1296937113,item,23,0,1,Americano,True,
-Cappuccino,Drinks,1_PIECE,2fecdeca-c347-5e68-821a-891a1f4337fa,f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc,1296937112,item,39,0,1,Cappuccino,True,
-Hot Chocolate,Drinks,1_PIECE,113d84b7-b764-54a0-aeab-d349fec36b83,f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc,1298172691,item,6,0,1,Hot Chocolate,True,
-Water Bottle,Drinks,1_PIECE,72b47b77-80f4-5e5a-af2b-1d2abbd6f39d,f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc,1283024032,item,2,0,1,Water Bottle,True,

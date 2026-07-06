@@ -16,7 +16,7 @@ The script is intentionally isolated:
 
 Run against your Dachnona stack (paths under /desktop-analytics-sync/...):
 
-    python scripts/test_dachnona_cloud_sync_e2e.py --base-url http://127.0.0.1:<PORT> --api-key <sync_api_key>
+    python scripts/e2e/dachnona_cloud_sync_e2e.py --base-url http://127.0.0.1:<PORT> --api-key <sync_api_key>
 
 With db.dachnona "docker compose -f docker-compose.dev.yml up", traffic usually goes through nginx to
 Gunicorn. Use the host:port your compose file publishes for HTTP (often localhost and a mapped port), not a
@@ -47,7 +47,7 @@ from unittest.mock import patch
 import requests
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

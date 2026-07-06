@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.seed_from_backups import export_to_backups
+from scripts.seed_from_backups import export_to_backups, perform_seeding
 
 
 class SeedFromBackupsExportTests(unittest.TestCase):
@@ -74,6 +74,33 @@ class SeedFromBackupsExportTests(unittest.TestCase):
                 id_maps["variant_id_to_meta"]["variant_family_tub"],
                 {"unit": "GMS", "value": 500},
             )
+
+    def test_perform_seeding_skips_id_maps_items_without_cluster_state_key(self) -> None:
+        id_maps = {
+            "menu_id_to_str": {
+                "item_family_tub": "Family Tub",
+                "item_legacy_vanilla": "Old Fashioned Vanilla Ice Cream ( Recommended )",
+            },
+            "variant_id_to_str": {"variant_family_tub": "FAMILY_TUB_500GMS"},
+            "type_id_to_str": {"type_ice_cream": "Ice Cream"},
+        }
+        cluster_state = {
+            "item_family_tub:type_ice_cream": {"101": [["101", "variant_family_tub"]]},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            (data_dir / "id_maps_backup.json").write_text(json.dumps(id_maps))
+            (data_dir / "cluster_state_backup.json").write_text(json.dumps(cluster_state))
+            with patch("scripts.seed_from_backups.get_resource_path", return_value=str(data_dir)):
+                seeded = perform_seeding(self.conn)
+
+        self.assertTrue(seeded)
+
+        rows = self.conn.execute("SELECT menu_item_id, type FROM menu_items").fetchall()
+        types_by_id = {row["menu_item_id"]: row["type"] for row in rows}
+        self.assertEqual(types_by_id, {"item_family_tub": "Ice Cream"})
+        self.assertNotIn("item_legacy_vanilla", types_by_id)
 
 
 if __name__ == "__main__":

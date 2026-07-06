@@ -14,14 +14,21 @@ from src.core.utils.path_helper import get_resource_path
 from utils.menu_item_variant_enforcement import backfill_menu_items_missing_variant_mappings
 from utils.variant_metadata import infer_variant_metadata
 
-def perform_seeding(conn, seed_mappings=True):
+def perform_seeding(conn, seed_mappings=False):
     """Restore menu data from JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json).
 
-    seed_mappings=False seeds the catalog only (menu_items, variants) and skips
-    the per-order-item menu_item_variants upserts. Routine cloud pulls use this
-    so a frozen snapshot can never overwrite assignments owned by the
-    assignment sync stream (sync conflict plan C4.1); explicit restore flows
-    keep the default full behavior.
+    Defaults to catalog-only (menu_items, variants; no menu_item_variants
+    upserts). The central server is the ground truth for per-order-item
+    assignments — fresh installs get those from the server's watermarked
+    snapshot (menu_assignment_bootstrap.py, MENU_SYNC_ARCHITECTURE.md §5), and
+    routine cloud pulls from this same local backup are catalog-only too, so a
+    frozen local snapshot can never race or roll back assignments owned by the
+    assignment sync stream (sync conflict plan C4.1).
+
+    seed_mappings=True additionally seeds menu_item_variants from the local
+    backup. This is a contingency path only: the CLI entrypoint below (for
+    recovering an install, or the fleet, if the central server's data is
+    lost) and the explicit `seed_and_relink_orders` bootstrap restore mode.
     """
     # Paths
     archive_dir = Path(get_resource_path("data"))
@@ -45,17 +52,24 @@ def perform_seeding(conn, seed_mappings=True):
         # 1. Insert Menu Items
         print("Seeding Menu Items...")
         menu_items_count = 0
+        skipped_unmapped_count = 0
+        type_id_to_str = id_maps.get("type_id_to_str", {})
+        item_type_by_menu_id = {}
+        for key in cluster_state.keys():
+            parts = key.split(":")
+            if parts[0] not in item_type_by_menu_id:
+                type_id = parts[1] if len(parts) > 1 else None
+                item_type_by_menu_id[parts[0]] = type_id_to_str.get(type_id, "Dessert")
+
         for menu_item_id, clean_name in id_maps.get("menu_id_to_str", {}).items():
-            # For each menu item, we need to know its type.
-            item_type = "Dessert" # Default
-            for key in cluster_state.keys():
-                if key.startswith(menu_item_id + ":"):
-                    parts = key.split(":")
-                    if len(parts) > 1:
-                        type_id = parts[1]
-                        item_type = id_maps.get("type_id_to_str", {}).get(type_id, "Dessert")
-                    break
-            
+            item_type = item_type_by_menu_id.get(menu_item_id)
+            if item_type is None:
+                # Every real menu item carries at least a stub mapping (variant
+                # enforcement), so an id_maps entry with no cluster_state key is a
+                # stale/legacy id — seeding it would fabricate a wrongly typed item.
+                skipped_unmapped_count += 1
+                continue
+
             cursor.execute("""
                 INSERT INTO menu_items (menu_item_id, name, type, is_verified)
                 VALUES (?, ?, ?, 1)
@@ -112,7 +126,8 @@ def perform_seeding(conn, seed_mappings=True):
         conn.commit()
         print(
             f"Successfully seeded: {menu_items_count} items, {variants_count} variants, "
-            f"{mappings_count} mappings, {stub_count} default variant stub(s)"
+            f"{mappings_count} mappings, {stub_count} default variant stub(s); "
+            f"skipped {skipped_unmapped_count} stale id_maps item(s) with no cluster_state key"
         )
         return True
         
@@ -211,7 +226,8 @@ if __name__ == "__main__":
         if len(sys.argv) > 1 and sys.argv[1] == "--export":
             export_to_backups(conn)
         else:
-            perform_seeding(conn)
+            # CLI use is the contingency-restore path: seed assignments too.
+            perform_seeding(conn, seed_mappings=True)
         conn.close()
     else:
         print(f"Connection failed: {msg}")

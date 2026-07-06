@@ -157,6 +157,7 @@ Bootstrap shipper (`menu_bootstrap_shipper.py`) sends `snapshot_role: "seed_only
 | Assignment extraction + seq-guarded apply | `src/core/menu_assignment_apply.py` |
 | Menu merge pull/apply (routing, echo/ack, no-op) | `src/core/menu_merge_sync.py` |
 | Fresh-install assignment snapshot seed | `src/core/menu_assignment_bootstrap.py` |
+| Local JSON backup seed/restore (catalog auto-seed always; assignments are contingency-only, via CLI or explicit `seed_and_relink_orders`) | `scripts/seed_from_backups.py` |
 | Assignment schema (conditional ALTERs) | `src/core/menu_assignment_schema.py` |
 | Mapping verification emit / push / pull | `src/core/menu_mapping_verification_sync*.py`, `..._shipper.py` |
 | Quarantine helpers | `src/core/menu_sync_quarantine.py` |

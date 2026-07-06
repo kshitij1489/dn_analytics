@@ -47,17 +47,20 @@ def sync_database(conn, cluster=None):
                 yield SyncStatus('error', f"Schema creation failed: {str(schema_error)}")
                 return
         
-        # Auto-seed menu data from backups if menu_items table is empty (happens FIRST on empty DB)
+        # Auto-seed menu catalog from backups if menu_items table is empty (happens
+        # FIRST on empty DB). Catalog only: per-order-item assignments are seeded
+        # from the server's fresh-install snapshot pull later in this sync, since
+        # the central server is ground truth for those (not this local backup).
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM menu_items")
         menu_count = cursor.fetchone()[0]
         cursor.close()
-        
+
         if menu_count == 0:
-            yield SyncStatus('info', "🌱 Seeding menu data from backup files...")
+            yield SyncStatus('info', "🌱 Seeding menu catalog from backup files...")
             try:
-                if perform_seeding(conn):
-                    yield SyncStatus('info', "✅ Menu data seeded successfully!")
+                if perform_seeding(conn, seed_mappings=False):
+                    yield SyncStatus('info', "✅ Menu catalog seeded successfully!")
                 else:
                     yield SyncStatus('info', "⚠️ Menu seeding skipped (no backup files found)")
             except Exception as seed_error:

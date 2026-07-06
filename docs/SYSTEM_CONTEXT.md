@@ -10,13 +10,13 @@ The system is designed with a clear separation between durable configuration (th
 
 - **The Brain (Persistent)**: durable menu mapping artifacts in `data/`
   - `data/item_parsing_table.csv` is the durable source for item mapping rules when present and must never be deleted or overwritten casually.
-  - `data/cluster_state_backup.json` and `data/id_maps_backup.json` are the current local reseed/export artifacts used to rebuild the SQLite menu catalog.
+  - `data/cluster_state_backup.json` and `data/id_maps_backup.json` are the local export/reseed artifacts for the SQLite **menu catalog** (`menu_items`, `variants`). `cluster_state_backup.json` also carries per-order-item assignment shape for export and contingency restore, but routine auto-seed does not apply those rows.
   - **Caveat**: These artifacts are only updated by explicit user actions or explicit export flows. Automated background processes must not silently replace the durable truth.
-  - **Portability**: These files must be preserved. They are what let the app restore menu state on a new machine or after a local database reset.
+  - **Portability**: Preserve these files so a new machine or local DB reset can rebuild the catalog offline. Per-order-item assignments are **not** restored from bundled JSON in normal operation — the central server is ground truth for those (see boot sequence below).
 
 - **The Muscle (Transient)**: local SQLite database (`analytics.db`)
   - The local database can be wiped (`make clean`) and rebuilt from schema plus durable menu artifacts.
-  - **Boot / reset sequence**: `make start`, `make verify`, and reset flows create the SQLite schema if needed. Empty menu tables are reseeded from `data/cluster_state_backup.json` and `data/id_maps_backup.json` via `scripts/seed_from_backups.py`.
+  - **Boot / reset sequence**: `make start`, `make verify`, and reset flows create the SQLite schema if needed. When `menu_items` is empty, `scripts/seed_from_backups.py` auto-seeds **catalog only** (`perform_seeding(..., seed_mappings=False)`): `menu_items` and `variants` from `data/id_maps_backup.json` and `data/cluster_state_backup.json` (types from cluster keys). Per-order-item rows in `menu_item_variants` are filled on the next Sync DB from the server's watermarked assignment snapshot (`menu_assignment_bootstrap.py`; see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §5–§6). **Contingency-only** full restore (catalog + assignments from local JSON): run `python scripts/seed_from_backups.py`, or use explicit `seed_and_relink_orders` bootstrap mode — not the default fresh-install path.
   - **Cloud note**: Dachnona cloud/server code uses PostgreSQL. Do not assume local SQLite IDs are durable across rebuilds or installs.
 
 ## 2. Menu Management Logic

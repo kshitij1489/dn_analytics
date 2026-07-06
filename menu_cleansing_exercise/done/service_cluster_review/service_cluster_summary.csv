@@ -1,4 +1,0 @@
-parent_cluster_name,parent_cluster_type,child_cluster_name,menu_item_id,variant_id,mapping_count,verified_mapping_count,source_item_count,source_item_ids,source_item_kinds,item_row_count,addon_row_count,raw_name_count,raw_names,historical_merged_source_count,historical_merged_source_names
-Ice Cream Factory Visit & Trials,Service,FAMILY,9dfd092f-1a87-5eec-9536-b4f0acb02f6c,190eb2e5-5671-55be-ac33-57907b87a2ce,1,1,1,1282786652,item,10,0,1,Ice Cream Factory Visit & Trials(family),0,
-Ice Cream Factory Visit & Trials,Service,SINGLE,9dfd092f-1a87-5eec-9536-b4f0acb02f6c,f2a1ea5a-2b0b-562d-8c50-808760640024,1,1,1,1282786651,item,2,0,1,Ice Cream Factory Visit & Trials (single),0,
-School Kids Factory Visit,Service,1_PIECE,27568a25-6849-5e85-be25-0db39ea3a641,f8b92f1e-8f3b-5a1c-8615-215dd0b3a4cc,1,1,1,1291692931,item,4,0,1,School Kids Factor Visit,0,

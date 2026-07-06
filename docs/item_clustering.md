@@ -67,26 +67,7 @@ When a new order arrives, the `CleaningService` performs the following steps:
 4.  **Learning**: Once verified, that mapping is permanent. Future orders with that name will automatically map correctly.
 
 ## Testing and Evaluation
-To evaluate the current clustering results and inspect historical merge decisions, use the reproducible export script at [scripts/export_cluster_review.py](../scripts/export_cluster_review.py). It generates review files under [menu_cleansing_exercise/cluster_review](../menu_cleansing_exercise/cluster_review) (menu state evaluation / cleansing exercise outputs).
 
-### Generated Files
-- [current_clusters.md](../menu_cleansing_exercise/cluster_review/current_clusters.md): Human-readable list grouped by `parent cluster :: child cluster`, with source item IDs and raw names.
-- [current_clusters.csv](../menu_cleansing_exercise/cluster_review/current_clusters.csv): One row per current parent+child cluster summary.
-- [current_cluster_members.csv](../menu_cleansing_exercise/cluster_review/current_cluster_members.csv): One row per current mapping/source ID.
-- [merge_history.md](../menu_cleansing_exercise/cluster_review/merge_history.md): Human-readable merge history list with source name, target name, affected source IDs, raw names, and variant assignments.
-- [merge_history.csv](../menu_cleansing_exercise/cluster_review/merge_history.csv): One row per merge event.
+Use the **Menu** page in the app to review clustering: merge, verify, and inspect unverified mappings on the Resolutions tab. Merge history is available via the Menu API (`GET /menu/merge-history`).
 
-### Current Output Sizes
-- 232 current parent+child cluster rows
-- 468 current source mapping rows
-- 41 merge-history events
-
-### Important Nuance
-Some mappings are keyed by generated IDs rather than observed `petpooja_itemid` / `petpooja_addonid`, so those rows show `unknown` or blank source-kind/raw-name context in the export.
-- In the current export, this affects 74 current mapping rows.
-- In the current export, this affects 28 merge-history rows.
-
-### Regenerate the Review Files
-```bash
-python3 scripts/export_cluster_review.py
-```
+For fleet convergence and sync verification, see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md).
