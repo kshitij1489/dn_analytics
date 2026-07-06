@@ -191,8 +191,8 @@ def force_reseed_menu_assignments(
 ) -> Dict[str, Any]:
     """
     Operator hard-reset: overwrite this install's cluster state from the server
-    snapshot regardless of prior bootstrap/cursor state (cutover piece 3 of
-    docs/MENU_MERGE_CONFLICT_SYNC_PLAN.md).
+    snapshot regardless of prior bootstrap/cursor state (escape hatch in
+    docs/MENU_SYNC_ARCHITECTURE.md §5).
 
     Unlike bootstrap_menu_assignments_if_needed this ignores the bootstrapped
     flag and the "existing install" short-circuit, so it re-applies the current

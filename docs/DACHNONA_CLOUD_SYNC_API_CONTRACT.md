@@ -1,7 +1,7 @@
 # Dachnona Cloud Sync API Contract
 
 **Audience:** Dachnona backend engineers / Codex agent implementing the cloud-side sync work  
-**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. The **single-source-of-truth** work first sketched in Section 16 has since been **implemented** — but via the assignment-applier + materialized-ground-truth design in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md), which **supersedes** the Section 16 options. The authoritative, as-built wire contract — and the **freeze target for handoff** — is **Section 17**. Sections 5–15 remain accurate for the baseline; Section 16 is retained only as historical design context.  
+**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. The **single-source-of-truth** work first sketched in Section 16 has since been **implemented** — but via the assignment-applier + materialized-ground-truth design in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md), which **supersedes** the Section 16 options. The authoritative, as-built wire contract — and the **freeze target for handoff** — is **Section 17**. Sections 5–15 remain accurate for the baseline; Section 16 is retained only as historical design context.  
 **Scope:** merge + bootstrap + attribution sync (Sections 5–15), plus the as-built assignment/verification sync in Section 17. Section 16 is superseded — do not implement against it.
 
 ## 1. Purpose
@@ -18,7 +18,7 @@ The analytics client already implements:
 
 **Baseline (Section 5):** The endpoints and persistence described in **Section 5** and the detailed sections through **Section 15** are **already implemented** on the Dachnona central server (ingest + cursor pull for customer/menu merges, menu-bootstrap latest, attribution persistence). Treat that work as **complete** for collaboration sync.
 
-**Single source of truth (now Section 17, implemented):** The verification-replay and richer-snapshot needs are **built and live** on the central server, using the assignment-applier design in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md). See **Section 17** for the as-built contract (server-ordered `server_seq`, per-event accept/reject ingest, the mapping-verification stream, the materialized `order_item_assignments` ground truth, and the assignment snapshot endpoint). **Section 16 below is superseded** and kept only for history.
+**Single source of truth (now Section 17, implemented):** The verification-replay and richer-snapshot needs are **built and live** on the central server, using the assignment-applier design in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md). See **Section 17** for the as-built contract (server-ordered `server_seq`, per-event accept/reject ingest, the mapping-verification stream, the materialized `order_item_assignments` ground truth, and the assignment snapshot endpoint). **Section 16 below is superseded** and kept only for history.
 
 This document is intentionally **additive**, not a rewrite request. The backend Codex agent should:
 
@@ -113,7 +113,7 @@ The following **baseline** capabilities are **implemented on the Dachnona centra
 - `POST /desktop-analytics-sync/menu-merges/ingest` accepts and persists menu merge events idempotently  
 - `GET /desktop-analytics-sync/menu-merges` returns menu merge deltas for cursor-based pull  
 
-**Product gap (not a baseline gap):** That baseline does **not** encode every **in-place mapping verification** (`menu_item_variants.is_verified` toggles without a merge history row) or every **`verify_item`** path on the desktop. The **desktop client** for **Section 16.1** (mapping verification ingest/pull + emitters) now lives in this repo; **Dachnona** must still implement the matching routes and persistence. **Section 16.2+** (bootstrap/snapshot checkpoints and related) remains future work — see [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md).
+**Product gap (not a baseline gap):** That baseline does **not** encode every **in-place mapping verification** (`menu_item_variants.is_verified` toggles without a merge history row) or every **`verify_item`** path on the desktop. The **desktop client** for **Section 16.1** (mapping verification ingest/pull + emitters) now lives in this repo; **Dachnona** must still implement the matching routes and persistence. **Section 16.2+** (bootstrap/snapshot checkpoints and related) was superseded by the assignment snapshot endpoint (§17) — see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §5.
 
 ## 6. Recommended Persistence Shape
 
@@ -927,7 +927,7 @@ The following **baseline** items are **done** on the Dachnona central server (al
 
 ### 14.2 Assignment / verification sync (implemented — Section 17)
 
-Delivered on the central server via the [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) design (supersedes the Section 16 options). Full wire contract in **Section 17**:
+Delivered on the central server via the [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) design (supersedes the Section 16 options). Full wire contract in **Section 17**:
 
 - [x] Server-ordered replay: `(ingested_at, id)`, v2 cursors, `server_seq` / `server_ingested_at` injected into every delta event  
 - [x] Per-event accept/reject ingest (`accepted` / `rejected`; one bad event never 400s the batch)  
@@ -956,9 +956,9 @@ Anything beyond that may follow existing Dachnona backend conventions.
 
 ## 16. Extensions for menu single source of truth (SUPERSEDED — historical)
 
-> **Superseded by Section 17.** This section captured three candidate designs (verification stream / richer snapshot / hosted reference DB) before the approach was settled. The product shipped **Option A** (the mapping-verification event stream) **plus** a materialized `order_item_assignments` ground truth and an assignment snapshot endpoint — see [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) and **Section 17** for what is actually built and frozen. Do not implement against Section 16; it is retained for design history only.
+> **Superseded by Section 17.** This section captured three candidate designs (verification stream / richer snapshot / hosted reference DB) before the approach was settled. The product shipped **Option A** (the mapping-verification event stream) **plus** a materialized `order_item_assignments` ground truth and an assignment snapshot endpoint — see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) and **Section 17** for what is actually built and frozen. Do not implement against Section 16; it is retained for design history only.
 
-**Goal:** Allow a **second install** (or a device after **reset orders + sync**) to **converge** on the same **verified catalog + mapping** state as a **reference** desktop, as described in [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md).
+**Goal:** Allow a **second install** (or a device after **reset orders + sync**) to **converge** on the same **verified catalog + mapping** state as a **reference** desktop. (As-built: [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md).)
 
 **Why baseline is not enough:** The desktop can show **“All items verified!”** while **only** updating SQLite (and local `data/*.json` via `export_to_backups`) for paths that **do not** enqueue `menu_merge` sync events (e.g. in-place `menu_item_variants.is_verified = 1`, `verify_item`). The **baseline** merge + bootstrap APIs therefore **cannot** replay those edges today.
 
@@ -998,7 +998,7 @@ Anything beyond that may follow existing Dachnona backend conventions.
 
 1. **Extend** `GET /desktop-analytics-sync/menu-bootstrap/latest` to return, in addition to current `id_maps` + `cluster_state`:
    - `snapshot_version` / `generated_at` opaque version string  
-   - Optional **`mapping_verification_overlay`** or **backward-compatible** extension of `cluster_state` list entries to include **`is_verified`** per mapping (see [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) Section 5.2).
+   - Optional **`mapping_verification_overlay`** or **backward-compatible** extension of `cluster_state` list entries to include **`is_verified`** per mapping. *(Superseded — the shipped design carries `is_verified` on the mapping-verification event stream and the materialized `order_item_assignments`; see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §2.2.)*
 
 2. **Or** add **`GET /desktop-analytics-sync/menu-catalog-snapshot/latest`** returning a versioned document the client can apply as a checkpoint (same auth; consider **gzip** or signed URL if size exceeds practical JSON inline).
 
@@ -1026,7 +1026,7 @@ The desktop **Option A** client work for **Section 16.1** is implemented in this
 
 ## 17. As-built assignment & verification sync (implemented — freeze target)
 
-This section is the **authoritative, as-built wire contract** for the collaboration-sync redesign in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md). It is what the central server runs today and what the desktop client depends on. **Freeze this before handoff.** It reuses **Section 4** (auth, tenant scope, idempotency, raw-payload preservation) unchanged.
+This section is the **authoritative, as-built wire contract** for the collaboration-sync redesign in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md). It is what the central server runs today and what the desktop client depends on. **Freeze this before handoff.** It reuses **Section 4** (auth, tenant scope, idempotency, raw-payload preservation) unchanged.
 
 ### 17.1 Server ordering, cursors, and per-event ingest
 

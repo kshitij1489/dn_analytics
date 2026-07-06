@@ -27,7 +27,7 @@ Conventions for Cursor, Claude Code, Codex, Antigravity, and similar agents work
 
 **Rules:**
 - @-mention **files**, not folder dumps (`docs/` entire tree wastes tokens).
-- For long plans, specify section: e.g. "MENU_MERGE_CONFLICT_SYNC_PLAN §2.1 only."
+- For long docs, specify section: e.g. "MENU_SYNC_ARCHITECTURE §2 only."
 - Re-@ a section when context was dropped — don't re-paste the full doc.
 
 ---
@@ -42,11 +42,11 @@ Estimated weight = approximate token cost if loaded whole.
 |-------|------|--------|
 | 1 | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) | small |
 | 2 | [INDEX.md](./INDEX.md) | small |
-| 3 | [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) §1–2 or §8 (runbook) | medium |
+| 3 | [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §2 (design) or §8 (runbook) | medium |
 | 4 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17 only | medium |
 | 5 | Relevant `src/core/menu_*_sync*.py` | varies |
 
-**Avoid in same turn:** full MENU_SINGLE_SOURCE_OF_TRUTH_PLAN + full MENU_MERGE_CONFLICT_SYNC_PLAN.
+**Load sections, not the whole doc** — read `MENU_SYNC_ARCHITECTURE` headings first, then the one section you need.
 
 ### New feature (non-sync)
 

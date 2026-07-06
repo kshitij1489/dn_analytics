@@ -25,9 +25,8 @@ Read files **in order** for the task at hand. Stop when you have enough context;
 
 | If you're working on… | Read (in order) |
 |----------------------|-----------------|
-| **Menu sync / merge conflicts / multi-install convergence** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) (§1–2 for design; §8+ for runbook) → [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17 |
-| **Menu single source of truth / verification events / fresh-install convergence** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) → [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) (overlap — conflict plan is authoritative for LWW/assignments) |
-| **Cloud sync API (server-side / contract)** | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) → [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) §2 (target design) |
+| **Menu sync / merge conflicts / verification / fresh-install convergence** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) (§2 design; §3 schema; §8 runbook) → [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17 |
+| **Cloud sync API (server-side / contract)** | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) → [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §2 (as-built design) |
 | **Forecasting or ingest pipelines** | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) Part 1 (forecasting) or Part 2 (cloud ingest) |
 | **Build / release / .dmg packaging** | [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) |
 | **macOS app won't open / signing / quarantine** | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) |
@@ -45,10 +44,10 @@ Read files **in order** for the task at hand. Stop when you have enough context;
 | **Always load** (small) | This index, [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) | Attach or @-mention at session start |
 | **Auto-discovered when available** (tiny) | [../AGENTS.md](../AGENTS.md), [../CLAUDE.md](../CLAUDE.md), [../.cursor/rules/doc-routing.mdc](../.cursor/rules/doc-routing.mdc) | Do not re-attach if the tool already loaded it |
 | **Load on demand** (medium–large) | Task row from table above | @-reference specific sections; read headings first |
-| **Never paste whole doc into chat** | [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) (~400 lines), [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (~360 lines), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) (~1100 lines) | Use @file + section anchors; summarize what you need in your own words |
+| **Never paste whole doc into chat** | [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) (~300 lines), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) (~1100 lines) | Use @file + section anchors; summarize what you need in your own words |
 | **Reference only** | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md), [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | Load the relevant Part/section, not the full file |
 
-**Progressive disclosure:** index → one plan section → source file. Avoid loading two full menu plans in the same turn.
+**Progressive disclosure:** index → one doc section → source file.
 
 ---
 
@@ -58,8 +57,7 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 
 | Doc | Status (summary) |
 |-----|------------------|
-| [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) | **Signed off 2026-07-06** (§11): fleet convergence + fresh-install E2E validated; 27 server-only rows reconciled benign; self-merge no-op fix landed. Client on `sync-conflict-phase-2` (not merged to main). Open: one-time human remap of 3 legacy-key flavor families; C6/S3 digest **deferred** (fleet of 1); UI badge. |
-| [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) | **Signed off 2026-07-06**: Phases 0, 1, 3 implemented; Phase 2 superseded by design; Phase 4 not built by design. **Cross-device convergence validated** via fresh-install simulation (S1 satisfied). |
+| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | **As-built & signed off 2026-07-06.** Assignment-based LWW sync, materialized server ground truth, fresh-install snapshot seed, single-owner `is_verified`, quarantine, operational runbook. Client on `sync-conflict-phase-2` (not merged to main). Open follow-ups in `pending_task.md` (legacy-key remap, C6/S3 digest deferred, UI badge, customer-stream). |
 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Baseline contract (§5–15) **implemented**. Assignment/verification sync in **§17 implemented**; §16 **superseded**. |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | **All phases complete.** |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Combined forecasting + cloud ingest reference; last updated Feb 2026. |
@@ -81,8 +79,7 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 | [../AGENTS.md](../AGENTS.md) | Root AI-agent instructions |
 | [../CLAUDE.md](../CLAUDE.md) | Claude Code pointer to AGENTS + INDEX |
 | [../.cursor/rules/doc-routing.mdc](../.cursor/rules/doc-routing.mdc) | Cursor rule that routes agents through this hub |
-| [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) | Menu conflict LWW plan + operational runbook |
-| [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) | Verification events & convergence plan |
+| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | Menu clustering sync — as-built architecture, DB schema, operational runbook |
 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Server wire contract |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Forecasting algorithms + cloud ingest schemas |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | AI chat mode architecture & task list |

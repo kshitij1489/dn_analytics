@@ -1,7 +1,7 @@
 """
 Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
 
-Pull order (keep in sync with MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md):
+Pull order (keep in sync with docs/MENU_SYNC_ARCHITECTURE.md §4):
 1. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
 2. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
    after the catalog exists, before event tails)

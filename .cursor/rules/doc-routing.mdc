@@ -10,4 +10,4 @@ alwaysApply: true
 - Load `docs/SYSTEM_CONTEXT.md` for architecture and durable-data invariants.
 - Use the task routing table in `docs/INDEX.md` to choose one task-specific doc or section.
 - Do not load the whole `docs/` folder or paste full implementation plans into chat.
-- For menu sync conflicts, `docs/MENU_MERGE_CONFLICT_SYNC_PLAN.md` is authoritative for LWW/assignment behavior; API wire format lives in `docs/DACHNONA_CLOUD_SYNC_API_CONTRACT.md` section 17.
+- For menu sync, `docs/MENU_SYNC_ARCHITECTURE.md` is the as-built reference for LWW/assignment behavior + runbook; API wire format lives in `docs/DACHNONA_CLOUD_SYNC_API_CONTRACT.md` section 17.

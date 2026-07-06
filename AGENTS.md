@@ -24,7 +24,7 @@ From [docs/SYSTEM_CONTEXT.md](docs/SYSTEM_CONTEXT.md):
 1. Read [docs/INDEX.md](docs/INDEX.md) and [docs/SYSTEM_CONTEXT.md](docs/SYSTEM_CONTEXT.md) at session start.
 2. @-reference or attach **only** the task-specific doc from the routing table — not every plan.
 3. For large plans (menu sync, API contract), read **sections** via @-mention — do not paste 400+ lines into chat.
-4. When plans conflict, **[docs/MENU_MERGE_CONFLICT_SYNC_PLAN.md](docs/MENU_MERGE_CONFLICT_SYNC_PLAN.md)** is authoritative for LWW/assignment sync; API contract §17 is authoritative for wire format.
+4. For menu sync, **[docs/MENU_SYNC_ARCHITECTURE.md](docs/MENU_SYNC_ARCHITECTURE.md)** is the as-built reference for LWW/assignment behavior and the operational runbook; API contract §17 is authoritative for wire format.
 
 ---
 
