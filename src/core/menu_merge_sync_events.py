@@ -406,6 +406,28 @@ def _build_merge_payload(conn, history_row: Dict[str, Any], undo: bool = False) 
     return payload
 
 
+def build_menu_merge_event_payload(
+    conn,
+    merge_id: int,
+    event_type: str,
+    *,
+    reverts_remote_event_id: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a menu merge sync event payload from in-transaction state.
+
+    Intended for strict-mode capture before rollback — does not write to the outbox.
+    """
+    history_row = _lookup_merge_row(conn, merge_id)
+    if not history_row:
+        return None
+    payload = _build_event_payload(conn, history_row, event_type, reverts_remote_event_id=reverts_remote_event_id)
+    if occurred_at:
+        payload["occurred_at"] = occurred_at
+    return payload
+
+
 def _build_event_payload(conn, history_row: Dict[str, Any], event_type: str, reverts_remote_event_id: Optional[str] = None) -> Dict[str, Any]:
     source_item = _lookup_menu_item_snapshot(
         conn,

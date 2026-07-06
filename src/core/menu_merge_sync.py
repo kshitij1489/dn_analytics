@@ -838,7 +838,42 @@ def _fetch_remote_events(
     if next_cursor is None and events:
         next_cursor = data.get("cursor")
 
-    return {"events": events, "next_cursor": next_cursor, "error": None}
+    from src.core.sync_identity import extract_menu_scope_state
+
+    return {
+        "events": events,
+        "next_cursor": next_cursor,
+        "has_more": limit > 0 and len(events) >= limit,
+        "scope_state": extract_menu_scope_state(data),
+        "error": None,
+    }
+
+
+def lookup_applied_remote_event_id(conn, merge_id: int) -> Optional[str]:
+    """Return the remote_event_id for a merge's applied event (remote table or local outbox)."""
+    row = conn.execute(
+        """
+        SELECT remote_event_id
+        FROM menu_merge_remote_events
+        WHERE local_merge_id = ? AND event_type = ?
+        LIMIT 1
+        """,
+        (int(merge_id), EVENT_TYPE_APPLIED),
+    ).fetchone()
+    if row and row[0]:
+        return str(row[0])
+    from src.core.menu_merge_sync_events import _lookup_event_id
+
+    return _lookup_event_id(conn, int(merge_id), EVENT_TYPE_APPLIED)
+
+
+def apply_remote_menu_merge_event(
+    conn,
+    event: Dict[str, Any],
+    remote_cursor: Optional[str],
+) -> Dict[str, Any]:
+    """Public wrapper over the pull applier for server-accepted mutations."""
+    return _apply_remote_event_by_type(conn, event, remote_cursor)
 
 
 def _apply_remote_event_by_type(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
@@ -944,6 +979,8 @@ def pull_and_apply_menu_merge_events(
 
     events = fetch_result["events"]
     next_cursor = fetch_result.get("next_cursor")
+    scope_state = fetch_result.get("scope_state") or {}
+    has_more = fetch_result.get("has_more", False)
     stats = {
         "events_fetched": len(events),
         "merge_events_applied": 0,
@@ -955,6 +992,7 @@ def pull_and_apply_menu_merge_events(
         "quarantine_resolved": retry_stats["resolved"],
         "cursor_before": cursor_before,
         "cursor_after": cursor_before,
+        "has_more": has_more,
         "error": None,
         "last_event_error": None,
     }
@@ -1022,9 +1060,19 @@ def pull_and_apply_menu_merge_events(
 
     cursor_after = cursor_before if next_cursor is None else str(next_cursor)
     try:
+        from src.core.sync_identity import apply_pull_scope_state
+
+        advertised_revision = apply_pull_scope_state(
+            conn,
+            scope_state,
+            has_more=has_more,
+            stats=stats,
+            allow_menu_revision=False,
+        )
         set_menu_merge_pull_cursor(conn, cursor_after)
         conn.commit()
         stats["cursor_after"] = cursor_after
+        stats["advertised_menu_revision"] = advertised_revision
     except Exception as exc:
         conn.rollback()
         stats["error"] = str(exc)

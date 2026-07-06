@@ -27,6 +27,30 @@ from utils import menu_utils
 router = APIRouter()
 
 
+def _ensure_menu_edit_allowed(conn) -> None:
+    """Block human menu edits when strict mode is on but cloud readiness is missing."""
+    from src.core.menu_mutation_commit import (
+        build_menu_edit_http_exception,
+        strict_mode_edit_blocked_response,
+    )
+
+    blocked = strict_mode_edit_blocked_response(conn)
+    if blocked:
+        exc = build_menu_edit_http_exception(blocked)
+        if exc:
+            raise exc
+
+
+def _finalize_menu_edit_response(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Map menu_utils edit results to HTTP responses (409 conflict, 503 blocked, etc.)."""
+    from src.core.menu_mutation_commit import build_menu_edit_http_exception
+
+    exc = build_menu_edit_http_exception(res)
+    if exc:
+        raise exc
+    return res
+
+
 def _parse_merge_history_payload(raw_payload: Any) -> Any:
     if raw_payload is None:
         return None
@@ -369,6 +393,7 @@ def preview_merge(
 @router.post("/merge")
 def execute_merge(req: MergeRequest, conn=Depends(get_db)):
     """Merge source menu item into target"""
+    _ensure_menu_edit_allowed(conn)
     if req.variant_mappings is not None:
         res = menu_utils.merge_menu_items_with_variant_mappings(
             conn,
@@ -381,18 +406,15 @@ def execute_merge(req: MergeRequest, conn=Depends(get_db)):
         )
     else:
         res = menu_utils.merge_menu_items(conn, req.source_id, req.target_id)
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)
 
 
 @router.post("/merge/undo")
 def undo_merge(req: UndoMergeRequest, conn=Depends(get_db)):
     """Undo a previous merge operation"""
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.undo_merge(conn, req.merge_id)
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)
 
 
 @router.post("/merge/pull-from-cloud")
@@ -573,10 +595,9 @@ def check_remap_target(order_item_id: str, conn=Depends(get_db)):
 @router.post("/remap")
 def execute_remap(req: RemapRequest, conn=Depends(get_db)):
     """Remap an order item to a different menu item/variant"""
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.remap_order_item_cluster(conn, req.order_item_id, req.new_menu_item_id, req.new_variant_id)
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)
 
 
 @router.post("/variant-mapping/update")
@@ -621,6 +642,7 @@ def get_unverified(conn=Depends(get_db)):
 @router.post("/resolutions/resolve")
 def resolve_variant_endpoint(req: ResolveVariantRequest, conn=Depends(get_db)):
     """Resolve a single unresolved menu item + variant pair."""
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.resolve_menu_item_variant(
         conn,
         req.source_menu_item_id,
@@ -631,15 +653,12 @@ def resolve_variant_endpoint(req: ResolveVariantRequest, conn=Depends(get_db)):
         req.target_variant_id,
         req.new_variant_name,
     )
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)
 
 
 @router.post("/resolutions/verify")
 def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_db)):
     """Verify a menu item, optionally renaming it"""
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type, req.new_variant_id)
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)

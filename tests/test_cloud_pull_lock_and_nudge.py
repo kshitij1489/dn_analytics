@@ -7,7 +7,9 @@ import sqlite3
 import unittest
 from unittest.mock import MagicMock, patch
 
+from src.core.customer_mutation_commit import pull_latest_customer_state
 from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
+from src.core.menu_mutation_commit import pull_latest_menu_state
 from src.core.services.cloud_pull_orchestrator import (
     CLOUD_PULL_LOCK,
     run_best_effort_cloud_pulls,
@@ -58,6 +60,143 @@ class CloudPullLockTests(unittest.TestCase):
         # The lock must be free again after the run.
         self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
         CLOUD_PULL_LOCK.release()
+
+    def test_pull_latest_menu_state_holds_lock_during_pull(self) -> None:
+        conn = _conn_with_cloud_config()
+        self.addCleanup(conn.close)
+
+        def _assert_locked(_conn):
+            self.assertTrue(CLOUD_PULL_LOCK.locked())
+            return {"menu_revision": 1}
+
+        with patch(
+            "src.core.menu_mutation_commit._pull_latest_menu_state_locked",
+            side_effect=_assert_locked,
+        ) as locked_pull:
+            pull_latest_menu_state(conn)
+
+        locked_pull.assert_called_once_with(conn)
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        CLOUD_PULL_LOCK.release()
+
+    def test_pull_latest_menu_state_already_locked_avoids_reentrancy_deadlock(
+        self,
+    ) -> None:
+        conn = _conn_with_cloud_config()
+        self.addCleanup(conn.close)
+
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        try:
+            with patch(
+                "src.core.menu_mutation_commit._pull_latest_menu_state_locked",
+                return_value={"menu_revision": 1},
+            ) as locked_pull:
+                result = pull_latest_menu_state(conn, already_locked=True)
+        finally:
+            CLOUD_PULL_LOCK.release()
+
+        locked_pull.assert_called_once_with(conn)
+        self.assertEqual(result["menu_revision"], 1)
+
+    def test_pull_latest_customer_state_holds_lock_during_pull(self) -> None:
+        conn = _conn_with_cloud_config()
+        self.addCleanup(conn.close)
+
+        def _assert_locked(_conn):
+            self.assertTrue(CLOUD_PULL_LOCK.locked())
+            return {"events_applied": 0}
+
+        with patch(
+            "src.core.customer_mutation_commit._pull_latest_customer_state_locked",
+            side_effect=_assert_locked,
+        ) as locked_pull:
+            pull_latest_customer_state(conn)
+
+        locked_pull.assert_called_once_with(conn)
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        CLOUD_PULL_LOCK.release()
+
+    def test_pull_latest_customer_state_already_locked_avoids_reentrancy_deadlock(
+        self,
+    ) -> None:
+        conn = _conn_with_cloud_config()
+        self.addCleanup(conn.close)
+
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        try:
+            with patch(
+                "src.core.customer_mutation_commit._pull_latest_customer_state_locked",
+                return_value={"events_applied": 0},
+            ) as locked_pull:
+                result = pull_latest_customer_state(conn, already_locked=True)
+        finally:
+            CLOUD_PULL_LOCK.release()
+
+        locked_pull.assert_called_once_with(conn)
+        self.assertEqual(result["events_applied"], 0)
+
+    def test_orchestrator_passes_already_locked_to_menu_state_pull(self) -> None:
+        conn = _conn_with_cloud_config(url="https://cloud.example")
+        self.addCleanup(conn.close)
+
+        with patch(
+            "src.core.config.cloud_sync_config.get_cloud_sync_config",
+            return_value=("https://cloud.example", "k"),
+        ), patch(
+            "src.core.menu_bootstrap_sync.get_menu_bootstrap_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_assignment_bootstrap.get_menu_assignments_snapshot_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_mapping_verification_sync.get_menu_mapping_verification_pull_endpoint",
+            return_value="https://cloud.example/verifications",
+        ), patch(
+            "src.core.menu_merge_sync.get_menu_merge_pull_endpoint",
+            return_value="https://cloud.example/merges",
+        ), patch(
+            "src.core.customer_merge_sync.get_customer_merge_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_mutation_commit.pull_latest_menu_state",
+            return_value={
+                "menu_mapping_verifications": {},
+                "menu_merges": {},
+            },
+        ) as pull_menu_state:
+            run_best_effort_cloud_pulls(conn, blocking=False)
+
+        pull_menu_state.assert_called_once_with(conn, already_locked=True)
+
+    def test_orchestrator_passes_already_locked_to_customer_state_pull(self) -> None:
+        conn = _conn_with_cloud_config(url="https://cloud.example")
+        self.addCleanup(conn.close)
+
+        with patch(
+            "src.core.config.cloud_sync_config.get_cloud_sync_config",
+            return_value=("https://cloud.example", "k"),
+        ), patch(
+            "src.core.menu_bootstrap_sync.get_menu_bootstrap_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_assignment_bootstrap.get_menu_assignments_snapshot_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_mapping_verification_sync.get_menu_mapping_verification_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_merge_sync.get_menu_merge_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.customer_merge_sync.get_customer_merge_pull_endpoint",
+            return_value="https://cloud.example/customer-merges",
+        ), patch(
+            "src.core.customer_mutation_commit.pull_latest_customer_state",
+            return_value={"events_applied": 0, "has_more": False},
+        ) as pull_customer_state:
+            run_best_effort_cloud_pulls(conn, blocking=False)
+
+        pull_customer_state.assert_called_once_with(conn, already_locked=True)
 
 
 class MenuMergePushNudgeTests(unittest.TestCase):

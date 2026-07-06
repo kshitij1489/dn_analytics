@@ -29,6 +29,16 @@ CUSTOMER_MERGE_PULL_CURSOR_KEY = "customer_merge_pull_cursor"
 DEFAULT_PULL_LIMIT = 100
 
 
+class UnresolvedMergeEventError(ValueError):
+    """
+    A remote event's customers cannot currently be resolved against local data
+    (missing or ambiguous portable locators — e.g. a name-only merge of duplicate
+    customers). The event is quarantined and retried on later pulls instead of
+    halting the stream, so one unresolvable historical event can never block
+    scope-state mirroring or peer convergence.
+    """
+
+
 def get_customer_merge_pull_endpoint(conn) -> Optional[str]:
     """
     Resolve the customer merge pull endpoint URL.
@@ -78,6 +88,22 @@ def ensure_customer_merge_pull_tables(conn) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_customer_merge_remote_events_local_merge_id
         ON customer_merge_remote_events(local_merge_id);
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_merge_unresolved_events (
+            remote_event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            reverts_remote_event_id TEXT,
+            payload TEXT NOT NULL,
+            occurred_at TEXT,
+            first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_attempt_at TEXT,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            last_error TEXT,
+            CHECK (event_type IN ('customer_merge.applied', 'customer_merge.undone'))
+        );
         """
     )
 
@@ -383,6 +409,114 @@ def _record_remote_event(
     )
 
 
+def _record_unresolved_event(conn, event: Dict[str, Any], error: str) -> None:
+    """Quarantine an event whose customers cannot currently be resolved locally."""
+    conn.execute(
+        """
+        INSERT INTO customer_merge_unresolved_events (
+            remote_event_id,
+            event_type,
+            reverts_remote_event_id,
+            payload,
+            occurred_at,
+            last_attempt_at,
+            attempts,
+            last_error
+        )
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1, ?)
+        ON CONFLICT(remote_event_id) DO UPDATE SET
+            attempts = attempts + 1,
+            last_attempt_at = CURRENT_TIMESTAMP,
+            last_error = excluded.last_error
+        """,
+        (
+            str(event.get("remote_event_id") or ""),
+            str(event.get("event_type") or ""),
+            (str(event.get("reverts_remote_event_id")) if event.get("reverts_remote_event_id") else None),
+            json.dumps(event, sort_keys=True, default=str),
+            str(event.get("occurred_at") or ""),
+            error,
+        ),
+    )
+
+
+def _delete_unresolved_event(conn, remote_event_id: str) -> None:
+    conn.execute(
+        "DELETE FROM customer_merge_unresolved_events WHERE remote_event_id = ?",
+        (remote_event_id,),
+    )
+
+
+def count_unresolved_customer_merge_events(conn) -> int:
+    ensure_customer_merge_pull_tables(conn)
+    row = conn.execute("SELECT COUNT(*) FROM customer_merge_unresolved_events").fetchone()
+    return int(row[0] if row else 0)
+
+
+def list_unresolved_customer_merge_events(conn) -> List[Dict[str, Any]]:
+    """Quarantined events with attempt metadata, oldest occurrence first."""
+    ensure_customer_merge_pull_tables(conn)
+    rows = conn.execute(
+        """
+        SELECT remote_event_id, event_type, reverts_remote_event_id, occurred_at,
+               first_seen_at, last_attempt_at, attempts, last_error
+        FROM customer_merge_unresolved_events
+        ORDER BY occurred_at ASC, remote_event_id ASC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _retry_unresolved_events(conn, stats: Dict[str, Any]) -> Optional[str]:
+    """
+    Re-attempt quarantined events (oldest first, applied before undo ordering falls
+    out of occurred_at). Resolvable events apply exactly like a pulled event and
+    leave quarantine; still-unresolvable events stay with attempts bumped.
+
+    Returns an error string (and leaves stats untouched beyond prior updates) only
+    for non-resolution failures, which must keep failing closed.
+    """
+    pending = conn.execute(
+        """
+        SELECT remote_event_id, event_type, payload
+        FROM customer_merge_unresolved_events
+        ORDER BY occurred_at ASC, remote_event_id ASC
+        """
+    ).fetchall()
+
+    for row in pending:
+        remote_event_id = str(row["remote_event_id"])
+        try:
+            event = json.loads(row["payload"])
+        except Exception:
+            logger.warning("Unresolved customer merge event %s has unreadable payload", remote_event_id)
+            continue
+
+        event_type = str(row["event_type"])
+        try:
+            if event_type == EVENT_TYPE_APPLIED:
+                result = _apply_remote_merge_event(conn, event, None)
+            else:
+                result = _apply_remote_undo_event(conn, event, None)
+            _delete_unresolved_event(conn, remote_event_id)
+            conn.commit()
+            if result["status"] == "applied":
+                key = "merge_events_applied" if event_type == EVENT_TYPE_APPLIED else "undo_events_applied"
+                stats[key] += 1
+            else:
+                stats["events_skipped"] += 1
+            logger.info("Quarantined customer merge event %s resolved and applied", remote_event_id)
+        except UnresolvedMergeEventError as exc:
+            conn.rollback()
+            _record_unresolved_event(conn, event, str(exc))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            logger.warning("Retry of quarantined customer merge event %s failed: %s", remote_event_id, exc)
+            return str(exc)
+    return None
+
+
 def _find_active_merge_id(conn, source_customer_id: int, target_customer_id: int) -> Optional[int]:
     row = conn.execute(
         """
@@ -444,11 +578,13 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
     source_customer_id = _resolve_customer_id(conn, event.get("source_customer", {}))
     target_customer_id = _resolve_customer_id(conn, event.get("target_customer", {}))
     if source_customer_id is None:
-        raise ValueError(f"Could not resolve source customer for remote event {remote_event_id}")
+        raise UnresolvedMergeEventError(f"Could not resolve source customer for remote event {remote_event_id}")
     if target_customer_id is None:
-        raise ValueError(f"Could not resolve target customer for remote event {remote_event_id}")
+        raise UnresolvedMergeEventError(f"Could not resolve target customer for remote event {remote_event_id}")
     if source_customer_id == target_customer_id:
-        raise ValueError(f"Remote event {remote_event_id} resolved source and target to the same local customer")
+        raise UnresolvedMergeEventError(
+            f"Remote event {remote_event_id} resolved source and target to the same local customer"
+        )
 
     existing_merge_id = _find_active_merge_id(conn, source_customer_id, target_customer_id)
     if existing_merge_id is not None:
@@ -662,7 +798,9 @@ def _apply_remote_undo_event(conn, event: Dict[str, Any], remote_cursor: Optiona
             local_merge_id = _find_latest_merge_id(conn, source_customer_id, target_customer_id)
 
     if local_merge_id is None:
-        raise ValueError(
+        # Covers both a merge this install could never resolve (quarantined applied
+        # event) and an applied event that has not arrived yet — retryable either way.
+        raise UnresolvedMergeEventError(
             f"Undo event {remote_event_id} references unknown remote merge event {reverted_remote_event_id}"
         )
 
@@ -691,6 +829,16 @@ def _apply_remote_undo_event(conn, event: Dict[str, Any], remote_cursor: Optiona
         reverts_remote_event_id=reverted_remote_event_id,
     )
     return {"status": status, "local_merge_id": int(local_merge_id)}
+
+
+def apply_remote_customer_merge_event(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
+    """Public wrapper around the pull applier for server-accepted merge events."""
+    return _apply_remote_merge_event(conn, event, remote_cursor)
+
+
+def apply_remote_customer_undo_event(conn, event: Dict[str, Any], remote_cursor: Optional[str]) -> Dict[str, Any]:
+    """Public wrapper around the pull applier for server-accepted undo events."""
+    return _apply_remote_undo_event(conn, event, remote_cursor)
 
 
 def _fetch_remote_events(
@@ -734,7 +882,15 @@ def _fetch_remote_events(
     if next_cursor is None and events:
         next_cursor = data.get("cursor")
 
-    return {"events": events, "next_cursor": next_cursor, "error": None}
+    from src.core.sync_identity import extract_customer_scope_state
+
+    return {
+        "events": events,
+        "next_cursor": next_cursor,
+        "has_more": limit > 0 and len(events) >= limit,
+        "scope_state": extract_customer_scope_state(data),
+        "error": None,
+    }
 
 
 def pull_and_apply_customer_merge_events(
@@ -747,12 +903,19 @@ def pull_and_apply_customer_merge_events(
     """
     Pull remote customer merge events from cloud and deterministically replay them locally.
 
+    Events whose customers cannot be resolved against local data (missing or
+    ambiguous portable locators) are quarantined in customer_merge_unresolved_events
+    and retried on every later pull; they do not halt the stream or block
+    scope-state mirroring. All other failures keep failing closed.
+
     Returns:
         {
             "events_fetched": int,
             "merge_events_applied": int,
             "undo_events_applied": int,
             "events_skipped": int,
+            "events_unresolved": int,      # newly quarantined this call
+            "unresolved_pending": int,     # total quarantined after this call
             "cursor_before": str | None,
             "cursor_after": str | None,
             "error": str | None,
@@ -775,15 +938,29 @@ def pull_and_apply_customer_merge_events(
 
     events = fetch_result["events"]
     next_cursor = fetch_result.get("next_cursor")
+    has_more = bool(fetch_result.get("has_more"))
+    scope_state = fetch_result.get("scope_state") or {}
     stats = {
         "events_fetched": len(events),
         "merge_events_applied": 0,
         "undo_events_applied": 0,
         "events_skipped": 0,
+        "events_unresolved": 0,
+        "unresolved_pending": 0,
         "cursor_before": cursor_before,
         "cursor_after": cursor_before,
+        "has_more": has_more,
         "error": None,
     }
+
+    # Earlier quarantined events may have become resolvable (order sync created the
+    # customers, or peer merges collapsed an ambiguity) — retry them before this page
+    # so an undo in this page can find its reverted merge.
+    retry_error = _retry_unresolved_events(conn, stats)
+    if retry_error is not None:
+        stats["error"] = retry_error
+        stats["unresolved_pending"] = count_unresolved_customer_merge_events(conn)
+        return stats
 
     for event in events:
         if not isinstance(event, dict):
@@ -807,6 +984,18 @@ def pull_and_apply_customer_merge_events(
             else:
                 raise ValueError(f"Unsupported remote event_type '{event_type}'")
             conn.commit()
+        except UnresolvedMergeEventError as exc:
+            # Event-vs-local-data mismatch: quarantine and keep the stream moving so
+            # one unresolvable historical event cannot block scope-state mirroring.
+            conn.rollback()
+            _record_unresolved_event(conn, event, str(exc))
+            conn.commit()
+            stats["events_unresolved"] += 1
+            logger.warning(
+                "Customer merge event %s quarantined as unresolved: %s",
+                event.get("remote_event_id"),
+                exc,
+            )
         except Exception as exc:
             conn.rollback()
             logger.warning("Customer merge pull failed for event %s: %s", event.get("remote_event_id"), exc)
@@ -815,12 +1004,23 @@ def pull_and_apply_customer_merge_events(
 
     cursor_after = cursor_before if next_cursor is None else str(next_cursor)
     try:
+        from src.core.sync_identity import apply_customer_pull_scope_state
+
+        advertised_revision = apply_customer_pull_scope_state(
+            conn,
+            scope_state,
+            has_more=has_more,
+            stats=stats,
+            allow_customer_revision=not has_more,
+        )
         set_customer_merge_pull_cursor(conn, cursor_after)
         conn.commit()
         stats["cursor_after"] = cursor_after
+        stats["advertised_customer_revision"] = advertised_revision
     except Exception as exc:
         conn.rollback()
         stats["error"] = str(exc)
         return stats
 
+    stats["unresolved_pending"] = count_unresolved_customer_merge_events(conn)
     return stats

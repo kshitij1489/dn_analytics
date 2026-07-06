@@ -112,8 +112,40 @@ interface MatrixRow {
 }
 
 const getApiErrorMessage = (error: unknown): string => {
-    const err = error as { response?: { data?: { detail?: string } }; message?: string };
-    return err.response?.data?.detail || err.message || 'Something went wrong';
+    const err = error as {
+        response?: { data?: { detail?: string | Record<string, unknown> } };
+        message?: string;
+    };
+    const detail = err.response?.data?.detail;
+    if (typeof detail === 'string') {
+        return detail;
+    }
+    if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
+        const parts = [detail.message];
+        const attribution = detail.attribution;
+        if (Array.isArray(attribution) && attribution.length > 0) {
+            const labels = attribution.map((entry) => {
+                if (!entry || typeof entry !== 'object') return '';
+                const employee = (entry as { employee?: { name?: string } }).employee;
+                const device = (entry as {
+                    device?: {
+                        device_label?: string;
+                        device_name?: string;
+                        install_id?: string;
+                    };
+                }).device;
+                const by = employee?.name;
+                const from = device?.device_label || device?.device_name || device?.install_id;
+                if (by && from) return `${by} (${from})`;
+                return by || from || '';
+            }).filter(Boolean);
+            if (labels.length > 0) {
+                parts.push(`Changed by: ${labels.join(', ')}`);
+            }
+        }
+        return parts.join(' ');
+    }
+    return err.message || 'Something went wrong';
 };
 
 const renderVariantAssignments = (assignments?: MergeHistoryVariantAssignment[], compact = false) => {

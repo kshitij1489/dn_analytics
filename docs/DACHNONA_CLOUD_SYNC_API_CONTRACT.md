@@ -1,8 +1,8 @@
 # Dachnona Cloud Sync API Contract
 
 **Audience:** Dachnona backend engineers / Codex agent implementing the cloud-side sync work  
-**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. The **single-source-of-truth** work first sketched in Section 16 has since been **implemented** — but via the assignment-applier + materialized-ground-truth design in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md), which **supersedes** the Section 16 options. The authoritative, as-built wire contract — and the **freeze target for handoff** — is **Section 17**. Sections 5–15 remain accurate for the baseline; Section 16 is retained only as historical design context.  
-**Scope:** merge + bootstrap + attribution sync (Sections 5–15), plus the as-built assignment/verification sync in Section 17. Section 16 is superseded — do not implement against it.
+**Status:** **Baseline contract (Section 5) is implemented** on the Dachnona central server and in use by the desktop client. The **single-source-of-truth** work first sketched in Section 16 has since been **implemented** — but via the assignment-applier + materialized-ground-truth design in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md), which **supersedes** the Section 16 options. The authoritative, as-built wire contract — and the **freeze target for handoff** — is **Section 17**. **Section 18** (server-authoritative menu mutation commits) is **implemented** on the server and in the analytics client strict-mode path. **Section 19** (normalized server catalog / optional Phase C) is **implemented** on the server. **Section 20** (server-authoritative customer mutation commits) is **implemented** on the server and in the analytics client strict-mode path; Phase 6 rollout helpers and **Phase 7 validation** shipped 2026-07-06 (prod strict-mode flip pending). Sections 5–15 remain accurate for the baseline; Section 16 is retained only as historical design context.
+**Scope:** merge + bootstrap + attribution sync (Sections 5–15), plus the as-built assignment/verification sync in Section 17, server-authoritative menu mutation commits in Section 18, normalized catalog snapshot in Section 19, and server-authoritative customer mutation commits in Section 20. Section 16 is superseded — do not implement against it. Server mirror: `db.dachnona/contracts/DACHNONA_CLOUD_SYNC_API_CONTRACT.md` (§19 mutations = analytics §18; §20 catalog = analytics §19; §21 customer = analytics §20).
 
 ## 1. Purpose
 
@@ -114,6 +114,21 @@ The following **baseline** capabilities are **implemented on the Dachnona centra
 - `GET /desktop-analytics-sync/menu-merges` returns menu merge deltas for cursor-based pull  
 
 **Product gap (not a baseline gap):** That baseline does **not** encode every **in-place mapping verification** (`menu_item_variants.is_verified` toggles without a merge history row) or every **`verify_item`** path on the desktop. The **desktop client** for **Section 16.1** (mapping verification ingest/pull + emitters) now lives in this repo; **Dachnona** must still implement the matching routes and persistence. **Section 16.2+** (bootstrap/snapshot checkpoints and related) was superseded by the assignment snapshot endpoint (§17) — see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §5.
+
+### 5.6 Normalized catalog snapshot (optional Phase C — implemented — §19)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `menu-catalog-snapshot/latest` | Normalized catalog checkpoint (§19.3) |
+
+### 5.7 Server-authoritative customer mutations (implemented — §20)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `customer-mutations/commit` | Single human customer merge/undo commit (§20.4) |
+| `GET` | `customer-mutations/{mutation_id}` | Idempotency / timeout reconcile (§20.8) |
+
+All paths above are relative to `/desktop-analytics-sync/` (trailing slash optional).
 
 ## 6. Recommended Persistence Shape
 
@@ -937,6 +952,31 @@ Delivered on the central server via the [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_
 - [x] `GET /menu-assignments/snapshot` for fresh-install seeding (both merge and verification watermarks + cursors)  
 - [ ] Optional: server-side compaction / retention policy for high-volume verification events  
 
+### 14.3 Server-authoritative menu mutation commits (Section 18)
+
+Implemented. Full wire contract in **Section 18**; rollout runbook in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §12–§13.
+
+- [x] Migration: `MenuScopeState` + `MenuMutationLog`
+- [x] Backfill one `MenuScopeState` per scope
+- [x] Add `menu_revision` + `strict_mode_enabled` to pull/snapshot responses (§18.3)
+- [x] `POST …/menu-mutations/commit` with §18.7 semantics
+- [x] `GET …/menu-mutations/{mutation_id}` (§18.8)
+- [x] Legacy ingest gate — HTTP `426` when `strict_mode_enabled` (§18.9)
+
+### 14.4 Server-authoritative customer mutation commits (Section 20)
+
+Implemented on the server (Phases 1–2) and in the analytics client strict-mode path (Phases 3–5). Phase 6 rollout helpers and **Phase 7 validation** shipped 2026-07-06; **prod deploy + `set_customer_strict_mode --enable` completed and live-validated 2026-07-07** (merge/undo round-trip through the commit endpoint, revision 58 → 60; legacy ingest 426). Full wire contract in **Section 20**; validation record in [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §15.
+
+- [x] Migration: `CustomerScopeState` + `CustomerMutationLog`
+- [x] Backfill one `CustomerScopeState` per scope
+- [x] Add `customer_revision` + `strict_mode_enabled` to `GET …/customer-merges` pull (§20.3)
+- [x] `POST …/customer-mutations/commit` with §20.7 semantics
+- [x] `GET …/customer-mutations/{mutation_id}` (§20.8)
+- [x] Legacy customer ingest gate — HTTP `426` when `strict_mode_enabled` (§20.9)
+- [x] Client rollout drain helpers — `customer_outbox_drain.py`; API `GET /api/sync/customer-rollout-status`, `POST /api/sync/drain-customer-outbox` (§20.12)
+- [x] Phase 7 validation — strict-mode scenarios green in `tests/test_customer_strict_mode_validation.py` (client) and `CustomerMutationPhase7ValidationTests` (server); see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §15
+- [x] Prod deploy server + client release + `set_customer_strict_mode --enable` per scope (§20.12) — **done 2026-07-07**
+
 ## 15. Final Compatibility Summary
 
 For the current analytics client to work without further changes, the backend must satisfy these client expectations:
@@ -1123,3 +1163,472 @@ Frozen surfaces the client relies on (changing any is a breaking change):
 6. The two contract fixtures, kept byte-identical across repos.
 
 Additive changes (new response keys, new event kinds behind new `kind` values, new nullable columns) remain safe under §4.6.
+
+---
+
+## 18. Server-authoritative menu mutation commits (implemented)
+
+> **As-built extension (2026-07-06).** Section 17 remains the freeze target for batched ingest and pull replay. This section is the authoritative wire contract for strict-mode human edits: every covered mutation is an online-required, server-authorized commit before the desktop writes local SQLite. Snapshots + pull replay (§17) remain for fresh install, peer convergence, and recovery. Rollout and validation: [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §12–§13.
+
+### 18.1 Goal
+
+Make `db.dachnona` the commit authority for per-order-item assignment state, verification state, and merge/undo history. Catalog metadata for Phases 1–7 continues to flow via bootstrap `id_maps` and the `catalog_delta` field on accepted commits — normalized server catalog tables are optional Phase C and not required here.
+
+**In scope (six human edit paths):**
+
+| Operation | `mutation_type` |
+|-----------|-----------------|
+| Merge items (incl. variant mappings) | `menu_merge.applied` |
+| Undo merge | `menu_merge.undone` |
+| Resolve variant | `resolution_variant` |
+| Remap order-item cluster | `order_item_remap` |
+| Verify item | `verify` |
+
+Catalog-only helpers (`create_variant_type`, `resolve_item_rename`, `update_menu_variant_mapping`) stay local-first in Phases 1–7; effects created inside a strict mutation ride in that mutation's `catalog_delta`.
+
+### 18.2 Scope state row (`MenuScopeState`)
+
+Add one row per `scope_key`:
+
+```
+MenuScopeState(
+  scope_key              text primary key,
+  menu_revision          bigint not null default 0,   -- monotonic; +1 per accepted mutation
+  latest_menu_merge_seq  bigint,
+  latest_verification_seq bigint,
+  strict_mode_enabled    boolean not null default false,
+  updated_at             timestamptz not null
+)
+```
+
+- `menu_revision` is a **global** per-scope counter (intentionally conservative — may reject non-overlapping concurrent edits; the client auto-pulls and retries once).
+- `strict_mode_enabled` gates legacy batched ingest (§18.9). Defaults `false` until rollout.
+
+### 18.3 Revision advertisement in pull responses (Phase 1.3)
+
+These responses must include **both** `menu_revision` and `strict_mode_enabled` (additive keys under §4.6):
+
+- `GET /desktop-analytics-sync/menu-bootstrap/latest`
+- `GET /desktop-analytics-sync/menu-assignments/snapshot`
+- `GET /desktop-analytics-sync/menu-merges`
+- `GET /desktop-analytics-sync/menu-mapping-verifications`
+
+The desktop mirrors them into local `system_config` as `menu_state_revision` and `menu_strict_mode_enabled`. Older servers that omit these keys keep strict mode disabled on the client.
+
+**Client-side caveat (plan §12.5):** the desktop mirrors `menu_state_revision` only from responses whose apply also brings the pull cursors up to that revision — the drained event streams (`pull_latest_menu_state`) and the assignments snapshot. From `menu-bootstrap/latest` it mirrors **only** `menu_strict_mode_enabled`; mirroring the revision there would let a commit be accepted while peer events are still unapplied locally.
+
+### 18.4 Commit endpoint
+
+`POST /desktop-analytics-sync/menu-mutations/commit` — **exactly one** mutation per request; reject arrays/batches with HTTP `400`.
+
+**Request:**
+
+```json
+{
+  "schema_version": 1,
+  "mutation_id": "uuid-v4 — stable across retries",
+  "mutation_type": "menu_merge.applied | menu_merge.undone | resolution_variant | order_item_remap | verify",
+  "expected_menu_revision": 123,
+  "event": {
+    "remote_event_id": "...",
+    "event_type": "menu_merge.applied",
+    "schema_version": 2,
+    "occurred_at": "...",
+    "source_item": {},
+    "target_item": {},
+    "merge_payload": { "kind": "resolution_variant_v1", "assignments": [] }
+  },
+  "verification_events": [],
+  "catalog_delta": { "items": [], "variants": [] },
+  "uploaded_by": {},
+  "uploaded_from": {}
+}
+```
+
+- `event` reuses the §17 menu merge event shape (schema v2, first-class `assignments`) where applicable.
+- `verification_events` carries flag updates currently emitted on the mapping-verification stream.
+- `catalog_delta` carries menu items/variants created or renamed by the operation (applied by the client to local `menu_items` / `menu_item_variants`; not a new server table in Phases 1–7).
+- `mutation_id` is the idempotency key per `(scope_key, mutation_id)`.
+- `scope_key` is resolved server-side from the bearer token; clients must not send it in the commit body.
+
+### 18.5 Accepted response — HTTP `200`
+
+```json
+{
+  "status": "accepted",
+  "mutation_id": "...",
+  "menu_revision": 124,
+  "strict_mode_enabled": false,
+  "accepted_events": [
+    { "remote_event_id": "...", "server_seq": 456, "server_ingested_at": "..." }
+  ],
+  "assignment_rows": [
+    { "order_item_id": "...", "menu_item_id": "...", "variant_id": null,
+      "is_verified": 1, "assignment_seq": 456, "verification_seq": 89 }
+  ],
+  "catalog_delta": { "items": [], "variants": [] },
+  "merge_cursor": "...",
+  "verification_cursor": "..."
+}
+```
+
+The desktop applies this in one SQLite transaction. `assignment_rows` are for parity checking on the client — not a second write path. `merge_cursor` / `verification_cursor` are the post-commit stream heads and are informational: the desktop does **not** advance its pull cursors from them (plan §12.5) — the next pull replays the own-event gap idempotently.
+
+### 18.6 Conflict response — HTTP `409`
+
+Non-destructive — the server persists **nothing** for the rejected mutation:
+
+```json
+{
+  "status": "conflict",
+  "error": "Menu state changed on the server. Pull latest menu state and retry.",
+  "expected_menu_revision": 123,
+  "current_menu_revision": 124,
+  "conflicting_events": [
+    { "remote_event_id": "...", "server_seq": 456, "server_ingested_at": "...",
+      "attribution": {}, "order_item_ids": ["...", "..."] }
+  ],
+  "recommended_action": "pull_latest_menu_state"
+}
+```
+
+`conflicting_events` lists events committed between `expected_menu_revision` and `current_menu_revision`. Each entry **must** include `order_item_ids` (from stored event assignments) so the client can detect genuine overlap vs. a spurious global-revision conflict.
+
+The desktop must leave local SQLite unchanged when this response is returned.
+
+### 18.7 Server transaction semantics
+
+Everything below runs in **one** Postgres transaction:
+
+1. Resolve `scope_key`.
+2. Lock the scope row: `SELECT … FROM MenuScopeState WHERE scope_key = %s FOR UPDATE` — **before** the idempotency check so concurrent retries with the same `mutation_id` serialize.
+3. **Idempotency (inside the lock):** if a `MenuMutationLog` row exists for `(scope_key, mutation_id)`, return its stored accepted response with HTTP `200` and do no further writes. Treat a unique-constraint violation on `MenuMutationLog` insert as a replay: re-read and return the stored response.
+4. If `expected_menu_revision != menu_revision`, return **409** (§18.6) and persist nothing.
+5. Validate the event, assignments, verification entries, and catalog delta.
+6. Persist the mutation log row (`MenuMutationLog`, §18.10) **including `response_json`** for replay.
+7. Persist menu-merge and verification event rows with server ordering, then materialize into `order_item_assignments` via the existing `apply_menu_merge_event_to_assignments` / verification apply path. **Preserve single-owner `is_verified` (§17.4):** verification rows update the flag only under `id > last_verification_seq`; merge rows may set `is_verified` only when materializing a previously nonexistent assignment (create-only), never on update.
+8. `menu_revision += 1`; update `latest_menu_merge_seq` / `latest_verification_seq` / `updated_at`.
+9. Commit and return the accepted response (§18.5).
+
+**Orphaned commits are safe.** If the server accepts a mutation but the client never learns of it, the mutation reaches that client on its next pull like any peer edit.
+
+### 18.8 Status endpoint
+
+`GET /desktop-analytics-sync/menu-mutations/{mutation_id}`
+
+Scope is resolved server-side from the bearer token (same as commit). Clients must **not** send `scope_key` in the query string or commit body.
+
+- **200** — stored accepted response if `(scope_key, mutation_id)` is in `MenuMutationLog`.
+- **404** — mutation was never committed.
+
+**Client reconcile protocol after a POST timeout:**
+
+1. `GET` status. **200** → apply stored response, report success.
+2. **404** → one idempotent re-`POST` with the same `mutation_id` (serializes behind any in-flight transaction on the scope lock).
+3. If the re-`POST` also fails at the network level → report failure; SQLite unchanged. A mutation that landed server-side converges via the next pull.
+
+### 18.9 Legacy ingest gate
+
+At the **start** of batched menu-merge and mapping-verification ingest (§10, §17.5), look up `MenuScopeState.strict_mode_enabled`. If `true` for the scope, reject the whole batch with **HTTP `426`**:
+
+```json
+{
+  "status": "upgrade_required",
+  "error": "This store uses server-authorized menu commits; batched menu ingest is disabled. Upgrade the client."
+}
+```
+
+This prevents legacy installs from mutating state without bumping `menu_revision`.
+
+### 18.10 Server data model (`MenuMutationLog`)
+
+Required for Phases 1–7 (in addition to `MenuScopeState`, §18.2):
+
+```
+MenuMutationLog(
+  scope_key, mutation_id, mutation_type,
+  expected_menu_revision, accepted_menu_revision,
+  request_json, response_json,
+  attribution fields, created_at
+)
+```
+
+Unique `(scope_key, mutation_id)`. Audit parent **and** idempotency store.
+
+Keep existing menu-merge / verification event tables and `order_item_assignments` exactly as in §17 — they remain the replay streams and materialized truth.
+
+**Phase 1 backfill:** insert one `MenuScopeState` per known scope; set `menu_revision` from current state (monotonic — e.g. current max event `id`, or `0`), `strict_mode_enabled = false`.
+
+### 18.11 Implementation checklist (server)
+
+- [x] Migration: `MenuScopeState` + `MenuMutationLog`
+- [x] Backfill one `MenuScopeState` per scope
+- [x] Add `menu_revision` + `strict_mode_enabled` to pull/snapshot responses (§18.3)
+- [x] `POST …/menu-mutations/commit` with §18.7 semantics
+- [x] `GET …/menu-mutations/{mutation_id}` (§18.8)
+- [x] Legacy ingest gate (§18.9)
+
+---
+
+## 19. Normalized server catalog (optional Phase C — IMPLEMENTED)
+
+Moves catalog metadata off bootstrap JSON into queryable server tables. **Not required** for strict-mode mutation commits (§18); bootstrap `id_maps` remain supported for backward compatibility.
+
+### 19.1 Server data model
+
+```
+MenuCatalogItem(
+  scope_key, menu_item_id, name, item_type, is_verified, updated_at
+)  -- unique (scope_key, menu_item_id)
+
+MenuCatalogVariant(
+  scope_key, variant_id, variant_name, is_verified, updated_at
+)  -- unique (scope_key, variant_id)
+```
+
+`type_id_to_str` from bootstrap is **not** normalized into a separate table in Phase C; it is preserved from `MenuBootstrapLatest.id_maps` when publishing catalog snapshots.
+
+### 19.2 Materialization sources
+
+Normalized rows are updated from (in replay order during rebuild):
+
+1. `MenuBootstrapLatest.id_maps` (`menu_id_to_str`, `variant_id_to_str`)
+2. Accepted `MenuMutationLog.request_json.catalog_delta` payloads (strict-mode commits)
+3. `MenuMergeEvent.payload_json` `source_item` / `target_item` and variant mappings
+
+Live paths mirror rebuild: bootstrap ingest, mutation commit, and menu-merge ingest each upsert catalog rows.
+
+### 19.3 Catalog snapshot endpoint
+
+`GET /desktop-analytics-sync/menu-catalog-snapshot/latest`
+
+Returns bootstrap-compatible `id_maps` plus explicit `items` and `variants` arrays, `snapshot_id`, `version`, `generated_at`, and scope fields `menu_revision` / `strict_mode_enabled` (§18.3).
+
+```json
+{
+  "snapshot_id": "menu-catalog-2026-07-06T12:34:56+00:00",
+  "version": 1,
+  "generated_at": "2026-07-06T12:34:56+00:00",
+  "id_maps": {
+    "menu_id_to_str": {"item_latte": "Latte"},
+    "variant_id_to_str": {"variant_hot": "Hot"},
+    "type_id_to_str": {"type_bev": "Beverage"}
+  },
+  "items": [
+    {"menu_item_id": "item_latte", "name": "Latte", "type": "Beverage", "is_verified": true}
+  ],
+  "variants": [
+    {"variant_id": "variant_hot", "variant_name": "Hot", "is_verified": true}
+  ],
+  "menu_revision": 42,
+  "strict_mode_enabled": true
+}
+```
+
+### 19.4 Ops: rebuild + parity
+
+Management command `rebuild_menu_catalog` replays bootstrap + mutations + merge events into normalized tables. `--verify-bootstrap-parity` compares rebuilt `menu_id_to_str` / `variant_id_to_str` against `MenuBootstrapLatest.id_maps`.
+
+### 19.5 Implementation checklist (server — Phase C)
+
+- [x] Migration: `MenuCatalogItem` + `MenuCatalogVariant` + backfill RunPython
+- [x] `services/catalog_state.py` — apply, rebuild, snapshot builder, parity check
+- [x] Bootstrap ingest, mutation commit, and merge ingest update normalized catalog
+- [x] `GET …/menu-catalog-snapshot/latest`
+- [x] `rebuild_menu_catalog` management command
+- [x] Unit tests: bootstrap materialization, commit `catalog_delta`, snapshot endpoint, rebuild parity, merge-ingest snapshots
+
+---
+
+## 20. Server-authoritative customer mutation commits (implemented)
+
+> **As-built extension (2026-07-06).** Section 8 remains the freeze target for batched customer-merge ingest and pull replay. This section is the authoritative wire contract for strict-mode human customer edits: every merge or undo is an online-required, server-authorized commit before the desktop writes local SQLite when strict mode is active. Pull replay (§8) remains for fresh install, peer convergence, and recovery. There is **no** server materialized customer table — the server is an event log + revision guard. Rollout and validation: §20.12 and [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §14–§15. Server mirror: `db.dachnona/contracts/DACHNONA_CLOUD_SYNC_API_CONTRACT.md` **§21** (same semantics).
+
+### 20.1 Goal
+
+Make `db.dachnona` the commit authority for **customer merge/undo history** and therefore the customer mapping derived from it. Customer merge volume is low; full event replay from a null cursor already converges customers via portable locators — no snapshot endpoint.
+
+**In scope (two human edit paths):**
+
+| Operation | `mutation_type` |
+|-----------|-----------------|
+| Merge customers | `customer_merge.applied` |
+| Undo merge | `customer_merge.undone` |
+
+Customer `is_verified` changes only inside merge/undo events — there is no separate verification stream and no `catalog_delta`.
+
+### 20.2 Scope state row (`CustomerScopeState`)
+
+One row per `scope_key`, **separate from** `MenuScopeState` (§18.2) so menu and customer strict modes flip independently:
+
+```
+CustomerScopeState(
+  scope_key                  text primary key,
+  customer_revision          bigint not null default 0,   -- monotonic; +1 per accepted mutation
+  latest_customer_merge_seq  bigint,
+  strict_mode_enabled        boolean not null default false,
+  updated_at                 timestamptz not null
+)
+```
+
+- `customer_revision` is a **global** per-scope counter (intentionally conservative — may reject non-overlapping concurrent edits; the client auto-pulls and retries once when `customer_keys` do not overlap).
+- `strict_mode_enabled` gates legacy batched customer ingest (§20.9). Defaults `false` until rollout.
+
+### 20.3 Revision advertisement in pull responses
+
+`GET /desktop-analytics-sync/customer-merges` must include **both** `customer_revision` and `strict_mode_enabled` as additive top-level keys (safe under §4.6).
+
+The desktop mirrors them into local `system_config` as `customer_state_revision` and `customer_strict_mode_enabled`. Older servers that omit these keys keep customer strict mode disabled on the client.
+
+### 20.4 Commit endpoint
+
+`POST /desktop-analytics-sync/customer-mutations/commit` — **exactly one** mutation per request; reject arrays/batches with HTTP `400`.
+
+**Request:**
+
+```json
+{
+  "schema_version": 1,
+  "mutation_id": "uuid-v4 — stable across retries",
+  "mutation_type": "customer_merge.applied | customer_merge.undone",
+  "expected_customer_revision": 41,
+  "event": { "...": "the existing §7.3/§7.4 customer merge event payload, verbatim" },
+  "uploaded_by": {},
+  "uploaded_from": {}
+}
+```
+
+- `event` reuses the **existing** customer merge event shape (§7.3 applied / §7.4 undone): `remote_event_id`, `attribution`, `source_customer` / `target_customer` (snapshots + portable locators), `merge_metadata`, `moved_orders`, `local_refs`, and — for undo — `reverts_remote_event_id` + `undo_metadata`.
+- `mutation_id` is the idempotency key per `(scope_key, mutation_id)`.
+
+### 20.5 Accepted response — HTTP `200`
+
+```json
+{
+  "status": "accepted",
+  "mutation_id": "...",
+  "customer_revision": 42,
+  "strict_mode_enabled": true,
+  "accepted_events": [
+    { "remote_event_id": "...", "server_seq": 456, "server_ingested_at": "..." }
+  ],
+  "customer_merge_cursor": "<v2 cursor positioned after the accepted event>"
+}
+```
+
+The desktop applies this in one SQLite transaction via the existing pull appliers (§7.5 in the implementation plan). No `assignment_rows` or `catalog_delta` — the server does not materialize customer state.
+
+### 20.6 Conflict response — HTTP `409`
+
+Non-destructive — the server persists **nothing** for the rejected mutation:
+
+```json
+{
+  "status": "conflict",
+  "error": "Customer state changed on the server. Pull latest customer state and retry.",
+  "expected_customer_revision": 41,
+  "current_customer_revision": 42,
+  "conflicting_events": [
+    { "remote_event_id": "...", "server_seq": 456, "server_ingested_at": "...",
+      "attribution": {}, "customer_keys": ["<phone_hash>", "<name_address_hash>", "..."] }
+  ],
+  "recommended_action": "pull_latest_customer_state"
+}
+```
+
+`conflicting_events` lists events committed between `expected_customer_revision` and `current_customer_revision`. Each entry **must** include `customer_keys` — the deduplicated non-null values of `source_customer.portable_locators.phone_hash`, `source_customer.portable_locators.name_address_hash`, `target_customer.portable_locators.phone_hash`, and `target_customer.portable_locators.name_address_hash` from the stored `payload_json` — so the client can detect genuine overlap vs. a spurious global-revision conflict.
+
+Malformed events (e.g. undo referencing unknown `reverts_remote_event_id`) return HTTP `422`.
+
+### 20.7 Server transaction semantics
+
+Everything below runs in **one** Postgres transaction (same shape as §18.7):
+
+1. Resolve `scope_key`.
+2. Lock the scope row: `SELECT … FROM CustomerScopeState WHERE scope_key = %s FOR UPDATE` — **before** the idempotency check so concurrent retries with the same `mutation_id` serialize.
+3. **Idempotency (inside the lock):** if a `CustomerMutationLog` row exists for `(scope_key, mutation_id)`, return its stored accepted response with HTTP `200` and do no further writes. Treat a unique-constraint violation on `CustomerMutationLog` insert as a replay: re-read and return the stored response.
+4. If `expected_customer_revision != customer_revision`, return **409** (§20.6) and persist nothing.
+5. Validate the event: required top-level fields; `event_type` matches `mutation_type`; for `customer_merge.undone`, `reverts_remote_event_id` must reference an event in this scope.
+6. Persist the mutation log row (`CustomerMutationLog`, §20.10) **including `response_json`** for replay.
+7. Persist the customer merge event row via the **existing** ingest persistence path (same table as `POST …/customer-merges/ingest`, dedupe by `(scope_key, remote_event_id)`), so pull replay (§8) serves it to peers unchanged.
+8. `customer_revision += 1`; update `latest_customer_merge_seq` / `updated_at`.
+9. Compute `customer_merge_cursor` (v2 token at the accepted event), commit, and return the accepted response (§20.5).
+
+**Orphaned commits are safe.** If the server accepts a mutation but the client never learns of it, the mutation reaches that client on its next pull like any peer edit.
+
+### 20.8 Status endpoint
+
+`GET /desktop-analytics-sync/customer-mutations/{mutation_id}?scope_key=…`
+
+- **200** — stored accepted response if `(scope_key, mutation_id)` is in `CustomerMutationLog`.
+- **404** — mutation was never committed.
+
+**Client reconcile protocol after a POST timeout:**
+
+1. `GET` status. **200** → apply stored response, report success.
+2. **404** → one idempotent re-`POST` with the same `mutation_id` (serializes behind any in-flight transaction on the scope lock).
+3. If the re-`POST` also fails at the network level → report failure; SQLite unchanged. A mutation that landed server-side converges via the next pull.
+
+### 20.9 Legacy ingest gate
+
+At the **start** of `POST /desktop-analytics-sync/customer-merges/ingest`, look up `CustomerScopeState.strict_mode_enabled`. If `true` for the scope, reject the whole batch with **HTTP `426`**:
+
+```json
+{
+  "status": "upgrade_required",
+  "error": "This store uses server-authorized customer commits; batched customer merge ingest is disabled. Upgrade the client."
+}
+```
+
+`GET /customer-merges` (pull) is **not** gated — replay stays available to everyone. This prevents legacy installs from mutating state without bumping `customer_revision`.
+
+### 20.10 Server data model (`CustomerMutationLog`)
+
+In addition to `CustomerScopeState` (§20.2):
+
+```
+CustomerMutationLog(
+  scope_key, mutation_id, mutation_type,
+  expected_customer_revision, accepted_customer_revision,
+  request_json, response_json,
+  attribution fields, created_at
+)
+```
+
+Unique `(scope_key, mutation_id)`. Audit parent **and** idempotency store.
+
+Keep the existing customer merge event table (§6.1) exactly as it is — it remains the replay stream. **No materialized customer table.**
+
+**Phase 1 backfill:** insert one `CustomerScopeState` per known scope; set `customer_revision` from current max customer-merge event `id` (or `0`), `strict_mode_enabled = false`.
+
+### 20.11 Implementation checklist (server — Phases 1–2)
+
+See also §14.4.
+
+- [x] Migration: `CustomerScopeState` + `CustomerMutationLog`
+- [x] Backfill one `CustomerScopeState` per scope
+- [x] Add `customer_revision` + `strict_mode_enabled` to pull responses (§20.3)
+- [x] `POST …/customer-mutations/commit` with §20.7 semantics
+- [x] Unit tests: accept, duplicate replay, concurrent same-`mutation_id` serialize, stale 409 with `customer_keys`, malformed event 400, undo unknown revert 422
+- [x] `GET …/customer-mutations/{mutation_id}` (§20.8)
+- [x] Legacy customer ingest gate (§20.9)
+- [x] Phase 7 validation — strict-mode scenarios green in `tests/test_customer_strict_mode_validation.py` (client) and `CustomerMutationPhase7ValidationTests` (server); see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §15
+
+### 20.12 Rollout (Phase 6)
+
+Strict-mode customer edits require cloud connectivity when `strict_mode_enabled` is true on the scope. Menu and customer strict modes flip **independently**.
+
+| Step | Who | Action |
+|------|-----|--------|
+| 6.1 | Each install | Drain legacy outbox: `POST /api/sync/drain-customer-outbox` (or `drain_customer_outbox` / client-learning cycle). Verify `customer_merge_unsent = 0`. |
+| 6.2 | Server | Deploy Phases 1–2 with `strict_mode_enabled = false` everywhere. |
+| 6.3 | Client | Release client that mirrors `customer_state_revision` / `customer_strict_mode_enabled` and can commit; stays on legacy push until server flips the scope flag. |
+| 6.4 | Each install + server | Re-verify 6.1, then `python manage.py set_customer_strict_mode --enable` (bumps `customer_revision` to latest event ids by default). Legacy batched ingest then returns HTTP `426`. |
+
+**Client rollout helpers:** `src/core/customer_outbox_drain.py` (`get_customer_outbox_status`, `drain_customer_outbox`); API `GET /api/sync/customer-rollout-status`, `POST /api/sync/drain-customer-outbox`.
+
+**Server rollout command:** `set_customer_strict_mode` management command in `db.dachnona` (`backend/desktop_analytics_app_sync/management/commands/set_customer_strict_mode.py`).
+
+**Status (2026-07-07): ROLLOUT COMPLETE.** Prod server deployed; `set_customer_strict_mode --enable` flipped (`customer_revision` 58 == event stream at flip); legacy batched ingest returns HTTP 426. Live-validated same day: client `strict_mode_active = true`, real merge + undo round-trip through `POST /customer-mutations/commit` (revision 58 → 59 → 60), zero outbox rows.
+
+**Client replay quarantine (2026-07-07, client-local behavior — not a wire change):** replay events whose customers cannot be uniquely resolved against local data (weak/ambiguous `portable_locators`) are quarantined client-side in `customer_merge_unresolved_events` and retried on every later pull instead of halting the stream; the pull cursor and advertised scope state keep applying. `GET /api/sync/customer-rollout-status` exposes `customer_merge_unresolved`. See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §9.

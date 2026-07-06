@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.core.menu_bootstrap_sync import apply_menu_bootstrap_snapshot
+from src.core.menu_bootstrap_sync import (
+    apply_menu_bootstrap_snapshot,
+    fetch_and_apply_menu_bootstrap_snapshot,
+)
 
 
 class MenuBootstrapPullTests(unittest.TestCase):
@@ -196,6 +199,55 @@ class MenuBootstrapPullTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(variant["unit"], "GMS")
         self.assertEqual(variant["value"], 500)
+
+    def test_fetch_and_apply_mirrors_strict_flag_but_not_menu_revision(self) -> None:
+        # Plan §12.5: the catalog bootstrap does not drain the menu event
+        # streams, so it must not mirror the advertised menu_revision — only
+        # strict_mode_enabled. The revision is owned by pull_latest_menu_state
+        # and the assignment snapshot.
+        from src.core.sync_identity import (
+            get_menu_state_revision,
+            get_menu_strict_mode_enabled,
+            set_menu_state_revision,
+        )
+
+        set_menu_state_revision(self.conn, 7)
+        self.conn.commit()
+
+        fetch_result = {
+            "id_maps": {
+                "menu_id_to_str": {"item_cold_coffee": "Cold Coffee"},
+                "variant_id_to_str": {"variant_large": "Large"},
+                "variant_id_to_meta": {"variant_large": {"unit": "ML", "value": 750}},
+                "type_id_to_str": {"type_beverage": "Beverage"},
+            },
+            "cluster_state": {
+                "item_cold_coffee:type_beverage": {
+                    "101": [["101", "variant_large"]],
+                }
+            },
+            "metadata": {},
+            "scope_state": {"menu_revision": 99, "strict_mode_enabled": True},
+            "error": None,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
+                "scripts.seed_from_backups.get_resource_path",
+                return_value=str(data_dir),
+            ), patch(
+                "src.core.menu_bootstrap_sync.fetch_latest_menu_bootstrap_snapshot",
+                return_value=fetch_result,
+            ):
+                result = fetch_and_apply_menu_bootstrap_snapshot(
+                    self.conn,
+                    "https://cloud.example/menu-bootstrap/latest",
+                )
+
+        self.assertIsNone(result["error"])
+        self.assertTrue(get_menu_strict_mode_enabled(self.conn))
+        self.assertEqual(get_menu_state_revision(self.conn), 7)
 
 
 if __name__ == "__main__":

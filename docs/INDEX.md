@@ -27,6 +27,7 @@ Read files **in order** for the task at hand. Stop when you have enough context;
 |----------------------|-----------------|
 | **Menu sync / merge conflicts / verification / fresh-install convergence** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) (§2 design; §3 schema; §8 runbook) → [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17 |
 | **Cloud sync API (server-side / contract)** | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) → [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §2 (as-built design) |
+| **Customer merge sync / strict commits / replay quarantine** | [SYSTEM_CONTEXT.md](./SYSTEM_CONTEXT.md) → [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §9, §14–§15 → [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §20 |
 | **Forecasting or ingest pipelines** | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) Part 1 (forecasting) or Part 2 (cloud ingest) |
 | **Build / release / .dmg packaging** | [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) |
 | **macOS app won't open / signing / quarantine** | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) |
@@ -53,12 +54,12 @@ Read files **in order** for the task at hand. Stop when you have enough context;
 
 ## Status snapshot
 
-Pulled from doc headers (2026-07-06). See each doc for detail — do not treat this table as the source of truth. Refresh this table when a phase ships or a feature branch merges.
+Pulled from doc headers (2026-07-07). See each doc for detail — do not treat this table as the source of truth. Refresh this table when a phase ships or a feature branch merges.
 
 | Doc | Status (summary) |
 |-----|------------------|
-| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | **As-built & signed off 2026-07-06.** Assignment-based LWW sync, materialized server ground truth, fresh-install snapshot seed, single-owner `is_verified`, quarantine, operational runbook. Client on `sync-conflict-phase-2` (not merged to main). Open follow-ups in `pending_task.md` (legacy-key remap, C6/S3 digest deferred, UI badge, customer-stream). |
-| [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Baseline contract (§5–15) **implemented**. Assignment/verification sync in **§17 implemented**; §16 **superseded**. |
+| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | **As-built.** Assignment-based LWW sync + **strict-mode mutation commits, LIVE in prod for menu and customer since 2026-07-07** (menu validated §13, customer §15; live round-trips recorded). Unresolvable customer replay events quarantine per §9. Open follow-ups in `pending_task.md`. |
+| [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Baseline contract (§5–15) **implemented**. Assignment/verification sync in **§17 implemented**; §16 **superseded**. **§18 implemented + live** (menu commits). **§20 implemented + live** (customer commits). Strict mode flipped in prod 2026-07-07, both scopes. |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | **All phases complete.** |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Combined forecasting + cloud ingest reference; last updated Feb 2026. |
 | [pending_task.md](./pending_task.md) | **Open:** child-variant dedupe/reconcile during parent menu-item merge. |
@@ -79,7 +80,7 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 | [../AGENTS.md](../AGENTS.md) | Root AI-agent instructions |
 | [../CLAUDE.md](../CLAUDE.md) | Claude Code pointer to AGENTS + INDEX |
 | [../.cursor/rules/doc-routing.mdc](../.cursor/rules/doc-routing.mdc) | Cursor rule that routes agents through this hub |
-| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | Menu clustering sync — as-built architecture, DB schema, operational runbook |
+| [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) | Menu clustering sync — as-built architecture, DB schema, operational runbook (menu strict-mode §12–§13, customer strict-mode §14–§15, replay quarantine §9) |
 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Server wire contract |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Forecasting algorithms + cloud ingest schemas |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | AI chat mode architecture & task list |

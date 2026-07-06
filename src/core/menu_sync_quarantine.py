@@ -77,6 +77,21 @@ def quarantine_event(
     )
 
 
+def get_unresolved_quarantined_count(conn, stream: str) -> int:
+    ensure_menu_sync_quarantine_table(conn)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM menu_sync_event_quarantine
+        WHERE stream = ? AND resolved_at IS NULL
+        """,
+        (stream,),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row[0] if not isinstance(row, dict) else row["count"])
+
+
 def fetch_unresolved_quarantined_events(conn, stream: str) -> List[Dict[str, Any]]:
     ensure_menu_sync_quarantine_table(conn)
     rows = conn.execute(

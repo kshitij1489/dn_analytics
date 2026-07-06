@@ -152,6 +152,68 @@ def _insert_event(conn, event_type: str, occurred_at: str, payload: Dict[str, An
     return event_id
 
 
+def build_menu_mapping_verification_event_payloads(
+    conn,
+    rows: List[Dict[str, Any]],
+    *,
+    occurred_at: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Build mapping-verification event payloads without writing to the outbox.
+
+    Returns one payload per chunk (single mapping.verified or bulk mapping.bulk_verified).
+    """
+    normalized: List[Dict[str, Any]] = []
+    for raw in rows:
+        oid = str(raw.get("order_item_id") or "").strip()
+        mid = str(raw.get("menu_item_id") or "").strip()
+        if not oid or not mid:
+            continue
+        normalized.append(
+            _normalize_row(
+                oid,
+                mid,
+                raw.get("variant_id"),
+                int(raw.get("is_verified", 1)),
+            )
+        )
+    if not normalized:
+        return []
+
+    payloads: List[Dict[str, Any]] = []
+    for chunk in chunk_mapping_verification_rows(normalized, 500):
+        ts = occurred_at or datetime.now(timezone.utc).isoformat()
+        remote_event_id = _make_event_id()
+        attribution = get_sync_attribution(conn)
+        if len(chunk) == 1:
+            row = chunk[0]
+            payloads.append(
+                {
+                    "remote_event_id": remote_event_id,
+                    "schema_version": SCHEMA_VERSION,
+                    "event_type": EVENT_VERIFIED,
+                    "occurred_at": ts,
+                    "attribution": attribution,
+                    "order_item_id": row["order_item_id"],
+                    "menu_item_id": row["menu_item_id"],
+                    "variant_id": row["variant_id"],
+                    "is_verified": row["is_verified"],
+                }
+            )
+            continue
+        payloads.append(
+            {
+                "remote_event_id": remote_event_id,
+                "schema_version": SCHEMA_VERSION,
+                "event_type": EVENT_BULK_VERIFIED,
+                "occurred_at": ts,
+                "attribution": attribution,
+                "mappings": chunk,
+            }
+        )
+    return payloads
+
+
 def record_menu_mapping_verification_events(
     conn,
     rows: List[Dict[str, Any]],

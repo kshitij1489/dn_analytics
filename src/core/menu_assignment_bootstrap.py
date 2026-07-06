@@ -18,6 +18,7 @@ from src.core.menu_merge_sync import (
     get_menu_merge_pull_cursor,
     set_menu_merge_pull_cursor,
 )
+from src.core.sync_identity import apply_menu_scope_state
 
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ def bootstrap_menu_assignments_if_needed(
             watermark_seq = coerce_server_seq(page.get("watermark_seq"))
             watermark_cursor = page.get("watermark_cursor") or None
             verification_watermark_cursor = page.get("verification_watermark_cursor") or None
+            apply_menu_scope_state(conn, page)
 
         assignments = []
         for row in page["assignments"]:
@@ -188,6 +190,8 @@ def force_reseed_menu_assignments(
     endpoint: str,
     auth: Optional[str] = None,
     page_limit: int = SNAPSHOT_PAGE_LIMIT,
+    *,
+    apply_scope_state: bool = True,
 ) -> Dict[str, Any]:
     """
     Operator hard-reset: overwrite this install's cluster state from the server
@@ -226,6 +230,8 @@ def force_reseed_menu_assignments(
             watermark_seq = coerce_server_seq(page.get("watermark_seq"))
             watermark_cursor = page.get("watermark_cursor") or None
             verification_watermark_cursor = page.get("verification_watermark_cursor") or None
+            if apply_scope_state:
+                apply_menu_scope_state(conn, page)
 
         assignments = []
         for row in page["assignments"]:
@@ -258,10 +264,18 @@ def force_reseed_menu_assignments(
         if not after:
             break
 
-    if watermark_cursor:
-        set_menu_merge_pull_cursor(conn, watermark_cursor)
-    if verification_watermark_cursor:
-        set_menu_mapping_verification_pull_cursor(conn, verification_watermark_cursor)
+    merge_cursor_set = False
+    verification_cursor_set = False
+    if apply_scope_state:
+        if watermark_cursor:
+            set_menu_merge_pull_cursor(conn, watermark_cursor)
+            merge_cursor_set = True
+        if verification_watermark_cursor:
+            set_menu_mapping_verification_pull_cursor(
+                conn,
+                verification_watermark_cursor,
+            )
+            verification_cursor_set = True
     _set_config_value(conn, MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY, "force-reseed")
     conn.commit()
 
@@ -284,6 +298,6 @@ def force_reseed_menu_assignments(
         "rows_stale": rows_stale,
         "rows_missing": rows_missing,
         "watermark_seq": watermark_seq,
-        "cursor_set": bool(watermark_cursor),
-        "verification_cursor_set": bool(verification_watermark_cursor),
+        "cursor_set": merge_cursor_set,
+        "verification_cursor_set": verification_cursor_set,
     }

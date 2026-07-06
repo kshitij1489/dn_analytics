@@ -314,7 +314,12 @@ def _insert_event(conn, merge_id: int, event_type: str, occurred_at: str, payloa
     return event_id
 
 
-def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
+def build_merge_applied_event_payload(conn, merge_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Build a customer merge applied event payload from in-transaction state.
+
+    Intended for strict-mode capture before rollback — does not write to the outbox.
+    """
     if not has_customer_merge_sync_table(conn):
         return None
 
@@ -333,7 +338,7 @@ def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
     moved_order_ids = _normalize_order_ids(merge_row.get("moved_order_ids"))
     event_id = _make_event_id()
 
-    payload = {
+    return {
         "remote_event_id": event_id,
         "schema_version": SCHEMA_VERSION,
         "event_type": EVENT_TYPE_APPLIED,
@@ -348,10 +353,34 @@ def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
         },
         "local_refs": _build_local_refs(merge_row, moved_order_ids),
     }
+
+
+def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
+    payload = build_merge_applied_event_payload(conn, merge_id)
+    if not payload:
+        return None
+    merge_row = _get_merge_row(conn, merge_id)
+    if not merge_row:
+        return None
     return _insert_event(conn, merge_id, EVENT_TYPE_APPLIED, merge_row["merged_at"], payload)
 
 
-def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
+def _resolve_reverts_remote_event_id(conn, merge_id: int, suggestion_context: Dict[str, Any]) -> Optional[str]:
+    applied_event_id = _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED)
+    if applied_event_id:
+        return applied_event_id
+    remote_event_id = suggestion_context.get("remote_event_id")
+    if remote_event_id:
+        return str(remote_event_id)
+    return None
+
+
+def build_merge_undone_event_payload(conn, merge_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Build a customer merge undone event payload from in-transaction state.
+
+    Intended for strict-mode capture before rollback — does not write to the outbox.
+    """
     if not has_customer_merge_sync_table(conn):
         return None
 
@@ -363,13 +392,9 @@ def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
     if _is_cloud_pull_origin(undo_context):
         return None
 
-    applied_event_id = _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED)
+    applied_event_id = _resolve_reverts_remote_event_id(conn, merge_id, suggestion_context)
     if not applied_event_id:
-        remote_event_id = suggestion_context.get("remote_event_id")
-        if remote_event_id:
-            applied_event_id = str(remote_event_id)
-        else:
-            applied_event_id = record_merge_applied_event(conn, merge_id)
+        return None
 
     source_snapshot = json_loads_maybe(merge_row.get("source_snapshot"), {})
     target_snapshot = json_loads_maybe(merge_row.get("target_snapshot"), {})
@@ -383,7 +408,7 @@ def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
         undo_context = {}
     event_id = _make_event_id()
 
-    payload = {
+    return {
         "remote_event_id": event_id,
         "schema_version": SCHEMA_VERSION,
         "event_type": EVENT_TYPE_UNDONE,
@@ -404,6 +429,23 @@ def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
         },
         "local_refs": _build_local_refs(merge_row, moved_order_ids),
     }
+
+
+def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
+    if not has_customer_merge_sync_table(conn):
+        return None
+
+    merge_row = _get_merge_row(conn, merge_id)
+    if not merge_row or not merge_row.get("undone_at"):
+        return None
+
+    suggestion_context = _merge_suggestion_context(merge_row)
+    if _resolve_reverts_remote_event_id(conn, merge_id, suggestion_context) is None:
+        record_merge_applied_event(conn, merge_id)
+
+    payload = build_merge_undone_event_payload(conn, merge_id)
+    if not payload:
+        return None
     return _insert_event(conn, merge_id, EVENT_TYPE_UNDONE, merge_row["undone_at"], payload)
 
 

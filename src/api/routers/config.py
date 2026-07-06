@@ -247,7 +247,7 @@ def reset_db_section(data: Dict[str, str]):
         if section == "orders":
             # 1. Reset Orders Section
             # Clears POS data, customers (and merge/address rows that FK to them), menu + variants,
-            # and merge history / menu-merge sync queues. Re-seeds menu from bundled backups.
+            # and merge history / menu-merge sync queues. Catalog is re-pulled from cloud on next Sync DB.
             #
             # customer_merge_history references customers without ON DELETE CASCADE — must be
             # cleared before customers. menu_items.suggestion_id self-references menu_items.
@@ -308,22 +308,14 @@ def reset_db_section(data: Dict[str, str]):
             ):
                 conn.execute("DELETE FROM system_config WHERE key = ?", (cursor_key,))
             conn.commit()
-            
-            # Re-seed menu catalog from backups if available. Assignments are not
-            # seeded here: the central server is ground truth for those, and the
-            # next sync now re-triggers the fresh-install snapshot pull thanks to
-            # the cursor/flag clears above.
-            from scripts.seed_from_backups import perform_seeding
-            seed_status = "Data cleared."
-            try:
-                if perform_seeding(conn, seed_mappings=False):
-                    seed_status += " Menu catalog re-seeded from backups."
-                else:
-                    seed_status += " Menu seeding skipped (no backups)."
-            except Exception as e:
-                seed_status += f" Seeding failed: {str(e)}"
-                
-            return {"status": "success", "message": f"Successfully reset 'Orders' and 'Menu' database. {seed_status}"}
+
+            return {
+                "status": "success",
+                "message": (
+                    "Successfully reset 'Orders' and 'Menu' database. "
+                    "Run Sync DB to pull catalog and assignments from cloud."
+                ),
+            }
 
 
         elif section == "integrations":

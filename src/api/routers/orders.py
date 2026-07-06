@@ -5,7 +5,7 @@ Provides paginated views for orders, order items, customers, restaurants, etc.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 import json
 from src.core.queries import table_queries, customer_queries
 from src.api.dependencies import get_db
@@ -22,6 +22,30 @@ from src.api.models import (
 
 
 router = APIRouter()
+
+
+def _ensure_customer_edit_allowed(conn) -> None:
+    """Block customer merge/undo when strict mode is on but cloud readiness is missing."""
+    from src.core.customer_mutation_commit import (
+        build_customer_edit_http_exception,
+        strict_mode_edit_blocked_response,
+    )
+
+    blocked = strict_mode_edit_blocked_response(conn)
+    if blocked:
+        exc = build_customer_edit_http_exception(blocked)
+        if exc:
+            raise exc
+
+
+def _finalize_customer_edit_response(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Map customer merge/undo results to HTTP responses (409 conflict, 503 blocked, etc.)."""
+    from src.core.customer_mutation_commit import build_customer_edit_http_exception
+
+    exc = build_customer_edit_http_exception(res)
+    if exc:
+        raise exc
+    return res
 
 
 def create_table_endpoint(router: APIRouter, path: str, table_name: str, default_sort_col: str = "created_at"):
@@ -111,6 +135,7 @@ def get_customer_merge_history(limit: int = 20, conn=Depends(get_db)):
 @router.post("/customers/merge", response_model=CustomerMergeResult)
 def execute_customer_merge(req: CustomerMergeRequest, conn=Depends(get_db)):
     """Merge a source customer into a target customer."""
+    _ensure_customer_edit_allowed(conn)
     res = customer_queries.merge_customers(
         conn,
         req.source_customer_id,
@@ -120,18 +145,15 @@ def execute_customer_merge(req: CustomerMergeRequest, conn=Depends(get_db)):
         reasons=req.reasons,
         mark_target_verified=req.mark_target_verified,
     )
-    if res.get("status") == "error":
-        raise HTTPException(400, res["message"])
-    return res
+    return _finalize_customer_edit_response(res)
 
 
 @router.post("/customers/merge/undo", response_model=CustomerMergeResult)
 def undo_customer_merge(req: CustomerUndoMergeRequest, conn=Depends(get_db)):
     """Undo a previous customer merge."""
+    _ensure_customer_edit_allowed(conn)
     res = customer_queries.undo_customer_merge(conn, req.merge_id)
-    if res.get("status") == "error":
-        raise HTTPException(400, res["message"])
-    return res
+    return _finalize_customer_edit_response(res)
 
 
 @router.post("/customers/merge/pull-from-cloud")

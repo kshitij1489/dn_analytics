@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from scripts.seed_from_backups import perform_seeding
 from src.core.config.cloud_sync_config import get_cloud_sync_config
+from src.core.sync_identity import apply_menu_scope_state, extract_menu_scope_state
 from src.core.utils.path_helper import get_resource_path
 
 
@@ -205,6 +206,7 @@ def fetch_latest_menu_bootstrap_snapshot(
         if response.status_code >= 400:
             return {"error": f"HTTP {response.status_code}"}
         data = response.json()
+        scope_state = extract_menu_scope_state(data)
         normalized = _normalize_snapshot_payload(data)
     except Exception as exc:
         return {"error": str(exc)}
@@ -213,6 +215,7 @@ def fetch_latest_menu_bootstrap_snapshot(
         "id_maps": normalized["id_maps"],
         "cluster_state": normalized["cluster_state"],
         "metadata": normalized["metadata"],
+        "scope_state": scope_state,
         "error": None,
     }
 
@@ -293,5 +296,15 @@ def fetch_and_apply_menu_bootstrap_snapshot(
         fetch_result["cluster_state"],
         apply_mode=apply_mode,
     )
+    # Mirror only strict_mode_enabled here. The bootstrap does not drain the
+    # menu event streams, so mirroring the advertised menu_revision would break
+    # the invariant "menu_state_revision is current => pull cursors are current"
+    # and let a later commit be accepted while peer events are still unapplied
+    # (plan §12.5). The revision is owned by pull_latest_menu_state and the
+    # assignment snapshot, which keep the cursors consistent.
+    scope_state = dict(fetch_result.get("scope_state") or {})
+    scope_state.pop("menu_revision", None)
+    apply_menu_scope_state(conn, scope_state)
+    conn.commit()
     apply_result["metadata"] = fetch_result.get("metadata", {})
     return apply_result

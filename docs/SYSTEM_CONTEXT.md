@@ -16,8 +16,17 @@ The system is designed with a clear separation between durable configuration (th
 
 - **The Muscle (Transient)**: local SQLite database (`analytics.db`)
   - The local database can be wiped (`make clean`) and rebuilt from schema plus durable menu artifacts.
-  - **Boot / reset sequence**: `make start`, `make verify`, and reset flows create the SQLite schema if needed. When `menu_items` is empty, `scripts/seed_from_backups.py` auto-seeds **catalog only** (`perform_seeding(..., seed_mappings=False)`): `menu_items` and `variants` from `data/id_maps_backup.json` and `data/cluster_state_backup.json` (types from cluster keys). Per-order-item rows in `menu_item_variants` are filled on the next Sync DB from the server's watermarked assignment snapshot (`menu_assignment_bootstrap.py`; see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §5–§6). **Contingency-only** full restore (catalog + assignments from local JSON): run `python scripts/seed_from_backups.py`, or use explicit `seed_and_relink_orders` bootstrap mode — not the default fresh-install path.
+  - **Boot / reset sequence**: `make start`, `make verify`, and reset flows create the SQLite schema if needed. **Catalog** (`menu_items`, `variants`) is **not** auto-seeded from bundled JSON on routine paths. On first Sync DB with cloud configured, `menu_bootstrap_sync` pulls the catalog snapshot from the server **before** POS order import; assignment snapshot + event tails follow after orders (see [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §4–§6). Without cloud, orders create an organic catalog via clustering (degraded mode). Per-order-item rows in `menu_item_variants` are filled from the server's watermarked assignment snapshot (`menu_assignment_bootstrap.py`). **Contingency-only** full restore from local JSON (catalog + assignments): run `python scripts/seed_from_backups.py` (`seed_mappings=True`), or use explicit `seed_and_relink_orders` bootstrap mode — not the default fresh-install path.
   - **Cloud note**: Dachnona cloud/server code uses PostgreSQL. Do not assume local SQLite IDs are durable across rebuilds or installs.
+
+### Cloud commit authority (menu & customer)
+
+When cloud sync is configured and strict mode is active on a scope, the central server (`db.dachnona`, PostgreSQL) is the **commit authority** for:
+
+- Menu **assignments**, **verification flags**, and **merge/undo history** (human merge, undo, remap, resolve, verify).
+- Customer **merge/undo history** and merged customer identity.
+
+Local SQLite holds a cached copy; human edits in strict mode commit locally **only after** the server accepts the mutation. Local `data/*.json` exports (`export_to_backups`) are fallback/export artifacts — not routine ground truth for per-install assignment or customer-merge state. **Strict mode is live in prod for both scopes since 2026-07-07** (legacy batched ingest returns HTTP 426). See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §12 (menu), §14 (customer), and §9 (customer replay quarantine).
 
 ## 2. Menu Management Logic
 

@@ -131,9 +131,24 @@ Pull order (in `src/core/services/cloud_pull_orchestrator.py` — keep code and 
 4. **Menu merge events** — structural merges / resolution history.
 5. **Customer merges.**
 
-Pulls are **best-effort**: per-stream failures are logged (and, for menu streams, quarantined), never raised, so the Sync DB job finishes "successfully" while individual events may fail. Menu-stream cursors advance past quarantined events; the customer stream still uses older batch semantics (a top-level exception leaves its cursor unchanged).
+**Replay pulls and snapshots are permanent.** Even after server-authoritative strict mode is enabled, every install keeps pulling menu-merge and mapping-verification tails and can reseed from the assignment snapshot (`force_reseed_menu_assignments` / server `import_menu_assignment_baseline`). Strict mode changes how **this install authors** human edits (synchronous commit); it does not retire the replay streams.
 
-**Resilience:** both menu pull loops quarantine per-event failures and keep advancing the cursor, with a retry pass at the start of each pull. Shippers parse the server's per-event `accepted`/`rejected` lists (`sync_push_results.py`); rejected events are marked errored + quarantined so one poison event can't freeze the push queue. A background pull runs after the scheduler's push phase each cycle, under a process-wide `CLOUD_PULL_LOCK` shared with the Sync DB job; local merge/resolution/undo commits fire a push nudge (`menu_merge_push_nudge.py`).
+**Sync DB ground-truth pulls are mandatory** when cloud sync is configured: menu bootstrap (before orders on an empty catalog), assignment snapshot, verification tail, and merge tail failures surface as warnings/errors on the Sync DB job — the job must not report full success when a menu ground-truth pull failed. **Customer-merge pull failures also surface as terminal Sync DB errors** (§15).
+
+**Strict-mode rollout (Phase 6):**
+
+| Step | Who | Action |
+|------|-----|--------|
+| 6.1 | Server (`db.dachnona`) | Deploy Phases 1–2; `strict_mode_enabled = false` everywhere (legacy batched ingest still allowed). |
+| 6.2 | Client (this repo) | Release client that mirrors `menu_state_revision` / `menu_strict_mode_enabled` and can commit, but stays on legacy push until `strict_mode_active` (server flag off). |
+| 6.3 | Each install + server | Drain legacy outboxes (`POST /api/sync/drain-menu-outbox` or `drain_menu_outbox`); then server `python manage.py set_menu_strict_mode --enable` (bumps `menu_revision` to latest event ids by default). Legacy clients then get HTTP 426 on batched ingest. |
+| 6.4 | Docs | Replay pulls + snapshots remain (this section). |
+
+**Rollout status (2026-07-07): COMPLETE.** Steps 6.1–6.3 done — prod server deployed, `set_menu_strict_mode --enable` flipped (menu_revision 371 == event stream at flip), legacy batched ingest returns HTTP 426 on `menu-merges` and `menu-mapping-verifications`. **Live-validated 2026-07-07** against prod: client `strict_mode_active = true`, a real merge + undo round-tripped through `POST /menu-mutations/commit` (revision 371 → 372 → 373), zero outbox rows written, local state restored byte-identical after the undo.
+
+Client rollout helpers: `src/core/menu_outbox_drain.py` (`get_menu_outbox_status`, `drain_menu_outbox`); API `GET /api/sync/menu-rollout-status`, `POST /api/sync/drain-menu-outbox`. Server: `set_menu_strict_mode` management command.
+
+**Resilience:** both menu pull loops quarantine per-event failures and keep advancing the cursor, with a retry pass at the start of each pull. Legacy shippers parse the server's per-event `accepted`/`rejected` lists (`sync_push_results.py`); rejected events are marked errored + quarantined so one poison event can't freeze the push queue. Strict-mode human edits bypass the outbox entirely (`menu_mutation_commit.py`). A background pull runs after the scheduler's push phase each cycle, under a process-wide `CLOUD_PULL_LOCK` shared with the Sync DB job; legacy local merge/resolution/undo commits still fire a push nudge (`menu_merge_push_nudge.py`) until strict mode is active on the scope.
 
 ---
 
@@ -157,7 +172,7 @@ Bootstrap shipper (`menu_bootstrap_shipper.py`) sends `snapshot_role: "seed_only
 | Assignment extraction + seq-guarded apply | `src/core/menu_assignment_apply.py` |
 | Menu merge pull/apply (routing, echo/ack, no-op) | `src/core/menu_merge_sync.py` |
 | Fresh-install assignment snapshot seed | `src/core/menu_assignment_bootstrap.py` |
-| Local JSON backup seed/restore (catalog auto-seed always; assignments are contingency-only, via CLI or explicit `seed_and_relink_orders`) | `scripts/seed_from_backups.py` |
+| Local JSON backup seed/restore (CLI disaster recovery only; `seed_mappings=True` for full restore, or explicit `seed_and_relink_orders` bootstrap mode) | `scripts/seed_from_backups.py` |
 | Assignment schema (conditional ALTERs) | `src/core/menu_assignment_schema.py` |
 | Mapping verification emit / push / pull | `src/core/menu_mapping_verification_sync*.py`, `..._shipper.py` |
 | Quarantine helpers | `src/core/menu_sync_quarantine.py` |
@@ -166,11 +181,14 @@ Bootstrap shipper (`menu_bootstrap_shipper.py`) sends `snapshot_role: "seed_only
 | Sync conflicts API | `src/api/routers/menu.py` (`/api/menu/sync-conflicts`) |
 | Best-effort pull orchestration | `src/core/services/cloud_pull_orchestrator.py` |
 | Background pull scheduler + nudge | `src/core/services/cloud_sync_scheduler.py`, `src/core/menu_merge_push_nudge.py` |
+| Strict-mode commit + rollout drain | `src/core/menu_mutation_commit.py`, `src/core/menu_outbox_drain.py` |
 | Local edit paths (stamp pending_local) | `utils/menu_utils.py` |
 | Shared extraction fixtures | `contracts/menu_merge_event_fixtures.json` (both repos) |
 | Server: materializer + backfill | `db.dachnona backend/desktop_analytics_app_sync/services/assignment_state.py`, `rebuild_order_item_assignments` |
+| Server: strict-mode flip (rollout) | `db.dachnona backend/desktop_analytics_app_sync/management/commands/set_menu_strict_mode.py` |
 | Server: snapshot endpoint | `.../views/menu_assignments.py` |
-| Server: wire contract | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17 |
+| Server: wire contract | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §17–§18 |
+| Phase 7 validation tests | `tests/test_menu_strict_mode_validation.py` (client), `db.dachnona` `desktop_analytics_app_sync/tests.py` `MenuMutationPhase7ValidationTests` |
 
 ---
 
@@ -237,11 +255,11 @@ Many rows with the same normalized name and no usable `customer_identity_key` / 
 
 ---
 
-## 9. Customer-merge divergence (open)
+## 9. Customer-merge divergence (strict mode + replay caveats)
 
-The menu redesign deliberately excludes customer merge conflict semantics. Customer merges inherit the server ingest-ordering fix automatically, but have **no** assignment-based applier and **no** quarantine parity with the menu streams.
+Human customer merge/undo edits are **online-required** when `strict_mode_active` is true on the client — see §14. That path prevents concurrent conflicting merges via server-authorized commits (global `customer_revision` + `customer_keys` overlap check). **Replay pulls** (fresh install, peer convergence, strict-mode recovery) still resolve customers via `_resolve_customer_id` (`customer_merge_sync.py`) using `portable_locators` and normalized snapshots — not another machine's `local_refs.source_customer_id` (autoincrement `customer_id` is local-only). Weak locators (`anon:*` keys, null phone/address hashes, many customers sharing a normalized name) make the resolver return ambiguous. Order reassignment drift compounds it. Remediation items are tracked in [pending_task.md](./pending_task.md).
 
-Replay resolves customers via `_resolve_customer_id` (`customer_merge_sync.py`) using `portable_locators` and normalized snapshots — not another machine's `local_refs.source_customer_id` (autoincrement `customer_id` is local-only). Weak locators (`anon:*` keys, null phone/address hashes, many customers sharing a normalized name) make the resolver return ambiguous and raise. Order reassignment drift compounds it. Remediation items are tracked in [pending_task.md](./pending_task.md).
+**Unresolvable replay events quarantine (2026-07-07).** An event the resolver cannot uniquely match no longer halts the pull stream. It raises `UnresolvedMergeEventError` and is quarantined in `customer_merge_unresolved_events` (payload + attempts + last_error); the cursor and scope state keep advancing, and every later pull retries quarantined events first (oldest-first, so a healed applied event is found by its undo). Transient causes (customer not yet created by order sync, ambiguity that collapses after other merges apply) self-heal; permanent ones (name-only locators over duplicate names) stay quarantined and visible: Sync DB reports a non-fatal warning with the count, and `GET /api/sync/customer-rollout-status` exposes `customer_merge_unresolved`. All non-resolution failures (network, HTTP, invalid payload) keep failing closed. **Deliberate deviation from the menu design:** `customer_state_revision` still advances while events are quarantined — a permanently-ambiguous historical event must not disable server-authorized commits; divergence is bounded to the quarantined events. Two such prod events exist (name-only same-name dedupe merges from since-reset installs, 2026-04/2026-05); recreate those merges in-app if wanted.
 
 ---
 
@@ -258,3 +276,112 @@ Replay resolves customers via `_resolve_customer_id` (`customer_merge_sync.py`) 
 
 - **Writable seed path.** `export_to_backups` uses `get_resource_path("data")`, which under PyInstaller points at `_internal/data` inside the `.app` and can **mutate the bundled seed** after install. A separate initiative should move writable exports to `get_data_path("data")` next to `analytics.db` so reset + seed always reads pristine packaged JSON. Ref: `src/core/utils/path_helper.py`. Tracked in [pending_task.md](./pending_task.md).
 - **Clustering re-verifies via heuristic (C1).** `services/clustering_service.py` sets `is_verified=1` on insert when `(menu_item_id, variant_id)` is already verified elsewhere, so POS re-import of a known SKU doesn't reopen resolved work. New/unknown SKUs still insert `is_verified=0`.
+
+---
+
+## 12. Strict server-authoritative mutation mode (implemented)
+
+Human menu edits (merge, undo, remap, resolution, verify) are **online-required** when `strict_mode_active` is true on the client (`menu_strict_mode_enabled` mirrored from the server **and** cloud sync configured with a seen `menu_state_revision`). Each edit is captured in a rolled-back SQLite transaction, submitted as a single `POST /desktop-analytics-sync/menu-mutations/commit`, and applied locally only after the server accepts. Stale `expected_menu_revision` returns HTTP **409**; the client auto-pulls and retries non-overlapping edits once.
+
+| Component | Location |
+|-----------|----------|
+| Client commit + reconcile | `src/core/menu_mutation_commit.py` |
+| Strict-mode gates on edit paths | `utils/menu_utils.py` |
+| API 409/503 mapping | `src/api/routers/menu.py` |
+| Server commit + idempotency | `db.dachnona` `services/menu_mutation_commit.py` |
+| Legacy ingest gate (HTTP 426) | `services/strict_mode_gate.py` |
+| Rollout flip | `manage.py set_menu_strict_mode` |
+| Wire contract | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §18 |
+
+**Conflict model for human edits:** global `menu_revision` on the server prevents lost updates; the client masks non-overlapping 409s via auto-pull + one silent retry. Replay pulls + assignment snapshots remain for fresh install and recovery (§4). `assignment_rows` in accepted responses are parity-checked only (`check_assignment_parity` in `menu_mutation_commit.py`) — local apply always goes through the pull appliers.
+
+---
+
+## 13. Strict-mode validation record (Phase 7 — 2026-07-06)
+
+Automated coverage for the strict-mode commit design (formerly Phase 7 of the implementation plan). All scenarios below are **green** in CI-style unit tests unless noted. As-built behavior: §12 above.
+
+| # | Scenario | Client test | Server test |
+|---|----------|-------------|-------------|
+| 1 | Two-install race: stale merge → 409, SQLite unchanged; non-overlapping auto-retry | `tests/test_menu_strict_mode_validation.py::test_phase7_01_*` | `tests.py::test_commit_stale_revision_returns_409_with_order_item_ids` |
+| 2 | Undo race: stale undo rejected; merge history unchanged | `test_phase7_02_*` | `MenuMutationPhase7ValidationTests::test_phase7_02_*` |
+| 3 | Verification race: stale verify rejected; flag unchanged | `test_phase7_03_*` | `MenuMutationPhase7ValidationTests::test_phase7_03_*` |
+| 4 | Network failure: reconcile GET 404 → error, SQLite unchanged | `test_phase7_04_*` | — |
+| 5 | POST timeout + GET 200 reconcile → apply, no duplicate | `test_menu_mutation_commit.py::test_timeout_status_200_applies` | `test_status_returns_stored_response_or_404` |
+| 6 | Legacy batched push → HTTP 426, server unchanged | — | `test_phase7_06_*`, `test_legacy_ingest_returns_426_*` |
+| 7 | Accepted mutation parity (`assignment_rows` vs local) | `test_phase7_07_*` | `test_phase7_07_assignment_rows_match_server_assignments` |
+| 8 | Sync DB: catalog bootstrap before orders | `test_phase7_08_*` | — |
+| 9 | Sync DB: menu pull failure surfaces error | `test_phase7_09_*` | — |
+| 10 | Legacy outbox drain does not corrupt strict state | `test_phase7_10_*` | — |
+| 11 | Duplicate concurrent commit (same `mutation_id`) | — | `MenuMutationConcurrentCommitTests` (Postgres only; skipped on SQLite) |
+| 12 | Orphaned accepted mutation converges on next pull | `test_phase7_12_*` | — |
+| 13 | Self-apply parity: commit path ≡ peer pull path | `test_phase7_13_*`, `test_build_payload_in_uncommitted_txn_matches_pull_apply` | — |
+
+**Run commands:**
+
+```bash
+# analytics (client)
+python3 -m unittest tests.test_menu_strict_mode_validation tests.test_menu_mutation_commit tests.test_menu_edit_api tests.test_menu_rollout
+
+# db.dachnona (server)
+cd backend && DJANGO_SETTINGS_MODULE=config.settings_desktop_sync_test \
+  python3 manage.py test desktop_analytics_app_sync.tests.MenuMutationPhase7ValidationTests \
+  desktop_analytics_app_sync.tests.MenuMutationCommitPhase2Tests
+```
+
+---
+
+## 14. Customer strict server-authoritative mutation mode (implemented)
+
+Human customer merge/undo edits are **online-required** when `strict_mode_active` is true on the client (`customer_strict_mode_enabled` mirrored from the server **and** cloud sync configured with a seen `customer_state_revision`). Each edit is captured in a rolled-back SQLite transaction, submitted as a single `POST /desktop-analytics-sync/customer-mutations/commit`, and applied locally only after the server accepts. Stale `expected_customer_revision` returns HTTP **409**; the client auto-pulls and retries non-overlapping edits once (keyed on `customer_keys`).
+
+| Component | Location |
+|-----------|----------|
+| Client commit + reconcile | `src/core/customer_mutation_commit.py` |
+| Strict-mode gates on edit paths | `src/core/queries/customer_merge_queries.py` |
+| API 409/503 mapping | `src/api/routers/orders.py` |
+| Server commit + idempotency | `db.dachnona` `services/customer_mutation_commit.py` |
+| Legacy ingest gate (HTTP 426) | `services/strict_mode_gate.py` |
+| Rollout flip + outbox drain | `manage.py set_customer_strict_mode`, `src/core/customer_outbox_drain.py` |
+| Replay quarantine (unresolvable events, §9) | `src/core/customer_merge_sync.py` — `UnresolvedMergeEventError`, `customer_merge_unresolved_events` table |
+| Wire contract | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) §20 |
+
+**Conflict model for human edits:** global `customer_revision` on the server prevents lost updates; the client masks non-overlapping 409s via auto-pull + one silent retry keyed on `customer_keys`. Full event replay from a null cursor remains the fresh-install convergence path (no materialized customer table on the server). Replay events the local resolver cannot match are quarantined, not fatal — see §9.
+
+**Rollout status (2026-07-07): COMPLETE.** Prod server deployed, `set_customer_strict_mode --enable` flipped (customer_revision 58 == event stream at flip), legacy batched ingest returns HTTP 426 on `customer-merges`. **Live-validated 2026-07-07** against prod: client `strict_mode_active = true`, a real merge + undo round-tripped through `POST /customer-mutations/commit` (revision 58 → 59 → 60), zero outbox rows written, local state restored after the undo, merge history row applied via the server-accepted event (`sync_origin = cloud_pull`, `remote_event_id` recorded).
+
+---
+
+## 15. Customer strict-mode validation record (Phase 7 — 2026-07-06)
+
+Automated coverage for the customer strict-mode commit design (formerly Phase 7 of the implementation plan). All scenarios below are **green** in CI-style unit tests unless noted. As-built behavior: §14 above.
+
+| # | Scenario | Client test | Server test |
+|---|----------|-------------|-------------|
+| 1 | Two-install race: stale merge → 409, SQLite unchanged; non-overlapping auto-retry | `tests/test_customer_strict_mode_validation.py::test_phase7_01_*` | `CustomerMutationPhase7ValidationTests::test_phase7_01_*` |
+| 2 | Overlapping race: concurrent merge on same `customer_keys` → conflict surfaced | `test_phase7_02_*` | — |
+| 3 | Undo race: stale undo rejected; merge history unchanged | `test_phase7_03_*` | `CustomerMutationPhase7ValidationTests::test_phase7_02_*` |
+| 4 | Network failure: reconcile GET 404 → re-POST fails → error, SQLite unchanged | `test_phase7_04_*` | — |
+| 5 | POST timeout + GET 200 reconcile → apply, no duplicate | `test_phase7_05_*`, `test_customer_mutation_commit.py::test_timeout_status_200_applies` | `CustomerMutationCommitPhase2Tests::test_status_returns_stored_response_or_404` |
+| 6 | Legacy batched push → HTTP 426, server unchanged | `test_phase7_06_*` | `CustomerMutationPhase7ValidationTests::test_phase7_06_*` |
+| 7 | Fresh install / reset: full stream replay matches reference install | `test_phase7_07_*` | — |
+| 8 | Sync DB: customer pull failure surfaces error | `test_phase7_08_*`, `test_sync_operations.py::test_iter_sync_statuses_marks_customer_pull_failure_as_terminal_error` | — |
+| 9 | Self-apply parity: commit path ≡ peer pull path | `test_phase7_09_*`, `test_build_payload_in_uncommitted_txn_matches_pull_apply` | — |
+| 10 | Orphaned accepted mutation converges on next pull | `test_phase7_10_*` | — |
+| — | Duplicate concurrent commit (same `mutation_id`) | — | `CustomerMutationConcurrentCommitTests` (Postgres only; skipped on SQLite) |
+| 11 | Unresolvable replay event quarantined; stream + scope state continue; retry heals; non-resolution errors fail closed (added 2026-07-07) | `tests/test_customer_unresolved_quarantine.py` (7 tests), `test_sync_operations.py::test_iter_sync_statuses_keeps_done_when_customer_pull_only_has_unresolved_warning` | — |
+
+**Live prod validation (2026-07-07):** first Sync DB after the strict flip quarantined the two known unresolvable legacy events and converged (58 events → 12 applied, 44 deduped, 2 quarantined, revision 58 + strict flag mirrored); merge + undo round-trip `58 → 59 → 60`; legacy ingest 426 on all three streams; menu round-trip `371 → 372 → 373`.
+
+**Run commands:**
+
+```bash
+# analytics (client)
+python3 -m unittest tests.test_customer_strict_mode_validation tests.test_customer_mutation_commit tests.test_customer_edit_api tests.test_customer_rollout tests.test_sync_operations
+
+# db.dachnona (server)
+cd backend && DJANGO_SETTINGS_MODULE=config.settings_desktop_sync_test \
+  python3 manage.py test desktop_analytics_app_sync.tests.CustomerMutationPhase7ValidationTests \
+  desktop_analytics_app_sync.tests.CustomerMutationCommitPhase2Tests
+```
+

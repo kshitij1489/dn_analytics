@@ -9,6 +9,7 @@ from src.core.customer_merge_sync_events import (
     EVENT_TYPE_APPLIED,
     EVENT_TYPE_UNDONE,
     SCHEMA_VERSION,
+    build_merge_undone_event_payload,
 )
 from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
 
@@ -278,6 +279,79 @@ class CustomerMergeSyncTests(unittest.TestCase):
         self.assertEqual(undone_payload["event_type"], EVENT_TYPE_UNDONE)
         self.assertEqual(undone_payload["reverts_remote_event_id"], applied_row["event_id"])
         self.assertEqual(undone_payload["moved_orders"]["count"], 1)
+
+    def test_undo_emits_missing_applied_event_before_recording_undone(self) -> None:
+        merge_result = merge_customers(
+            self.conn,
+            "1",
+            "2",
+            similarity_score=0.9,
+            model_name="duplicate_matcher_v1",
+            reasons=["same address"],
+        )
+        self.conn.execute(
+            "DELETE FROM customer_merge_sync_events WHERE merge_id = ? AND event_type = ?",
+            (merge_result["merge_id"], EVENT_TYPE_APPLIED),
+        )
+        self.conn.commit()
+
+        undo_result = undo_customer_merge(self.conn, merge_result["merge_id"])
+        self.assertEqual(undo_result["status"], "success")
+
+        rows = self.conn.execute(
+            """
+            SELECT event_id, event_type, payload
+            FROM customer_merge_sync_events
+            WHERE merge_id = ?
+            ORDER BY event_type ASC
+            """,
+            (merge_result["merge_id"],),
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+
+        applied_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_APPLIED)
+        undone_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_UNDONE)
+        undone_payload = json.loads(undone_row["payload"])
+
+        self.assertEqual(undone_payload["reverts_remote_event_id"], applied_row["event_id"])
+        self.assertEqual(
+            json.loads(applied_row["payload"])["remote_event_id"],
+            applied_row["event_id"],
+        )
+
+    def test_build_merge_undone_payload_returns_none_without_reverts_target(self) -> None:
+        merge_result = merge_customers(
+            self.conn,
+            "1",
+            "2",
+            similarity_score=0.9,
+            model_name="duplicate_matcher_v1",
+            reasons=["same address"],
+        )
+        self.conn.execute(
+            "DELETE FROM customer_merge_sync_events WHERE merge_id = ?",
+            (merge_result["merge_id"],),
+        )
+        self.conn.execute(
+            """
+            UPDATE customer_merge_history
+            SET undone_at = CURRENT_TIMESTAMP,
+                undo_context = ?
+            WHERE merge_id = ?
+            """,
+            (
+                json.dumps({
+                    "restored_order_count": 1,
+                    "removed_target_address_ids": [],
+                    "restored_target_fields": [],
+                }),
+                merge_result["merge_id"],
+            ),
+        )
+        self.conn.commit()
+
+        payload = build_merge_undone_event_payload(self.conn, merge_result["merge_id"])
+        self.assertIsNone(payload)
 
     @patch("requests.post")
     def test_upload_pending_posts_events_and_marks_rows_uploaded(self, mock_post: Mock) -> None:

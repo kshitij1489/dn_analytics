@@ -2,15 +2,13 @@ import os
 import sqlite3
 from src.core.db.connection import get_db_connection, DB_PATH
 from src.core.utils.path_helper import get_resource_path
-from scripts.seed_from_backups import perform_seeding
-
 def reset_database():
     """
     Resets the database by:
     1. Removing the analytics.db file (if exists)
     2. Creating a new connection (creates file)
     3. Executing schema_sqlite.sql
-    4. Auto-seeding menu data from backup JSON files
+    4. Leaves catalog empty — next Sync DB pulls from cloud when configured
     """
     try:
         # 1. Delete existing DB file
@@ -35,22 +33,9 @@ def reset_database():
              raise Exception(f"Schema file not found at {schema_path}")
              
         conn.commit()
-        
-        # 4. Auto-seed menu catalog from backups (menu_items, variants only).
-        # Per-order-item assignments are not seeded here: the central server is
-        # ground truth for those, and a fresh install picks them up from the
-        # server's watermarked snapshot on the next sync (menu_assignment_bootstrap.py).
-        try:
-            if perform_seeding(conn, seed_mappings=False):
-                seed_msg = " Menu catalog seeded from backups."
-            else:
-                seed_msg = " Menu seeding skipped (no backup files)."
-        except Exception as seed_err:
-            seed_msg = f" Menu seeding failed: {str(seed_err)}"
-        
         conn.close()
 
-        return True, f"Database reset successfully.{seed_msg}"
+        return True, "Database reset successfully. Run Sync DB to pull catalog from cloud."
 
     except Exception as e:
         return False, str(e)
