@@ -1,19 +1,23 @@
 # System Context & Architecture
 
+> **For AI agents:** Start at [INDEX.md](./INDEX.md) for task routing and token budget. Session conventions: [AI_SESSION_GUIDE.md](./AI_SESSION_GUIDE.md). Root pointers: [../AGENTS.md](../AGENTS.md), [../CLAUDE.md](../CLAUDE.md).
+
 This document provides the canonical technical overview of the Analytics Project. It is intended for LLMs and developers to understand the system's core behaviors, especially concerning data persistence, menu logic, and the "Brain vs. Muscle" architecture.
 
 ## 1. Core Architecture: "Brain vs. Muscle"
 
 The system is designed with a clear separation between durable configuration (the "Brain") and the transient database (the "Muscle").
 
-- **The Brain (Persistent)**: `data/item_parsing_table.csv`
-  - This file is the **single source of truth** for all item mappings, verifications, and merges.
-  - **Caveat**: This file is only updated when the user explicitly clicks "Save Changes" or "Merge" in the UI. Automated background processes do *not* write to it.
-  - **Portability**: This file must be preserved. If moved to a new machine, the system will fully restore its state from this file.
+- **The Brain (Persistent)**: durable menu mapping artifacts in `data/`
+  - `data/item_parsing_table.csv` is the durable source for item mapping rules when present and must never be deleted or overwritten casually.
+  - `data/cluster_state_backup.json` and `data/id_maps_backup.json` are the current local reseed/export artifacts used to rebuild the SQLite menu catalog.
+  - **Caveat**: These artifacts are only updated by explicit user actions or explicit export flows. Automated background processes must not silently replace the durable truth.
+  - **Portability**: These files must be preserved. They are what let the app restore menu state on a new machine or after a local database reset.
 
-- **The Muscle (Transient)**: PostgreSQL Database
-  - The database can be wiped (`make clean`) and rebuilt at any time.
-  - **Boot Sequence**: On every `make load-menu`, the system *first* reads the CSV to seed the `item_parsing_table` in the DB, *then* processes the menu. This ensures that previous merges and aliases are respected immediately, preventing duplicate items from reappearing.
+- **The Muscle (Transient)**: local SQLite database (`analytics.db`)
+  - The local database can be wiped (`make clean`) and rebuilt from schema plus durable menu artifacts.
+  - **Boot / reset sequence**: `make start`, `make verify`, and reset flows create the SQLite schema if needed. Empty menu tables are reseeded from `data/cluster_state_backup.json` and `data/id_maps_backup.json` via `scripts/seed_from_backups.py`.
+  - **Cloud note**: Dachnona cloud/server code uses PostgreSQL. Do not assume local SQLite IDs are durable across rebuilds or installs.
 
 ## 2. Menu Management Logic
 
@@ -38,6 +42,6 @@ The system is designed with a clear separation between durable configuration (th
 
 ## 4. Important Caveats for Future Development
 
-1.  **Never Delete the CSV**: Deleting `data/item_parsing_table.csv` causes total amnesia. The system will revert to guessing every item from scratch, losing all manual merges and fixes.
-2.  **Schema Changes in Views**: PostgreSQL prevents dropping columns from views if they are used elsewhere. Always use `DROP VIEW ... CASCADE` when modifying view structure.
+1.  **Never delete Brain artifacts**: Do not delete or overwrite `data/item_parsing_table.csv`, `data/cluster_state_backup.json`, or `data/id_maps_backup.json` without explicit user intent (see section 1). Losing these causes total amnesia — the system reverts to guessing every item from scratch and loses manual merges and fixes.
+2.  **Database Context Matters**: Local app code uses SQLite; Dachnona cloud/server code uses PostgreSQL. Check which side you are editing before applying database-specific assumptions.
 3.  **No "Version 2"**: Any references to "Version 1" or "Version 2" in legacy comments should be ignored. The current state described here is the baseline.

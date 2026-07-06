@@ -6,6 +6,8 @@
 
 This doc complements:
 
+- [INDEX.md](./INDEX.md) — doc hub and task routing  
+- [AI_SESSION_GUIDE.md](./AI_SESSION_GUIDE.md) — cross-tool session conventions  
 - [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) — merge + bootstrap ingest/pull contracts  
 - [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) — the conflict/LWW plan under which Option A actually landed (phases C1–C5)  
 - [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) — broader sync overview  

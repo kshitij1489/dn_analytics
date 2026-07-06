@@ -64,11 +64,14 @@ Make parent menu-item merge perform proper child-variant dedupe and reconciliati
   - what requires manual selection
 - [ ] Reuse the variant-mapping merge path where possible instead of maintaining two inconsistent merge behaviors
 - [ ] Ensure all affected tables are updated consistently during reconciliation:
-  - `menu_item_variants`
+  - `menu_item_variants` — **also stamp `pending_local = 1, assignment_seq = NULL`** on every row the reconciliation rewrites (the sync echo/ack path relies on this; see `utils/menu_utils.py` merge paths and [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) §2.3)
   - `order_items`
   - `order_item_addons`
-  - `merge_history`
+  - `merge_history` — carries the new `origin` column (`'remote'` for sync-applied rows; local reconciliation leaves it NULL)
 - [ ] Ensure merge history stores child-variant reconciliation details so undo remains correct
+- [ ] **Integrate with the assignment-based sync layer** (landed after this doc was written — see [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md)): any child-variant reassignment/dedupe is a per-`order_item_id` assignment change, so the emitted merge event **must** include those `order_item_id`s in its `assignments` array (schema v2), or peer installs will not converge the reconciled children
+- [ ] **Preserve the single-owner `is_verified` rule** (I5): if reconciliation changes a child mapping's verified flag, emit a mapping-verification event (`record_menu_mapping_verification_events_chunked`) — the merge stream only seeds `is_verified` on INSERT and must not rewrite it on an existing row
+- [ ] **Undo carries prior assignments**: reconciled-merge undo must emit the prior per-`order_item_id` assignments in the undo event (undo is just another LWW write), not rely on local `merge_history` replay alone
 - [ ] Verify undo works for:
   - plain child reparenting
   - child dedupe into existing target variants
@@ -79,6 +82,7 @@ Make parent menu-item merge perform proper child-variant dedupe and reconciliati
   - `B -> A` where names match but IDs differ
   - `B -> A` where matches are ambiguous
   - undo after reconciled merge
+  - two installs: reconciled merge on install 1 → push/pull → install 2 converges the same child variants (assignment LWW)
 - [ ] Add regression tests to confirm revenue, quantity, and variant assignments remain correct after merge and undo
 - [ ] Add a rollout safeguard:
   - feature flag or guarded UI path if needed
@@ -92,3 +96,4 @@ Make parent menu-item merge perform proper child-variant dedupe and reconciliati
 - Ambiguous matches are not auto-merged silently
 - Undo restores both parent and child assignments correctly
 - Merge preview explains the child-variant outcome before confirmation
+- The reconciled merge (and its undo) emits assignment + verification events so other installs converge to the same child-variant state

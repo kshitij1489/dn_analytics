@@ -1,69 +1,73 @@
 # Analytics Project
 
-This project fetches, cleans, and analyzes order data from the PetPooja webhook server.
+Desktop analytics app for order ingestion, menu clustering, forecasting, and cloud sync with Dachnona.
 
 ## 📂 Project Structure
 
-- **`app.py`**: Streamlit visualization and management UI.
-- **`services/`**: Core business logic and data ingestion scripts (e.g., `load_orders.py`, `clustering_service.py`).
-- **`database/`**: SQL schemas.
-- **`data_cleaning/`**: Logic for matching raw names to menu items.
-- **`data/`**: Configuration files and CSV seeds (e.g., `item_parsing_table.csv`).
-- **`utils/`**: Shared utility modules (API client, database helpers).
-- **`scripts/`**: One-off scripts and legacy data tools.
+- **`src/`**: FastAPI backend, API routers, SQLite connection, and cloud sync logic.
+- **`ui_electron/`**: Electron + React frontend.
+- **`services/`**: Data ingestion, order loading, and clustering helpers.
+- **`database/`**: SQLite schema and migration assets.
+- **`data/`**: Durable menu/reseed artifacts and local data files.
+- **`utils/`**: Shared menu, clustering, and sync utilities.
+- **`scripts/`**: Start, build, sync, verification, and release scripts.
 
 
 ## 🚀 Getting Started
 
-### Quick Start (Docker)
-The recommended way to run this project is using Docker.
+### Quick Start (Desktop Dev)
 
 ```bash
-# 1. Start all services (Database + Web App)
-make up
+# 1. Start backend + Electron frontend
+make start
 
-# 2. View application logs
-make logs
+# 2. Verify SQLite connection and schema
+make verify
 
-# 3. Access web UI
-# Open http://localhost:8501
+# 3. Sync new orders incrementally
+make sync
 ```
 
-### Manual Setup (Local)
+### Manual Setup
 1. **Install Dependencies**:
    ```bash
-   pip install -r requirements_app.txt
+   pip install -r requirements.txt
+   cd ui_electron && npm install
    ```
 2. **Environment**:
-   Set `DB_URL` (e.g., `postgresql://user:pass@localhost:5432/analytics`).
+   Optional: set `DB_URL` to an alternate SQLite path. By default the app uses `analytics.db`.
 3. **Run App**:
    ```bash
-   python3 run_app.py
+   make start
    ```
 
 ## 🛠 Project Architecture
 
 ### "Brain vs. Muscle"
-- **Brain (`data/item_parsing_table.csv`)**: Single source of truth for item mappings. Preserved across rebuilds.
-- **Muscle (PostgreSQL)**: Transient database. Can be wiped (`make clean`) and rebuilt (`make up`) anytime.
+- **Brain (`data/` durable menu artifacts)**: Persistent mapping/reseed state. Preserve across rebuilds.
+- **Muscle (`analytics.db` SQLite)**: Transient local database. Can be wiped (`make clean`) and rebuilt (`make start` / `make verify`) from schema plus durable artifacts.
 
 ### Key Directories
-- **`app.py`**: Main Streamlit dashboard.
+- **`src/`**: Backend, API routers, database access, and sync logic.
+- **`ui_electron/`**: Desktop frontend.
 - **`services/`**: Data ingestion (`load_orders.py`) and business logic.
 - **`database/`**: SQL schemas.
-- **`data_cleaning/`**: Logic for normalizing menu item names.
 - **`scripts/`**: Utilities for fetching and validating data.
 
 ## 📚 Documentation
+
+**Start here:** [docs/INDEX.md](docs/INDEX.md) (task routing hub) · [AGENTS.md](AGENTS.md) (AI agent instructions) · [CLAUDE.md](CLAUDE.md) (Claude pointer)
+
 - **System Context**: [docs/SYSTEM_CONTEXT.md](docs/SYSTEM_CONTEXT.md)
-- **Database Schema**: Full schema in `database/schema.sql`
+- **AI session guide**: [docs/AI_SESSION_GUIDE.md](docs/AI_SESSION_GUIDE.md)
+- **Database Schema**: Full schema in `database/schema_sqlite.sql`
 - **Build & Share**: [docs/BUILD_INSTRUCTIONS.md](docs/BUILD_INSTRUCTIONS.md)
-- **Forecasting**: [docs/forecast.md](docs/forecast.md)
+- **Forecasting & cloud sync**: [docs/FORECASTING_AND_SYNC.md](docs/FORECASTING_AND_SYNC.md)
 - **Troubleshooting (macOS app)**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## 🔧 Troubleshooting
-- **App Not Loading**: Ensure you use `http://localhost:8501`.
-- **Database Reset**: Run `make clean && make up` to wipe and re-seed the DB.
+- **App Not Loading**: Run `make backend` and `make frontend` separately to isolate backend vs Electron issues.
+- **Database Reset**: Run `make clean && make verify` to wipe and recreate the local SQLite DB.
 - **New Orders**: Run `make sync` to fetch incremental orders.
 - **macOS "Damaged" or "Unidentified Developer"**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
