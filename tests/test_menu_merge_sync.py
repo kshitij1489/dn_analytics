@@ -439,9 +439,10 @@ class MenuMergeSyncTests(unittest.TestCase):
 
     @patch("utils.menu_utils.export_to_backups", return_value=True)
     def test_pull_skips_unappliable_event_and_keeps_going(self, _mock_export) -> None:
-        # First event is un-appliable (merging an item into itself); the pull must
-        # not halt on it. The second, valid event should still apply and the cursor
-        # should advance past the whole page.
+        # First event is un-appliable (no derivable assignments and a source item
+        # whose snapshot is too bare to resurrect); the pull must not halt on it.
+        # The second, valid event should still apply and the cursor should
+        # advance past the whole page.
         remote_events = [
             {
                 "remote_event_id": "remote-bad-1",
@@ -449,10 +450,7 @@ class MenuMergeSyncTests(unittest.TestCase):
                 "event_type": "menu_merge.applied",
                 "occurred_at": "2026-04-14T10:00:00Z",
                 "source_item": {
-                    "menu_item_id": "item_target",
-                    "name": "Cold Coffee",
-                    "type": "Beverage",
-                    "is_verified": True,
+                    "menu_item_id": "item_missing",
                 },
                 "target_item": {
                     "menu_item_id": "item_target",
@@ -515,7 +513,7 @@ class MenuMergeSyncTests(unittest.TestCase):
         self.assertEqual(quarantine_row["stream"], "menu_merge")
         self.assertEqual(int(quarantine_row["fail_count"]), 1)
         self.assertIsNone(quarantine_row["resolved_at"])
-        self.assertIn("itself", quarantine_row["error"])
+        self.assertIn("not found", quarantine_row["error"])
 
         # The good merge landed; the bad one left no partial state behind.
         self.assertEqual(
@@ -586,6 +584,101 @@ class MenuMergeSyncTests(unittest.TestCase):
             ).fetchone()["menu_item_id"],
             "item_target",
         )
+
+    @staticmethod
+    def _self_merge_audit_event(remote_event_id: str) -> dict:
+        # Real shape from the April addon-consolidation events: source == target
+        # by design, merge_payload kind basic_merge_v1 but a mapping_audit_v1
+        # history with no affected_order_item_ids → no derivable assignments.
+        item = {
+            "menu_item_id": "item_target",
+            "name": "Cold Coffee",
+            "type": "Beverage",
+            "is_verified": True,
+        }
+        return {
+            "remote_event_id": remote_event_id,
+            "schema_version": 1,
+            "event_type": "menu_merge.applied",
+            "occurred_at": "2026-04-16T19:13:47Z",
+            "source_item": dict(item),
+            "target_item": dict(item),
+            "merge_payload": {
+                "kind": "basic_merge_v1",
+                "history_payload": {
+                    "kind": "mapping_audit_v1",
+                    "menu_item_id": "item_target",
+                    "actions": ["Consolidated duplicate addon keys"],
+                },
+            },
+        }
+
+    @patch("utils.menu_utils.export_to_backups", return_value=True)
+    def test_same_item_audit_event_applies_as_noop(self, _mock_export) -> None:
+        # A same-item event with no derivable assignments must be recorded and
+        # skipped, not replayed through the cluster path (which would raise
+        # "Cannot merge item into itself" and quarantine it forever).
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "events": [self._self_merge_audit_event("remote-audit-1")],
+            "next_cursor": "cursor-10",
+        }
+
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_failed"], 0)
+        self.assertEqual(result["events_quarantined"], 0)
+        self.assertEqual(result["events_skipped"], 1)
+        self.assertEqual(result["cursor_after"], "cursor-10")
+        # Recorded for dedupe so a re-pull skips it as a duplicate.
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM menu_merge_remote_events WHERE remote_event_id = 'remote-audit-1'"
+            ).fetchone()[0],
+            1,
+        )
+        # No state was touched.
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = '1'"
+            ).fetchone()["menu_item_id"],
+            "item_source",
+        )
+
+    @patch("utils.menu_utils.export_to_backups", return_value=True)
+    def test_quarantined_self_merge_event_drains_as_noop(self, _mock_export) -> None:
+        # Events quarantined by the old behavior resolve on the next pull's
+        # retry pass once the no-op path recognizes them.
+        event = self._self_merge_audit_event("remote-audit-stuck-1")
+        ensure_menu_merge_sync_tables(self.conn)
+        quarantine_event(
+            self.conn, "menu_merge", "remote-audit-stuck-1", event,
+            "Cannot merge item into itself",
+        )
+        self.conn.commit()
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"events": [], "next_cursor": None}
+
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        self.assertEqual(result["quarantine_retried"], 1)
+        self.assertEqual(result["quarantine_resolved"], 1)
+        quarantine_row = self.conn.execute(
+            "SELECT resolved_at FROM menu_sync_event_quarantine WHERE remote_event_id = 'remote-audit-stuck-1'"
+        ).fetchone()
+        self.assertIsNotNone(quarantine_row["resolved_at"])
 
     def test_cursor_reset_happens_exactly_once(self) -> None:
         # Pre-migration state: v1 cursors exist and no schema version is recorded.

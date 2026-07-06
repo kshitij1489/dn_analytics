@@ -1,7 +1,7 @@
 # Menu single source of truth — implementation plan
 
 **Audience:** Product + engineers (desktop analytics repo + Dachnona cloud)  
-**Status:** Phases 0, 1, and 3 (C1) **implemented and shipping against prod**; Phase 2 (Option B) **partially superseded** by the verification event stream + bootstrap watermark cursor; Phase 4 (Option C) not built. **Cross-device convergence (S2) not yet validated** — only one install exists as of 2026-07-06. See **§0. As-built status** below.  
+**Status:** **SIGNED OFF 2026-07-06.** Phases 0, 1, and 3 (C1) **implemented and shipping against prod**; Phase 2 (Option B) **superseded by design** (verification event stream + assignment snapshot/watermark cursor make an `is_verified` snapshot overlay unnecessary); Phase 4 (Option C) **not built by design** (the server assignment snapshot is the fresh-install fast path). **Cross-device convergence validated 2026-07-06** via a fresh-install end-to-end simulation against prod: S1 satisfied (0 unverified → empty Resolutions), S4/S5 satisfied, S2 best-effort as scoped (567/567 shared mapping keys identical; residual legacy-key placements documented in [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) §11.3). See **§0. As-built status** below.  
 **Goal:** Move toward **one authoritative representation of “clean menu + mapping + verification state”** so a **fresh install** (or **reset orders + seed**) followed by **sync/pull** can **converge** to the same catalog and resolution state as a **reference machine** (e.g. dev), within explicit limits.
 
 This doc complements:
@@ -39,12 +39,20 @@ changes were deployed.
 - Pull: 78 remote verification events applied; pull cursor advanced (Jul 5 14:27).
 - Deferred applies: 0. Resolutions backlog: **574 verified / 0 unverified** → **S1 satisfied**.
 
-**Known open issue (blocks clean multi-install bring-up):** 4 `menu_merge` remote events are
-stuck in `menu_sync_event_quarantine` (`Cannot merge item into itself`, ~48 retries). These are
-this device's own April `mapping_audit_v1` addon-consolidation events (source `menu_item_id` ==
-target by design), echoed back on pull and rejected by the item-level self-merge guard. Benign on
-this install (already applied in April) but they will also fail to apply on a fresh install B — the
-apply path should treat same-item `mapping_audit_v1` events as idempotent no-ops rather than raising.
+**~~Known open issue~~ RESOLVED 2026-07-06:** the 4 `menu_merge` remote events stuck in
+`menu_sync_event_quarantine` (`Cannot merge item into itself` — April `mapping_audit_v1`
+addon-consolidation events with source == target and no derivable assignments) are now applied
+as recorded no-ops by the merge apply path (`_is_self_merge_event` in
+`src/core/menu_merge_sync.py`), matching the server materializer. The live quarantine was
+drained (4/4 resolved). A fresh install never pulls them anyway — its merge cursor starts at
+the snapshot watermark, past those events.
+
+**Multi-install validation (2026-07-06, fresh-install simulation against prod):** fresh schema →
+packaged seed → full order import (16 872 orders) → cloud pulls. Result: snapshot seed applied at
+watermark, **0 unverified mappings** (S1: Resolutions starts empty), 567/567 shared mapping keys
+identical to the golden install, per-line placement identical for 32 023 of 32 074 line-groups.
+The 51 divergent groups are April-era decisions recorded under legacy mapping keys — see the
+conflict plan §10.3/§11.3 for the one-time human remap that closes them.
 
 ---
 
@@ -351,7 +359,7 @@ Reference: `src/core/utils/path_helper.py` (`get_resource_path` vs `get_data_pat
 
 Today, **“all verified” on dev does not imply Dachnona holds a complete copy of that state**, because many verifications are **local SQLite + JSON export** only. To approach **single source of truth**, implement **deliberate cloud replication** for verification state (**Option A**), **optionally** add **versioned catalog snapshots** (**Option B**), and align **clustering** so POS re-import does not **reopen** resolved work unnecessarily. **Option C** remains a **bootstrap** tool, not the ongoing truth.
 
-This document is the implementation plan; next step is product sign-off on **Phase ordering** and **Open decisions** (Section 9).
+This document is the implementation plan. **Signed off 2026-07-06** — implemented phases validated against prod (see §0); remaining Section 9 open decisions are product-policy questions that do not block multi-install bring-up (current de-facto answers: S1 "empty Resolutions" is the definition of done; automatic verify via the C1 heuristic is allowed; snapshot size and event retention untouched defaults).
 
 ---
 

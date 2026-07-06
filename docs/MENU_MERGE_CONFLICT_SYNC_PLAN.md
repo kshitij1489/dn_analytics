@@ -1,7 +1,7 @@
 # Menu merge conflict resolution & multi-install convergence — implementation plan
 
 **Audience:** Engineers working on desktop analytics (this repo) and Dachnona cloud (`db.dachnona`).
-**Status:** Phases S1–S2 (server) and C1–C5 (client) **implemented and deployed to production** (2026-07-05). Server branches merged to `main` on `db.dachnona` live prod; migrations 0011/0012/0013 applied and the `rebuild_order_item_assignments` backfill run; a one-time baseline cutover seeded the server's `OrderItemAssignment` ground truth from the golden install. The **I5 single-owner refinement** — `is_verified` is owned solely by the mapping-verification stream (guarded by its own `verification_seq` / `last_verification_seq`; migration 0013), and the merge stream only *seeds* the flag on INSERT — is implemented on both sides (server deployed; client changes committed on branch `sync-conflict-phase-2`, 13 commits ahead of `main` — not yet merged). Client sync suite 45 tests green, server sync suite 21 green, contract fixtures byte-identical across repos (verified 2026-07-06). Open follow-up from the cutover: 27 server-only `order_item_assignments` rows to reconcile. C6/S3 (convergence digest) not started.
+**Status:** **SIGNED OFF 2026-07-06** for the current scope: single-install fleet converged with server ground truth, and the fresh-install path validated end-to-end (see §11). Phases S1–S2 (server) and C1–C5 (client) **implemented and deployed to production** (2026-07-05). Server branches merged to `main` on `db.dachnona` live prod; migrations 0011/0012/0013 applied and the `rebuild_order_item_assignments` backfill run; a one-time baseline cutover seeded the server's `OrderItemAssignment` ground truth from the golden install. The **I5 single-owner refinement** — `is_verified` is owned solely by the mapping-verification stream (guarded by its own `verification_seq` / `last_verification_seq`; migration 0013), and the merge stream only *seeds* the flag on INSERT — is implemented on both sides (server deployed; client changes committed on branch `sync-conflict-phase-2` — not yet merged to `main`). Client suite 105 tests green, server sync suite 21 green, contract fixtures byte-identical across repos. The 27 server-only `order_item_assignments` rows are **reconciled as benign** (§11.2). C6/S3 (convergence digest) **deferred** until the fleet has ≥2 installs.
 **Scope note:** This document is now the single source for menu sync-conflict work **and** the operational runbook it used to link out to. The former `CLOUD_SYNC_DIVERGENCE.md` (symptom analysis, diagnostics, customer-side notes) has been folded in here — see §8 (operational runbook), §9 (customer-merge divergence, out of scope for the menu fix but tracked), and §10 (goals & non-goals).
 **Related:** [INDEX.md](./INDEX.md) (doc hub), [AI_SESSION_GUIDE.md](./AI_SESSION_GUIDE.md), [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) (verification-event groundwork, partially implemented), [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md), [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md).
 
@@ -398,11 +398,39 @@ Bit-identical SQLite across installs (G3) remains hard without approaching full 
 
 ### 10.3 Open follow-ups (consolidated)
 
-- **C6 / S3 convergence digest** — the standing "are all installs in sync?" audit. **Not started** (§3 S3, §4 C6).
-- **27 server-only `order_item_assignments` rows** from the baseline cutover — still to reconcile.
+- **C6 / S3 convergence digest** — the standing "are all installs in sync?" audit. **Deferred** until the fleet has ≥2 installs (§3 S3, §4 C6). Note the digest must compare on the intersection of keys: the server legitimately holds historical rows no install has orders for (§11.2), and installs hold clustering-created rows no event ever touched.
+- **Legacy-key placements: one-time human remap** — 3 flavor families (Strawberry Cream Cheese, Coffee Mascarpone, Alphonso Mango; ~51 of 32 074 line-groups) place on a different item on a fresh install than on the golden install, because the April 2026 decisions for them are recorded under mapping keys the current ingest no longer derives (§11.3). No sync mechanism can transfer them; re-do those merges/remaps once through the current UI (which emits modern-keyed v2 events) and both installs converge, historical lines included on the install where the remap is done.
+- **Golden-install duplicate `order_items`** — the golden DB carries ~705 duplicate order-line rows (same order re-processed historically; `process_order` re-INSERTs items on re-delivery). A fresh install does not reproduce them — its counts are the correct ones. Orders-pipeline cleanup, out of scope for menu sync.
 - **UI badge** for `/api/menu/sync-conflicts` (quarantine + supersede notices) — API only today (C1).
 - **Customer-side divergence** — all items in §9.2 (order-anchor tie-break, locator enrichment, customer-stream quarantine).
-- **Client branch `sync-conflict-phase-2`** (I5 single-owner refinement + C3/C4/C5) — committed, **not yet merged to `main`**; server half already on live prod.
+- **Client branch `sync-conflict-phase-2`** (I5 single-owner refinement + C3/C4/C5 + self-merge no-op) — committed, **not yet merged to `main`**; server half already on live prod.
+- ~~27 server-only `order_item_assignments` rows~~ — **reconciled 2026-07-06**, benign (§11.2).
+
+---
+
+## 11. Sign-off validation (2026-07-06)
+
+### 11.1 Fleet convergence (golden install vs server ground truth)
+
+Full server snapshot (600 rows, `watermark_seq=371`) vs the live golden DB after a Sync DB run: **573/573 shared assignments identical, 0 mismatches**, 0 unverified mappings, 0 pending local rows, quarantine empty. Local-only rows are clustering-created rows never touched by an event (deterministically re-derivable by any install from the shared order stream) — expected, not divergence.
+
+### 11.2 The 27 server-only rows — reconciled, benign
+
+All 27 were authored by a decommissioned April install (`install-d36c7661…`, "Owner", events of 2026-04-16, `basic/variant/resolution` kinds). None of their `order_item_id` keys correspond to any order item in the current cloud order stream (verified: absent from the golden DB and from a fresh full-history import). No install can ever apply them (the applier skips assignments with no local order backing), so they cannot cause fleet divergence. Deleting them is pointless — `rebuild_order_item_assignments` would resurrect them from the event log. They stay as inert historical coverage.
+
+### 11.3 Fresh-install end-to-end simulation (installation #2 dry run)
+
+Simulated a brand-new install against live prod, pull-only (no pushes): fresh schema → packaged-seed → full order import (16 872 orders) → cloud pulls (catalog bootstrap, snapshot seed at watermark, verification + merge tails). Results:
+
+- Snapshot seed ran once, set both pull cursors to the server watermark (`menu_assignments_bootstrapped='snapshot'`), no event replay, no quarantine.
+- **0 unverified mappings** → Resolutions starts empty (single-source-of-truth S1).
+- **567/567 shared mapping keys identical** to the golden install; all remaining key deltas are inert (no order lines reference them).
+- Per-order-line placement: **32 074/32 074 line-groups present on both sides; 51 groups (3 flavor families) place differently** — the legacy-key artifact in §10.3, needing a one-time human remap. The golden install itself already places *new* lines of those names the same way the fresh install does, so forward drift is zero.
+- Fresh install correctly does **not** reproduce the golden install's ~705 duplicate order-item rows.
+
+### 11.4 Same-item legacy event fix
+
+The four April `mapping_audit_v1` events (source == target, no derivable assignments) that sat in quarantine with ~136 retries are now applied as recorded no-ops (`_is_self_merge_event` / `_record_self_merge_noop` in `src/core/menu_merge_sync.py`, both applied and undone paths), matching the server materializer's treatment of underivable events. The live quarantine was drained (4/4 resolved); regression tests cover the no-op, the retry drain, and the unchanged quarantine path for genuinely unappliable events.
 
 ---
 
@@ -414,3 +442,4 @@ Bit-identical SQLite across installs (G3) remains hard without approaching full 
 | 2026-07-05 | Refresh after menu merge conflict work (C1–C5, S1–S2): assignment-based apply, quarantine/cursor behavior, implementation-status tables. |
 | 2026-07-06 | Verified actual state against both repos post-deploy: server merged to `main`/live prod (migrations 0011–0013 applied, backfill run, 21 tests green); client committed on `sync-conflict-phase-2` (45 tests green), not yet merged; contract fixtures byte-identical. Corrected stale "migration must be applied" notes. |
 | 2026-07-06 | **Merged `CLOUD_SYNC_DIVERGENCE.md` into this plan** (operational runbook §8, customer-merge divergence §9, goals/non-goals/open follow-ups §10). Deleted the standalone doc; no unique content dropped. |
+| 2026-07-06 | **Sign-off** (§11): fleet convergence verified (573/573, quarantine empty); 27 server-only rows reconciled as benign; fresh-install E2E simulation run against prod (S1 satisfied, 567/567 shared keys, 51 legacy-key line-groups flagged for one-time human remap); same-item legacy events fixed to apply as no-ops and quarantine drained. C6/S3 deferred until fleet ≥2 installs. |

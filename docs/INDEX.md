@@ -58,8 +58,8 @@ Pulled from doc headers (2026-07-06). See each doc for detail — do not treat t
 
 | Doc | Status (summary) |
 |-----|------------------|
-| [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) | S1–S2 (server) and C1–C5 (client) **implemented and deployed**; I5 single-owner refinement implemented; client on `sync-conflict-phase-2` (not merged to main). C6/S3 (convergence digest) **not started**. Open: 27 server-only assignment rows to reconcile. |
-| [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) | Phases 0, 1, 3 **implemented**; Phase 2 **partially superseded** by verification stream; Phase 4 **not built**. **Cross-device convergence not yet validated** (single install). |
+| [MENU_MERGE_CONFLICT_SYNC_PLAN.md](./MENU_MERGE_CONFLICT_SYNC_PLAN.md) | **Signed off 2026-07-06** (§11): fleet convergence + fresh-install E2E validated; 27 server-only rows reconciled benign; self-merge no-op fix landed. Client on `sync-conflict-phase-2` (not merged to main). Open: one-time human remap of 3 legacy-key flavor families; C6/S3 digest **deferred** (fleet of 1); UI badge. |
+| [MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md](./MENU_SINGLE_SOURCE_OF_TRUTH_PLAN.md) | **Signed off 2026-07-06**: Phases 0, 1, 3 implemented; Phase 2 superseded by design; Phase 4 not built by design. **Cross-device convergence validated** via fresh-install simulation (S1 satisfied). |
 | [DACHNONA_CLOUD_SYNC_API_CONTRACT.md](./DACHNONA_CLOUD_SYNC_API_CONTRACT.md) | Baseline contract (§5–15) **implemented**. Assignment/verification sync in **§17 implemented**; §16 **superseded**. |
 | [AI_MODE_PLAN.md](./AI_MODE_PLAN.md) | **All phases complete.** |
 | [FORECASTING_AND_SYNC.md](./FORECASTING_AND_SYNC.md) | Combined forecasting + cloud ingest reference; last updated Feb 2026. |

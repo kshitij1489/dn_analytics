@@ -408,6 +408,42 @@ def _notice_for_stale_rows(conn, stale_rows: List[Dict[str, Any]], local_merge_i
         )
 
 
+def _is_self_merge_event(event: Dict[str, Any]) -> bool:
+    """Source and target are the same menu item (legacy audit events only)."""
+    source_item = event.get("source_item")
+    target_item = event.get("target_item")
+    if not isinstance(source_item, dict) or not isinstance(target_item, dict):
+        return False
+    source_id = str(source_item.get("menu_item_id") or "").strip()
+    target_id = str(target_item.get("menu_item_id") or "").strip()
+    return bool(source_id) and source_id == target_id
+
+
+def _record_self_merge_noop(
+    conn,
+    event: Dict[str, Any],
+    remote_cursor: Optional[str],
+    event_type: str,
+) -> Dict[str, Any]:
+    """Mark a same-item no-assignment event as seen without touching any rows."""
+    remote_event_id = str(event.get("remote_event_id") or "").strip()
+    _record_remote_event(
+        conn,
+        remote_event_id=remote_event_id,
+        event_type=event_type,
+        local_merge_id=None,
+        payload=event,
+        remote_cursor=remote_cursor,
+        occurred_at=str(event.get("occurred_at") or ""),
+        server_seq=coerce_server_seq(event.get("server_seq")),
+    )
+    logger.info(
+        "Menu merge event %s is a same-item no-op (no derivable assignments); recorded without replay",
+        remote_event_id,
+    )
+    return {"status": "noop", "local_merge_id": None, "touched_menu_item_ids": set()}
+
+
 def _apply_remote_merge_event_assignments(
     conn,
     event: Dict[str, Any],
@@ -422,6 +458,15 @@ def _apply_remote_merge_event_assignments(
 
     assignments = extract_assignments(event)
     if assignments is None:
+        if _is_self_merge_event(event):
+            # Legacy same-item events (April mapping_audit_v1 consolidations:
+            # source == target by design) carry no derivable assignments and
+            # cannot move any mapping. Legacy replay would raise "Cannot merge
+            # item into itself" and quarantine them forever; the server's
+            # materializer likewise skips them. Record as an applied no-op.
+            return _record_self_merge_noop(
+                conn, event, remote_cursor, EVENT_TYPE_APPLIED
+            )
         logger.error(
             "Menu merge event %s carries no derivable assignments; using legacy cluster replay",
             remote_event_id,
@@ -516,6 +561,10 @@ def _apply_remote_undo_event_assignments(
 
     assignments = extract_assignments(event)
     if assignments is None:
+        if _is_self_merge_event(event):
+            return _record_self_merge_noop(
+                conn, event, remote_cursor, EVENT_TYPE_UNDONE
+            )
         logger.error(
             "Menu merge undo event %s carries no derivable assignments; using legacy undo replay",
             remote_event_id,
