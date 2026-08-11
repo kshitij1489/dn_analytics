@@ -28,6 +28,8 @@ GLOBAL_FAILURE_CODES = {
     "invalid_token",
     "invalid_credentials",
     "restaurant_list_not_configured",
+    "restaurant_list_transport_error",
+    "restaurant_list_response_invalid",
     "restaurant_selector_not_a_parameter",
     "retired_parameter",
     "retired_field",
@@ -114,6 +116,37 @@ def iter_all_stores_sync(
             yield SyncStatus("info", _store_progress(index, total, profile, "starting"))
             conn = None
             try:
+                if profile.clean_rebuild_status == "required":
+                    from src.core.profiles import CleanProfileRebuildRequired
+
+                    raise CleanProfileRebuildRequired(
+                        f"Restaurant profile {profile.restaurant_id} must be archived and reset"
+                    )
+                if profile.clean_rebuild_status == "rebuilding":
+                    from pathlib import Path
+
+                    from src.core.profiles import (
+                        get_profile,
+                        refresh_allowed_restaurants_from_server,
+                    )
+
+                    yield SyncStatus(
+                        "info",
+                        _store_progress(
+                            index, total, profile, "refreshing registry capabilities"
+                        ),
+                    )
+                    refresh_allowed_restaurants_from_server()
+                    refreshed = get_profile(
+                        profile.restaurant_id, require_authorized=True
+                    )
+                    if Path(refreshed.database_path).resolve() != Path(
+                        profile.database_path
+                    ).resolve():
+                        raise RuntimeError(
+                            "Restaurant profile path changed during rebuild capture"
+                        )
+                    profile = refreshed
                 conn, _ = get_profile_connection(profile)
                 terminal = None
                 for status in iter_single_store(conn, already_locked=True):

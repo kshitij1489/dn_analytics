@@ -244,6 +244,12 @@ function AppContent() {
           message: `${selectedStore.display_name} is available offline only and cannot be synced.`,
         });
         return false;
+      } else if (selectedStore.clean_rebuild_status === 'required') {
+        setPopup({
+          type: 'info',
+          message: `${selectedStore.display_name} must be archived and reset from Configuration before Sync DB can rebuild it.`,
+        });
+        return false;
       }
       syncRequestPending.current = true;
       setSyncStarting(true);
@@ -300,7 +306,10 @@ function AppContent() {
 
   const status = getStatusDisplay();
   const canSync = !storeLoading && (
-    isAllStores ? allStores.available : selectedStore?.authorization_state === 'authorized'
+    isAllStores
+      ? allStores.available
+      : selectedStore?.authorization_state === 'authorized'
+        && selectedStore.clean_rebuild_status !== 'required'
   );
 
   const checkDataAndSync = async () => {
@@ -411,7 +420,9 @@ function AppContent() {
               disabled={!canSync || syncStarting || polling || connectionStatus !== 'connected'}
               title={selectedStore?.authorization_state === 'unauthorized'
                 ? 'This restaurant is available for offline read-only access'
-                : 'Sync Database'}
+                : selectedStore?.clean_rebuild_status === 'required'
+                  ? 'Archive and reset this profile from Configuration first'
+                  : 'Sync Database'}
               style={{
                 width: '100%',
                 padding: '12px',

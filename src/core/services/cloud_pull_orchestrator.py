@@ -1,9 +1,11 @@
 """
 Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
 
-Pull order (keep in sync with docs/MENU_SYNC_ARCHITECTURE.md §4):
-1. Global menu catalog/event state, assignments, and unified audit history when
-   global mode is active. Audit-history failure is warning-only.
+Post-order pull order (keep in sync with the revision-1.7 rebuild runbook):
+1. In global mode, assignment snapshot, unified audit history, then the settled
+   §9 shared-POS observation. Catalog snapshot/event state is normally skipped
+   here because Sync DB drains it before POS order replay. Audit-history and
+   non-rebuild observation failures are warning-only.
 2. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
 3. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
    after the catalog exists, before event tails)
@@ -131,12 +133,25 @@ def collect_global_menu_history_warnings(
     return [("global_menu_history", message)]
 
 
+def collect_shared_pos_observation_warnings(
+    summary: Dict[str, Any],
+) -> List[Tuple[str, str]]:
+    """The settled-state §9 observation is warning-only outside a clean rebuild."""
+    block = summary.get("shared_pos_observation")
+    message = _block_error_message(block)
+    if not message:
+        return []
+    return [("shared_pos_observation", message)]
+
+
 def run_best_effort_cloud_pulls(
     conn,
     *,
     merge_events_limit: int = MERGE_EVENTS_LIMIT,
     blocking: bool = True,
     skip_menu_bootstrap: bool = False,
+    skip_global_menu_state: bool = False,
+    send_shared_pos_observation: bool = False,
     already_locked: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -155,7 +170,11 @@ def run_best_effort_cloud_pulls(
     restaurant_id = restaurant_id_from_connection(conn)
     if already_locked:
         result = _run_best_effort_cloud_pulls_locked(
-            conn, merge_events_limit=merge_events_limit, skip_menu_bootstrap=skip_menu_bootstrap
+            conn,
+            merge_events_limit=merge_events_limit,
+            skip_menu_bootstrap=skip_menu_bootstrap,
+            skip_global_menu_state=skip_global_menu_state,
+            send_shared_pos_observation=send_shared_pos_observation,
         )
         result["restaurant_id"] = restaurant_id
         return result
@@ -168,7 +187,11 @@ def run_best_effort_cloud_pulls(
         }
     try:
         result = _run_best_effort_cloud_pulls_locked(
-            conn, merge_events_limit=merge_events_limit, skip_menu_bootstrap=skip_menu_bootstrap
+            conn,
+            merge_events_limit=merge_events_limit,
+            skip_menu_bootstrap=skip_menu_bootstrap,
+            skip_global_menu_state=skip_global_menu_state,
+            send_shared_pos_observation=send_shared_pos_observation,
         )
         result["restaurant_id"] = restaurant_id
         return result
@@ -181,6 +204,8 @@ def _run_best_effort_cloud_pulls_locked(
     *,
     merge_events_limit: int = MERGE_EVENTS_LIMIT,
     skip_menu_bootstrap: bool = False,
+    skip_global_menu_state: bool = False,
+    send_shared_pos_observation: bool = False,
 ) -> Dict[str, Any]:
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.customer_merge_sync import get_customer_merge_pull_endpoint
@@ -211,6 +236,7 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu": None,
         "global_menu_assignments": None,
         "global_menu_history": None,
+        "shared_pos_observation": None,
         "forecasts": None,
     }
 
@@ -232,13 +258,19 @@ def _run_best_effort_cloud_pulls_locked(
         )
 
         summary["attempted"] = True
-        try:
-            summary["global_menu"] = pull_global_menu_state(
-                conn, auth=auth_key, allow_profile_sync=True
-            )
-        except Exception as e:
-            logger.exception("Global menu pull failed")
-            summary["global_menu"] = {"status": "error", "error": str(e)}
+        if skip_global_menu_state:
+            summary["global_menu"] = {
+                "status": "already_current",
+                "reason": "catalog snapshot and event tail drained before order replay",
+            }
+        else:
+            try:
+                summary["global_menu"] = pull_global_menu_state(
+                    conn, auth=auth_key, allow_profile_sync=True
+                )
+            except Exception as e:
+                logger.exception("Global menu pull failed")
+                summary["global_menu"] = {"status": "error", "error": str(e)}
         if not _block_error_message(summary["global_menu"]):
             try:
                 summary["global_menu_assignments"] = pull_global_assignment_snapshot(
@@ -262,6 +294,24 @@ def _run_best_effort_cloud_pulls_locked(
                 "status": "error",
                 "error": str(e),
             }
+        if (
+            send_shared_pos_observation
+            and global_capability.shared_pos_catalog_advertised
+            and not _block_error_message(summary["global_menu"])
+            and not _block_error_message(summary["global_menu_assignments"])
+        ):
+            try:
+                from src.core.client_learning_shipper import run_scoped_uploads
+
+                summary["shared_pos_observation"] = run_scoped_uploads(
+                    conn, auth=auth_key
+                )
+            except Exception as e:
+                logger.exception("Shared POS observation upload failed")
+                summary["shared_pos_observation"] = {
+                    "status": "error",
+                    "error": str(e),
+                }
 
     ep_boot = get_menu_bootstrap_pull_endpoint(conn)
     if not (global_capability is not None and global_capability.active) and ep_boot and not skip_menu_bootstrap:
@@ -356,6 +406,7 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu",
         "global_menu_assignments",
         "global_menu_history",
+        "shared_pos_observation",
         "menu_assignments_bootstrap",
         "menu_bootstrap",
         "menu_mapping_verifications",
@@ -400,6 +451,15 @@ def _run_best_effort_cloud_pulls_locked(
             {"stream": key, "warning": message} for key, message in history_warnings
         ]
         for key, message in history_warnings:
+            logger.warning("Cloud pull %s reported warning: %s", key, message)
+
+    observation_warnings = collect_shared_pos_observation_warnings(summary)
+    if observation_warnings:
+        summary["shared_pos_observation_warnings"] = [
+            {"stream": key, "warning": message}
+            for key, message in observation_warnings
+        ]
+        for key, message in observation_warnings:
             logger.warning("Cloud pull %s reported warning: %s", key, message)
 
     return summary

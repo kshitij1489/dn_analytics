@@ -1,6 +1,6 @@
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.utils.business_date import get_business_date_range
 from utils.menu_item_variant_enforcement import addon_seeded_mapping_order_item_id
@@ -477,6 +477,99 @@ def fetch_menu_matrix(conn):
     """
     cursor = conn.execute(query)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+
+
+def fetch_group_menu_catalog(conn, menu_group_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Return active group-owned items and variants, never restaurant analytics."""
+    items = [
+        {
+            **dict(row),
+            "is_verified": bool(row[4]),
+        }
+        for row in conn.execute(
+            """
+            SELECT i.global_menu_item_id, i.canonical_name, i.canonical_type,
+                   COUNT(r.rule_id) AS active_pos_rules, i.is_verified,
+                   i.server_revision, i.updated_at
+            FROM global_menu_items i
+            LEFT JOIN global_menu_mapping_rules r
+              ON r.target_global_menu_item_id=i.global_menu_item_id
+             AND r.menu_group_id=i.menu_group_id
+             AND r.locator_scope='group'
+             AND r.locator_kind IN ('pos-item', 'pos-addon')
+             AND r.lifecycle_state='active'
+            WHERE i.menu_group_id=? AND i.lifecycle_state='active'
+            GROUP BY i.global_menu_item_id, i.canonical_name, i.canonical_type,
+                     i.is_verified, i.server_revision, i.updated_at
+            ORDER BY i.canonical_type, i.canonical_name, i.global_menu_item_id
+            """,
+            (menu_group_id,),
+        ).fetchall()
+    ]
+    variants = [
+        {
+            **dict(row),
+            "is_verified": bool(row[5]),
+        }
+        for row in conn.execute(
+            """
+            SELECT global_variant_id, canonical_name, description, unit, value,
+                   is_verified, server_revision, updated_at
+            FROM global_variants
+            WHERE menu_group_id=? AND lifecycle_state='active'
+            ORDER BY canonical_name, unit, value, global_variant_id
+            """,
+            (menu_group_id,),
+        ).fetchall()
+    ]
+    return {"items": items, "variants": variants}
+
+
+def fetch_group_menu_matrix(conn, menu_group_id: str) -> List[Dict[str, Any]]:
+    """Return the active shared-POS rules that define the group menu matrix."""
+    rows = conn.execute(
+        """
+        SELECT r.rule_id,
+               REPLACE(r.locator_kind, '-', '_') AS locator_type,
+               r.locator_value,
+               r.target_global_menu_item_id AS global_menu_item_id,
+               r.target_global_variant_id AS global_variant_id,
+               i.canonical_name AS name,
+               i.canonical_type AS type,
+               COALESCE(v.canonical_name, 'No variant') AS variant_name,
+               v.unit,
+               v.value,
+               printf('%.2f', r.price) AS price,
+               r.is_verified,
+               r.server_revision,
+               miv.menu_item_id,
+               miv.variant_id
+        FROM global_menu_mapping_rules r
+        JOIN global_menu_items i
+          ON i.global_menu_item_id=r.target_global_menu_item_id
+         AND i.menu_group_id=r.menu_group_id
+         AND i.lifecycle_state='active'
+        LEFT JOIN global_variants v
+          ON v.global_variant_id=r.target_global_variant_id
+         AND v.menu_group_id=r.menu_group_id
+         AND v.lifecycle_state='active'
+        LEFT JOIN menu_item_variants miv ON miv.order_item_id=r.locator_value
+        WHERE r.menu_group_id=?
+          AND r.locator_scope='group'
+          AND r.locator_kind IN ('pos-item', 'pos-addon')
+          AND r.lifecycle_state='active'
+          AND r.price IS NOT NULL
+        ORDER BY r.locator_kind, r.locator_value, r.rule_id
+        """,
+        (menu_group_id,),
+    ).fetchall()
+    return [
+        {
+            **dict(row),
+            "is_verified": bool(row[11]),
+        }
+        for row in rows
+    ]
 
 
 def _menu_summary_window_specs(as_of_date: str):

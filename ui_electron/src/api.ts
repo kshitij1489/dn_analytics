@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
     AppUser,
+    GlobalMenuCatalogResponse,
     GlobalMenuPreview,
     GlobalMenuPreviewReference,
     GlobalMenuStatus,
@@ -452,6 +453,8 @@ export const endpoints = {
         } & GlobalMenuPreviewReference) => api.post('/menu/resolutions/resolve', data),
         verify: (data: { menu_item_id: string, new_name?: string, new_type?: string, new_variant_id?: string } & GlobalMenuPreviewReference) => api.post('/menu/resolutions/verify', data),
         globalStatus: () => api.get<GlobalMenuStatus>('/menu/global/status'),
+        globalCatalog: () => api.get<GlobalMenuCatalogResponse>('/menu/global/catalog'),
+        globalMatrix: () => api.get('/menu/global/matrix'),
         globalPreview: (data: { mutation_type: string; payload: Record<string, unknown>; mutation_id?: string }) =>
             api.post<GlobalMenuPreview>('/menu/global/mutations/preview', data),
         globalLocalPreview: (data: {

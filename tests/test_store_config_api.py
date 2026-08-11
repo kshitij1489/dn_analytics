@@ -129,6 +129,112 @@ class RestaurantProfileTests(unittest.TestCase):
         finally:
             first_conn.close()
 
+    def test_shared_profile_reset_archives_opaque_old_file_before_fresh_schema(self) -> None:
+        from src.core.db.reset import reset_database
+        from src.core.profiles import (
+            CleanProfileRebuildRequired,
+            SHARED_POS_CATALOG_CAPABILITY,
+        )
+
+        upsert_allowed_restaurants(self._allowed("rest-A"))
+        initial = get_profile("rest-A")
+        old_bytes = b"opaque revision-1.6 profile -- never open as sqlite"
+        old_path = Path(initial.database_path)
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(old_bytes)
+
+        upsert_allowed_restaurants(
+            [
+                {
+                    "restaurant_id": "rest-A",
+                    "display_name": "Dach & Nona",
+                    "timezone": "Asia/Kolkata",
+                    "menu_group_id": "group-1",
+                    "menu_capabilities": [
+                        "global_menu_v1",
+                        SHARED_POS_CATALOG_CAPABILITY,
+                    ],
+                }
+            ]
+        )
+        captured = get_profile("rest-A")
+        self.assertEqual(captured.clean_rebuild_status, "required")
+        self.assertTrue(captured.is_bound)
+        from src.core.db.control import copy_legacy_global_config_once
+
+        copy_legacy_global_config_once(old_path)
+        with self.assertRaises(CleanProfileRebuildRequired):
+            get_profile_connection(captured)
+
+        success, message = reset_database(captured)
+        self.assertTrue(success, message)
+        rebuilt = get_profile("rest-A")
+        self.assertEqual(rebuilt.clean_rebuild_status, "rebuilding")
+        self.assertIsNotNone(rebuilt.last_archive_path)
+        archive = Path(rebuilt.last_archive_path)
+        self.assertEqual(archive.read_bytes(), old_bytes)
+
+        conn, _ = get_profile_connection(rebuilt)
+        try:
+            identity = conn.execute(
+                "SELECT restaurant_id FROM restaurant_profile_identity WHERE singleton_id=1"
+            ).fetchone()
+            self.assertEqual(identity[0], "rest-A")
+            self.assertTrue(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_menu_history'"
+                ).fetchone()
+            )
+        finally:
+            conn.close()
+
+    def test_new_shared_profile_stays_rebuilding_until_ordered_sync_completes(self) -> None:
+        from src.core.profiles import SHARED_POS_CATALOG_CAPABILITY
+
+        upsert_allowed_restaurants(
+            [
+                {
+                    "restaurant_id": "rest-new",
+                    "display_name": "New Store",
+                    "timezone": "Asia/Kolkata",
+                    "menu_group_id": "group-1",
+                    "menu_capabilities": [
+                        "global_menu_v1",
+                        SHARED_POS_CATALOG_CAPABILITY,
+                    ],
+                }
+            ]
+        )
+        profile = bind_and_select_profile("rest-new")
+        self.assertEqual(profile.clean_rebuild_status, "rebuilding")
+        conn, _ = get_profile_connection(profile)
+        conn.close()
+
+    def test_control_v3_upgrade_marks_registered_old_profile_without_opening_it(self) -> None:
+        from src.core.db.control import ensure_control_schema, get_control_connection
+
+        upsert_allowed_restaurants(self._allowed("rest-A"))
+        profile = get_profile("rest-A")
+        old_path = Path(profile.database_path)
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(b"old profile must remain opaque")
+        control = get_control_connection()
+        try:
+            control.execute(
+                "UPDATE restaurant_profiles SET clean_rebuild_status=NULL WHERE restaurant_id='rest-A'"
+            )
+            control.execute(
+                "UPDATE control_metadata SET value='3' WHERE key='schema_version'"
+            )
+            control.commit()
+            ensure_control_schema(control)
+        finally:
+            control.close()
+
+        upgraded = get_profile("rest-A")
+        self.assertEqual(upgraded.clean_rebuild_status, "required")
+        self.assertTrue(upgraded.is_bound)
+
     def test_mixed_existing_database_is_refused(self) -> None:
         self._create_existing("rest-A", "rest-B")
         upsert_allowed_restaurants(self._allowed("rest-A", "rest-B", "rest-C"))

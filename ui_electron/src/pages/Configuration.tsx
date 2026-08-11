@@ -92,7 +92,7 @@ export default function Configuration() {
     // The user profile and sync identity live in one restaurant's database, so
     // they are unreadable in All Stores mode. Configuration itself stays open —
     // it is where a restaurant gets picked.
-    const { stores, refreshStores, isAllStores, selectionGeneration } = useStore();
+    const { stores, selectedStore, refreshStores, isAllStores, selectionGeneration } = useStore();
     const [activeTab, setActiveTab] = useState<Tab>('ai_models');
     const [settings, setSettings] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
@@ -962,13 +962,22 @@ export default function Configuration() {
 
                             <div style={{ padding: '20px', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
                                 <h4 style={{ color: '#ef4444', marginTop: 0 }}>Caution</h4>
+                                {selectedStore?.clean_rebuild_status === 'required' && (
+                                    <p style={{ fontSize: '0.9rem', color: '#B45309', fontWeight: 600 }}>
+                                        This profile is held closed for the revision-1.7 clean rebuild. Archive and recreate it here, then run Sync DB.
+                                    </p>
+                                )}
                                 <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '15px' }}>
-                                    Resetting the local database will clear all locally stored data, configurations, and chat logs. This action cannot be undone.
+                                    The selected analytics profile will be archived before a fresh schema is created. App-wide configuration, the control database, and recovery exports are preserved.
                                 </p>
                                 <button
                                     onClick={() => {
-                                        if (window.confirm("Are you sure you want to delete the local database?")) {
-                                            if (window.confirm("Are you sure you would like to clear the DB from this app, locally. (Under construction)")) {
+                                        if (window.confirm("Archive and recreate the selected restaurant profile?")) {
+                                            if (window.confirm(
+                                                selectedStore?.clean_rebuild_status === 'required'
+                                                    ? "Confirm the central stop gate and POS replay checks have passed for this restaurant."
+                                                    : "Confirm this selected profile should be archived and recreated."
+                                            )) {
                                                 endpoints.resetAll().then(res => {
                                                     setPopup({ type: 'success', message: res.data.message });
                                                     setTimeout(() => window.location.reload(), 1500);
@@ -998,7 +1007,7 @@ export default function Configuration() {
                                         <path d="M12 14.5l-5 0a5 5 0 0 0 2.5 4.3L12 14.5z" fill="black" />
                                         <path d="M12 14.5l2.5 4.3a5 5 0 0 0 2.5-4.3L12 14.5z" fill="black" />
                                     </svg>
-                                    Delete ALL
+                                    Archive & Rebuild Profile
                                 </button>
                             </div>
                         </Card>

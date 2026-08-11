@@ -47,12 +47,19 @@ def startup_db_check():
         from src.core.profiles import ProfileError, selected_profile
 
         ensure_control_schema()
-        copy_legacy_global_config_once()
         try:
             profile = selected_profile()
         except ProfileError:
+            copy_legacy_global_config_once()
             print("Startup: control database ready; waiting for restaurant selection.")
             return
+        if profile.clean_rebuild_status == "required":
+            print(
+                f"Startup: restaurant profile {profile.restaurant_id} is awaiting "
+                "its archived clean rebuild; old database left unopened."
+            )
+            return
+        copy_legacy_global_config_once()
         conn, _ = get_profile_connection(profile, apply_schema=True)
         try:
             from src.core.sync_identity import get_device_identity

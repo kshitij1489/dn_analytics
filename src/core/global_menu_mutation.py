@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from src.core.config.cloud_sync_config import (
@@ -25,6 +26,8 @@ from src.core.sync_identity import get_sync_attribution
 
 logger = logging.getLogger(__name__)
 GLOBAL_MUTATION_SCHEMA_VERSION = 1
+_PRICE_QUANTUM = Decimal("0.01")
+_PRICE_LIMIT = Decimal("100000000")
 GLOBAL_MENU_RESOLUTION_MUTATION_TYPES = frozenset(
     {
         "global_item.create",
@@ -64,6 +67,75 @@ def _require_write_capability(conn, mutation_type: str):
         for_write=True,
         allow_resolution_write=is_global_menu_resolution_mutation(mutation_type),
     )
+
+
+def _normalize_price(value: Any, *, field: str = "payload.price") -> str:
+    """Return the contract's exact two-decimal price without using floats."""
+    if value is None or isinstance(value, bool) or not str(value).strip():
+        raise GlobalMenuMutationError(f"{field} is required")
+    try:
+        raw = Decimal(str(value).strip())
+        normalized = raw.quantize(_PRICE_QUANTUM)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise GlobalMenuMutationError(
+            f"{field} must be a finite number with at most two decimals"
+        ) from exc
+    if (
+        not raw.is_finite()
+        or raw != normalized
+        or normalized < 0
+        or normalized >= _PRICE_LIMIT
+    ):
+        raise GlobalMenuMutationError(
+            f"{field} must be between 0.00 and 99999999.99 with at most two decimals"
+        )
+    return format(normalized, ".2f")
+
+
+def _normalize_mutation_payload(
+    mutation_type: str,
+    raw_payload: Mapping[str, Any],
+    *,
+    capability,
+) -> Dict[str, Any]:
+    """Normalize revision-1.7 shared-POS mutations before the wire boundary."""
+    payload = dict(raw_payload)
+    if mutation_type == "global_locator.price_update":
+        if not capability.shared_pos_catalog_ready:
+            error = GlobalMenuMutationError(
+                "Shared POS catalog price changes are not ready for this restaurant"
+            )
+            error.code = "global_menu_shared_pos_catalog_required"
+            raise error
+        locator_type = str(payload.get("locator_type") or "").strip()
+        locator_value = str(payload.get("locator_value") or "").strip()
+        if locator_type not in {"pos_item", "pos_addon"}:
+            raise GlobalMenuMutationError(
+                "Global price updates require a pos_item or pos_addon locator"
+            )
+        if not locator_value:
+            raise GlobalMenuMutationError(
+                "Global price updates require a locator value"
+            )
+        return {
+            "locator_type": locator_type,
+            "locator_value": locator_value,
+            "price": _normalize_price(payload.get("price")),
+        }
+
+    if mutation_type == "global_locator.map":
+        locator_type = str(payload.get("locator_type") or "").strip()
+        is_pos = locator_type in {"pos_item", "pos_addon"}
+        if is_pos and capability.shared_pos_catalog_advertised:
+            payload["rule_scope"] = "group"
+            payload["restaurant_id"] = ""
+            payload["confirm_group_wide"] = True
+            payload["price"] = _normalize_price(payload.get("price"))
+        elif payload.get("price") is not None:
+            raise GlobalMenuMutationError(
+                "A mapping price is valid only for a shared group POS locator"
+            )
+    return payload
 
 
 def _validate_stable_action(value: Any, path: str = "action") -> None:
@@ -346,27 +418,60 @@ def build_global_action_from_local(
         locator_type = str(detail.get("locator_type") or "pos_item").strip()
         if locator_type not in {"pos_item", "pos_addon", "itemcode", "alias"}:
             raise GlobalMenuMutationError("Global locator mapping has an invalid locator type")
-        expected_scope = "restaurant" if locator_type in {"pos_item", "pos_addon"} else "group"
+        capability = require_global_menu_capability(conn)
+        shared_pos_locator = (
+            locator_type in {"pos_item", "pos_addon"}
+            and capability.shared_pos_catalog_advertised
+        )
+        expected_scope = (
+            "group"
+            if shared_pos_locator or locator_type in {"itemcode", "alias"}
+            else "restaurant"
+        )
         rule_scope = str(detail.get("rule_scope") or expected_scope).strip()
         if rule_scope != expected_scope:
             raise GlobalMenuMutationError(
                 f"Global {locator_type} locators must use {expected_scope} scope"
             )
-        confirm_group_wide = bool(detail.get("confirm_group_wide"))
+        confirm_group_wide = bool(detail.get("confirm_group_wide")) or shared_pos_locator
         if rule_scope == "group" and not confirm_group_wide:
             raise GlobalMenuMutationError(
                 "A group-wide itemcode or alias mapping requires explicit confirmation"
             )
+        price = detail.get("price")
+        if shared_pos_locator and price is None:
+            row = conn.execute(
+                "SELECT price FROM menu_item_variants WHERE order_item_id=?",
+                (locator_value,),
+            ).fetchone()
+            price = row[0] if row is not None else None
+        if shared_pos_locator:
+            price = _normalize_price(price)
         return {
             "mutation_type": "global_locator.map",
             "payload": {
                 "rule_scope": rule_scope,
-                "restaurant_id": str(detail.get("restaurant_id") or "").strip(),
+                "restaurant_id": (
+                    ""
+                    if shared_pos_locator
+                    else str(detail.get("restaurant_id") or "").strip()
+                ),
                 "locator_type": locator_type,
                 "locator_value": locator_value,
                 "global_item_id": target["global_item_id"],
                 "global_variant_id": target.get("global_variant_id") or "",
                 "confirm_group_wide": confirm_group_wide,
+                **({"price": price} if shared_pos_locator else {}),
+            },
+        }
+
+    if alias in {"price_update", "global_locator.price_update"}:
+        return {
+            "mutation_type": "global_locator.price_update",
+            "payload": {
+                "locator_type": str(detail.get("locator_type") or "").strip(),
+                "locator_value": str(detail.get("locator_value") or "").strip(),
+                "price": detail.get("price"),
             },
         }
 
@@ -399,6 +504,11 @@ def preview_global_mutation(
             "Global mutation preview requires mutation_type and payload"
         )
     capability = _require_write_capability(conn, mutation_type)
+    mutation_payload = _normalize_mutation_payload(
+        mutation_type,
+        mutation_payload,
+        capability=capability,
+    )
     _validate_stable_action(mutation_payload, "payload")
     mutation_id = str(mutation_id or uuid.uuid4())
     root_url, api_key = _urls(conn)
@@ -501,6 +611,7 @@ def global_mutation_status(conn, mutation_id: str) -> Dict[str, Any]:
 
 
 def _apply_accepted_projection(conn, body: Mapping[str, Any]) -> None:
+    from src.core.global_menu_history import pull_global_menu_history
     from src.core.global_menu_sync import (
         pull_global_assignment_snapshot,
         pull_global_menu_state,
@@ -520,6 +631,14 @@ def _apply_accepted_projection(conn, body: Mapping[str, Any]) -> None:
         )
         error.code = "global_menu_local_refresh_required"
         raise error
+    history_result = pull_global_menu_history(conn)
+    if history_result.get("error") or history_result.get("status") == "error":
+        # History is a separate audit read model. A failed refresh must not
+        # reinterpret an already accepted catalog mutation as uncommitted.
+        logger.warning(
+            "Global menu mutation accepted but unified history refresh failed: %s",
+            history_result.get("error") or history_result,
+        )
 
 
 def global_resolution_context(
@@ -552,27 +671,28 @@ def global_resolution_context(
     if local_variant_id:
         variant_filter = " AND variant_id=?"
         params.append(str(local_variant_id))
-    assignment_keys = [
-        str(row[0])
-        for row in conn.execute(
-            f"""
-            SELECT order_item_id FROM menu_item_variants
-            WHERE menu_item_id=?{variant_filter}
-            ORDER BY order_item_id
-            """,
-            params,
-        ).fetchall()
-    ]
+    assignment_rows = conn.execute(
+        f"""
+        SELECT order_item_id, price FROM menu_item_variants
+        WHERE menu_item_id=?{variant_filter}
+        ORDER BY order_item_id
+        """,
+        params,
+    ).fetchall()
     locators: list[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
-    def note(locator_type: str, locator_value: Any) -> None:
+    def note(locator_type: str, locator_value: Any, price: Any = None) -> None:
         value = str(locator_value or "").strip()
         key = (locator_type, value)
         if not value or key in seen:
             return
         seen.add(key)
-        group_wide = locator_type in {"itemcode", "alias"}
+        shared_pos_locator = (
+            locator_type in {"pos_item", "pos_addon"}
+            and capability.shared_pos_catalog_advertised
+        )
+        group_wide = locator_type in {"itemcode", "alias"} or shared_pos_locator
         locators.append(
             {
                 "locator_type": locator_type,
@@ -580,11 +700,18 @@ def global_resolution_context(
                 "rule_scope": "group" if group_wide else "restaurant",
                 "restaurant_id": "" if group_wide else capability.restaurant_id,
                 "confirm_group_wide": group_wide,
+                **(
+                    {"price": _normalize_price(price, field="menu_item_variants.price")}
+                    if shared_pos_locator
+                    else {}
+                ),
             }
         )
 
     has_unbacked_assignment = False
-    for assignment_key in assignment_keys:
+    for assignment_row in assignment_rows:
+        assignment_key = str(assignment_row[0])
+        assignment_price = assignment_row[1]
         order_rows = conn.execute(
             """
             SELECT itemcode, name_raw FROM order_items
@@ -604,9 +731,9 @@ def global_resolution_context(
             (assignment_key, str(local_menu_item_id)),
         ).fetchall()
         if order_rows:
-            note("pos_item", assignment_key)
+            note("pos_item", assignment_key, assignment_price)
         if addon_rows:
-            note("pos_addon", assignment_key)
+            note("pos_addon", assignment_key, assignment_price)
         if not order_rows and not addon_rows:
             has_unbacked_assignment = True
 

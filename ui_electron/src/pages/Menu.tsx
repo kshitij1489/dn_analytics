@@ -2,14 +2,25 @@ import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { endpoints } from '../api';
 import { CollapsibleCard, ErrorPopup, SingleStoreOnly, TabButton } from '../components';
 import type { PopupMessage } from '../components';
-import type { GlobalMenuPreview, GlobalMenuPreviewReference, GlobalMenuResolutionContext } from '../types/api';
+import type {
+    GlobalMenuCatalogResponse,
+    GlobalMenuPreview,
+    GlobalMenuPreviewReference,
+    GlobalMenuResolutionContext,
+    GlobalMenuStatus,
+} from '../types/api';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
 import { useStore } from '../contexts/StoreContext';
 import {
+    canUseCanonicalMenuControls,
+    globalMenuViewLabels,
+    hasGlobalMenuCapability,
     hasGlobalMenuMutationCapability,
     hasGlobalMenuResolutionCapability,
+    hasGlobalMenuSharedPosCatalogCapability,
+    isGroupOwnedMenuReady,
 } from '../globalMenuCapabilities';
 
 // --- Shared Components ---
@@ -82,6 +93,12 @@ interface MergeHistoryEntry {
     variant_assignments?: MergeHistoryVariantAssignment[];
     global_mutation_id?: string | null;
     global_menu_group_id?: string | null;
+    history_id?: string;
+    source_kind?: 'legacy_restaurant_event' | 'global_menu_event';
+    event_type?: string;
+    origin_restaurant_id?: string | null;
+    actor?: string | null;
+    is_undoable?: boolean;
 }
 
 interface MergeHistoryVariantAssignment {
@@ -183,15 +200,23 @@ interface MatrixRow {
     name: string;
     type: string;
     variant_name: string;
-    price: number;
-    is_active: boolean;
-    addon_eligible: boolean;
-    delivery_eligible: boolean;
+    price: number | string;
+    is_active?: boolean;
+    addon_eligible?: boolean;
+    delivery_eligible?: boolean;
     is_verified?: boolean | number;
     menu_item_id?: string;
     variant_id?: string;
-    mapping_count: number;
-    order_count: number;
+    mapping_count?: number;
+    order_count?: number;
+    rule_id?: string;
+    locator_type?: 'pos_item' | 'pos_addon';
+    locator_value?: string;
+    global_menu_item_id?: string;
+    global_variant_id?: string | null;
+    unit?: string | null;
+    value?: number | string | null;
+    server_revision?: number;
 }
 
 const getApiErrorMessage = (error: unknown): string => {
@@ -203,8 +228,10 @@ const getApiErrorMessage = (error: unknown): string => {
     if (typeof detail === 'string') {
         return detail;
     }
-    if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
-        const parts = [detail.message];
+    if (detail && typeof detail === 'object' && (
+        typeof detail.message === 'string' || typeof detail.error === 'string'
+    )) {
+        const parts = [String(detail.message || detail.error)];
         const attribution = detail.attribution;
         if (Array.isArray(attribution) && attribution.length > 0) {
             const labels = attribution.map((entry) => {
@@ -992,13 +1019,92 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     );
 }
 
+// --- Group Catalog Tab ---
+
+function GroupCatalogTab({ lastDbSync }: { lastDbSync?: number }) {
+    const [catalog, setCatalog] = useState<GlobalMenuCatalogResponse | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        endpoints.menu.globalCatalog()
+            .then(response => {
+                if (!cancelled) setCatalog(response.data);
+            })
+            .catch(error => {
+                if (!cancelled) setPopup({ type: 'error', message: getApiErrorMessage(error) });
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+        return () => { cancelled = true; };
+    }, [lastDbSync]);
+
+    if (loading) return <div>Loading group catalog...</div>;
+
+    return (
+        <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
+            <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+                Canonical items and variants are owned by menu group <b>{catalog?.menu_group_id}</b>.
+                Store sales and availability remain on the restaurant-specific analytics tabs.
+            </p>
+            <Card title={`Group Items (${catalog?.items.length || 0})`}>
+                <div style={{ overflowX: 'auto' }}>
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th><th>Type</th><th className="text-center">POS Rules</th>
+                                <th className="text-center">Verified</th><th>Global ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(catalog?.items || []).map(item => (
+                                <tr key={item.global_menu_item_id}>
+                                    <td>{item.canonical_name}</td>
+                                    <td>{item.canonical_type || '—'}</td>
+                                    <td className="text-center">{item.active_pos_rules}</td>
+                                    <td className="text-center">{item.is_verified ? '✅' : '❌'}</td>
+                                    <td><code>{item.global_menu_item_id}</code></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </Card>
+            <Card title={`Group Variants (${catalog?.variants.length || 0})`}>
+                <div style={{ overflowX: 'auto' }}>
+                    <table className="standard-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th><th>Unit</th><th>Value</th>
+                                <th className="text-center">Verified</th><th>Global ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(catalog?.variants || []).map(variant => (
+                                <tr key={variant.global_variant_id}>
+                                    <td>{variant.canonical_name}</td>
+                                    <td>{variant.unit || '—'}</td>
+                                    <td>{variant.value ?? '—'}</td>
+                                    <td className="text-center">{variant.is_verified ? '✅' : '❌'}</td>
+                                    <td><code>{variant.global_variant_id}</code></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </Card>
+        </div>
+    );
+}
+
 // --- Variants Tab ---
 
 function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
     const { isAllStores, selectedStore } = useStore();
-    const globalMenuAdvertised = Boolean(
-        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
-    );
+    const globalMenuAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -1247,11 +1353,17 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
 
 // --- Matrix Tab ---
 
-function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
+function MatrixTab({
+    lastDbSync,
+    groupOwnedReady = false,
+}: {
+    lastDbSync?: number;
+    groupOwnedReady?: boolean;
+}) {
     const { isAllStores, selectedStore } = useStore();
-    const globalMenuAdvertised = Boolean(
-        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
-    );
+    const globalMenuAdvertised = hasGlobalMenuMutationCapability(selectedStore);
+    const globalMenuGroupAdvertised = hasGlobalMenuCapability(selectedStore);
+    const canonicalControlsEnabled = canUseCanonicalMenuControls(selectedStore);
     const [items, setItems] = useState<MenuLookupItem[]>([]);
     const [variants, setVariants] = useState<VariantOption[]>([]);
     const [matrixData, setMatrixData] = useState<MatrixRow[]>([]);
@@ -1272,6 +1384,8 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [menuTypes, setMenuTypes] = useState<string[]>([]);
     const [retypeTargetType, setRetypeTargetType] = useState('');
     const [retyping, setRetyping] = useState(false);
+    const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+    const [updatingPriceRuleId, setUpdatingPriceRuleId] = useState<string | null>(null);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -1282,7 +1396,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
     useEffect(() => {
         void refreshData();
-    }, [lastDbSync, isAllStores]);
+    }, [lastDbSync, isAllStores, selectedStore?.restaurant_id, groupOwnedReady]);
 
     useEffect(() => {
         if (!sourceMenuItemId || !sourceVariantId || !targetMenuItemId) {
@@ -1337,7 +1451,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
             const [itemsRes, variantsRes, matrixRes, historyRes, typesRes] = await Promise.all([
                 endpoints.menu.list(),
                 endpoints.menu.variantsList(),
-                endpoints.menu.matrix(),
+                groupOwnedReady ? endpoints.menu.globalMatrix() : endpoints.menu.matrix(),
                 endpoints.menu.mergeHistory(),
                 endpoints.menu.types(),
             ]);
@@ -1357,7 +1471,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
             .map(row => ({
                 variant_id: row.variant_id,
                 variant_name: row.variant_name,
-                count: row.mapping_count,
+                count: row.mapping_count || 1,
             }))
             .sort((a, b) => a.variant_name.localeCompare(b.variant_name))
     );
@@ -1561,6 +1675,42 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         }
     };
 
+    const handlePriceUpdate = async (row: MatrixRow) => {
+        if (!row.rule_id || !row.locator_type || !row.locator_value) return;
+        const rawPrice = (priceDrafts[row.rule_id] ?? String(row.price)).trim();
+        if (!/^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/.test(rawPrice)) {
+            setPopup({ type: 'error', message: 'Price must be from 0.00 to 99999999.99 with at most two decimals.' });
+            return;
+        }
+        const [whole, fraction = ''] = rawPrice.split('.');
+        const price = `${whole}.${fraction.padEnd(2, '0')}`;
+        setUpdatingPriceRuleId(row.rule_id);
+        try {
+            const previewResponse = await endpoints.menu.globalPreview({
+                mutation_type: 'global_locator.price_update',
+                payload: {
+                    locator_type: row.locator_type,
+                    locator_value: row.locator_value,
+                    price,
+                },
+            });
+            const preview = previewResponse.data;
+            if (!confirmGlobalImpact(preview, `Changing the shared catalog price to ₹${price}`)) return;
+            await endpoints.menu.globalCommit(globalPreviewReference(preview));
+            setPopup({ type: 'success', message: `Group price updated to ₹${price}.` });
+            setPriceDrafts(previous => {
+                const next = { ...previous };
+                delete next[row.rule_id!];
+                return next;
+            });
+            await refreshData();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUpdatingPriceRuleId(null);
+        }
+    };
+
     const matrixBackedMenuItemIds = new Set(matrixData.map(row => row.menu_item_id));
     const sourceSelectableItems = items.filter(item => matrixBackedMenuItemIds.has(item.menu_item_id));
     const sourceVariantOptions = sourceMenuItemId ? getItemVariantOptions(sourceMenuItemId) : [];
@@ -1610,8 +1760,8 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         const sorted = [...filteredMatrixData];
         if (sortKey) {
             sorted.sort((a, b) => {
-                let aVal = a[sortKey as keyof MatrixRow] as string | number | boolean;
-                let bVal = b[sortKey as keyof MatrixRow] as string | number | boolean;
+                let aVal = (a[sortKey as keyof MatrixRow] ?? '') as string | number | boolean;
+                let bVal = (b[sortKey as keyof MatrixRow] ?? '') as string | number | boolean;
                 if (typeof aVal === 'string') aVal = aVal.toLowerCase();
                 if (typeof bVal === 'string') bVal = bVal.toLowerCase();
 
@@ -1662,6 +1812,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <SingleStoreOnly what="Menu changes">
+            {canonicalControlsEnabled ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.45fr) minmax(300px, 1fr)', gap: '20px' }}>
                 <CollapsibleCard title="Merge Menu Item + Variant" defaultCollapsed>
                     <div className="segmented-control" style={{ marginBottom: '15px' }}>
@@ -2027,7 +2178,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     </div>
                 </CollapsibleCard>
 
-                <CollapsibleCard title="Recent Merge History" defaultCollapsed>
+                {!groupOwnedReady && <CollapsibleCard title="Recent Merge History" defaultCollapsed>
                     {mergeHistory.length === 0 ? (
                         <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No recent merges to undo.</p>
                     ) : (
@@ -2066,14 +2217,25 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                             ))}
                         </div>
                     )}
-                </CollapsibleCard>
+                </CollapsibleCard>}
             </div>
+            ) : globalMenuGroupAdvertised ? (
+                <Card title="Group-owned canonical menu">
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+                        Merge, rename, retype, variant-merge, undo and price controls remain locked while the
+                        menu group is in shadow or aggregation review. Store Resolution stays available for
+                        approved coverage repair.
+                    </p>
+                </Card>
+            ) : null}
             </SingleStoreOnly>
 
             {/* Menu Matrix Table Container */}
             <div style={{ marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '15px', flexWrap: 'wrap' }}>
-                    <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Menu Matrix ({matrixData.length} unique pairs)</h3>
+                    <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>
+                        Menu Matrix ({matrixData.length} unique pairs)
+                    </h3>
                     <input
                         placeholder="Search Name..."
                         value={search}
@@ -2086,23 +2248,32 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     <table className="standard-table">
                         <thead>
                             <tr>
-                                {!isAllStores && <th>Action</th>}
+                                {!isAllStores && canonicalControlsEnabled && <th>Action</th>}
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
-                                <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
-                                <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
+                                {groupOwnedReady ? (
+                                    <>
+                                        <th>POS Kind</th>
+                                        <th>POS Locator</th>
+                                    </>
+                                ) : (
+                                    <>
+                                        <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
+                                        <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
+                                    </>
+                                )}
                                 <th className="text-right" onClick={() => handleSort('price')}>Price{renderSortIcon('price')}</th>
-                                <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>
-                                <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>
-                                <th className="text-center" onClick={() => handleSort('delivery_eligible')}>Delivery{renderSortIcon('delivery_eligible')}</th>
+                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>}
+                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>}
+                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('delivery_eligible')}>Delivery{renderSortIcon('delivery_eligible')}</th>}
                                 <th className="text-center" onClick={() => handleSort('is_verified')}>Verified{renderSortIcon('is_verified')}</th>
                             </tr>
                         </thead>
                         <tbody>
                             {displayData.map((r, i) => (
                                 <tr key={i}>
-                                    {!isAllStores && <td>
+                                    {!isAllStores && canonicalControlsEnabled && <td>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                             <button
                                                 onClick={() => handlePrefill(r, 'source')}
@@ -2130,6 +2301,19 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                             >
                                                 Target
                                             </button>
+                                            {groupOwnedReady && globalMenuAdvertised && r.rule_id && (
+                                                <button
+                                                    onClick={() => void handlePriceUpdate(r)}
+                                                    disabled={updatingPriceRuleId === r.rule_id}
+                                                    style={{
+                                                        color: '#2563EB', border: '1px solid rgba(37, 99, 235, 0.45)',
+                                                        background: 'transparent', padding: '4px 8px', borderRadius: '6px',
+                                                        cursor: updatingPriceRuleId === r.rule_id ? 'not-allowed' : 'pointer',
+                                                    }}
+                                                >
+                                                    {updatingPriceRuleId === r.rule_id ? 'Saving…' : 'Save Price'}
+                                                </button>
+                                            )}
                                         </div>
                                     </td>}
                                     <td>
@@ -2140,16 +2324,38 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                     </td>
                                     <td>{r.type}</td>
                                     <td>{r.variant_name}</td>
+                                    {groupOwnedReady ? (
+                                        <>
+                                            <td>{r.locator_type === 'pos_addon' ? 'Addon' : 'Item'}</td>
+                                            <td><code>{r.locator_value}</code></td>
+                                        </>
+                                    ) : (
+                                        <>
                                     <td className="text-center">{r.mapping_count}</td>
                                     <td className="text-center">
-                                        {r.order_count > 0 ? r.order_count : (
+                                        {(r.order_count || 0) > 0 ? r.order_count : (
                                             <span style={{ color: '#EF4444', fontWeight: 600 }} title="No order lines reference this item + variant in this install's data">0</span>
                                         )}
                                     </td>
-                                    <td className="text-right">₹{r.price}</td>
-                                    <td className="text-center">{r.is_active ? "✅" : "❌"}</td>
-                                    <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>
-                                    <td className="text-center">{r.delivery_eligible ? "✅" : "❌"}</td>
+                                        </>
+                                    )}
+                                    <td className="text-right">
+                                        {groupOwnedReady && globalMenuAdvertised && r.rule_id ? (
+                                            <input
+                                                aria-label={`Price for ${r.locator_value}`}
+                                                value={priceDrafts[r.rule_id] ?? String(r.price)}
+                                                onChange={event => setPriceDrafts(previous => ({
+                                                    ...previous,
+                                                    [r.rule_id!]: event.target.value,
+                                                }))}
+                                                inputMode="decimal"
+                                                style={{ width: '88px', textAlign: 'right', padding: '5px' }}
+                                            />
+                                        ) : `₹${r.price}`}
+                                    </td>
+                                    {!groupOwnedReady && <td className="text-center">{r.is_active ? "✅" : "❌"}</td>}
+                                    {!groupOwnedReady && <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>}
+                                    {!groupOwnedReady && <td className="text-center">{r.delivery_eligible ? "✅" : "❌"}</td>}
                                     <td className="text-center">{isUnverifiedFlag(r.is_verified) ? "❌" : "✅"}</td>
                                 </tr>
                             ))}
@@ -2208,9 +2414,7 @@ function SuspectMappingsCard({
     lastDbSync?: number;
 }) {
     const { selectedStore } = useStore();
-    const globalMenuAdvertised = Boolean(
-        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
-    );
+    const globalMenuAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
     const [suspects, setSuspects] = useState<SuspectMapping[]>([]);
     const [loading, setLoading] = useState(true);
     const [selection, setSelection] = useState<Record<number, { itemId: string; variantId: string }>>({});
@@ -2383,7 +2587,13 @@ function SuspectMappingsCard({
     );
 }
 
-function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
+function ResolutionsTab({
+    lastDbSync,
+    showHistory = true,
+}: {
+    lastDbSync?: number;
+    showHistory?: boolean;
+}) {
     const { selectedStore } = useStore();
     const globalMenuAdvertised = hasGlobalMenuMutationCapability(selectedStore);
     const globalResolutionAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
@@ -3093,7 +3303,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                     </Card>
                 ))
             )}
-            <CollapsibleCard title="Resolution History" defaultCollapsed>
+            {showHistory && <CollapsibleCard title="Resolution History" defaultCollapsed>
                 {mergeHistory.length === 0 ? (
                     <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No resolutions recorded yet.</p>
                 ) : (
@@ -3157,7 +3367,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                         </div>
                     </div>
                 )}
-            </CollapsibleCard>
+            </CollapsibleCard>}
             {modalItem && (
                 <div
                     onClick={closeResolutionModal}
@@ -3492,16 +3702,162 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     );
 }
 
+// --- Group History Tab ---
+
+function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
+    const [entries, setEntries] = useState<MergeHistoryEntry[]>([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [loading, setLoading] = useState(true);
+    const [undoing, setUndoing] = useState<string | null>(null);
+    const [popup, setPopup] = useState<PopupMessage | null>(null);
+
+    const load = async (requestedPage = page) => {
+        setLoading(true);
+        try {
+            const response = await endpoints.menu.mergeHistory({
+                limit: HISTORY_PAGE_SIZE,
+                offset: (requestedPage - 1) * HISTORY_PAGE_SIZE,
+            });
+            setEntries(response.data.entries);
+            setTotal(response.data.total);
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { void load(page); }, [page, lastDbSync]);
+
+    const handleUndo = async (entry: MergeHistoryEntry) => {
+        if (!entry.is_undoable || !entry.global_mutation_id) return;
+        setUndoing(entry.history_id || entry.global_mutation_id);
+        try {
+            const previewResponse = await endpoints.menu.globalPreview({
+                mutation_type: 'global_menu.undo',
+                payload: { undo_mutation_id: entry.global_mutation_id },
+            });
+            const preview = previewResponse.data;
+            if (!confirmGlobalImpact(preview, 'Undoing this group menu change')) return;
+            await endpoints.menu.globalCommit(globalPreviewReference(preview));
+            setPopup({ type: 'success', message: 'Group menu change undone.' });
+            await load(page);
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUndoing(null);
+        }
+    };
+
+    const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+    return (
+        <div>
+            <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
+            <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+                One group-wide audit timeline. Legacy restaurant events remain visible but are never presented as undoable.
+            </p>
+            <Card title={`Group History (${total})`}>
+                {loading ? <p>Loading...</p> : entries.length === 0 ? (
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No group history has been cached yet.</p>
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {entries.map(entry => {
+                            const busyKey = entry.history_id || entry.global_mutation_id || String(entry.merge_id);
+                            return (
+                                <div key={busyKey} style={{ padding: '12px 0', borderBottom: '1px solid var(--border-color)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center' }}>
+                                        <div>
+                                            <div style={{ color: 'var(--text-color)' }}>
+                                                <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
+                                                {' → '}
+                                                <span style={{ color: '#10B981' }}>{entry.target_name || entry.source_name}</span>
+                                            </div>
+                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.84em', marginTop: '4px' }}>
+                                                {entry.source_kind === 'legacy_restaurant_event' ? 'Legacy restaurant history' : 'Global menu mutation'}
+                                                {entry.event_type ? ` · ${entry.event_type}` : ''}
+                                                {entry.origin_restaurant_id ? ` · origin ${entry.origin_restaurant_id}` : ''}
+                                                {entry.actor ? ` · by ${entry.actor}` : ''}
+                                                {` · ${new Date(entry.merged_at).toLocaleString()}`}
+                                            </div>
+                                        </div>
+                                        {entry.is_undoable && entry.global_mutation_id ? (
+                                            <button
+                                                onClick={() => void handleUndo(entry)}
+                                                disabled={undoing === busyKey}
+                                                style={{ padding: '8px 14px', background: '#444', color: 'white', border: 'none', borderRadius: '8px' }}
+                                            >
+                                                {undoing === busyKey ? 'Undoing…' : 'Undo'}
+                                            </button>
+                                        ) : (
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8em' }}>Not undoable</span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+                {total > HISTORY_PAGE_SIZE && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px' }}>
+                        <button disabled={page <= 1} onClick={() => setPage(value => value - 1)}>Previous</button>
+                        <span>Page {page} of {pages}</span>
+                        <button disabled={page >= pages} onClick={() => setPage(value => value + 1)}>Next</button>
+                    </div>
+                )}
+            </Card>
+        </div>
+    );
+}
+
 // --- Main Page ---
 
 export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
-    const [activeTab, setActiveTab] = useState<'summary' | 'items' | 'variants' | 'matrix' | 'resolutions'>('summary');
+    const { isAllStores, selectedStore } = useStore();
+    const [activeTab, setActiveTab] = useState<'summary' | 'catalog' | 'items' | 'variants' | 'matrix' | 'history' | 'resolutions'>('summary');
+    const [globalStatusSelection, setGlobalStatusSelection] = useState<{
+        restaurantId: string;
+        syncToken?: number;
+        status: GlobalMenuStatus;
+    } | null>(null);
+    const sharedPosAdvertised = hasGlobalMenuSharedPosCatalogCapability(selectedStore);
+    const globalStatus = globalStatusSelection &&
+        globalStatusSelection.restaurantId === selectedStore?.restaurant_id &&
+        globalStatusSelection.syncToken === lastDbSync
+        ? globalStatusSelection.status
+        : null;
+    const groupOwnedReady = isGroupOwnedMenuReady(selectedStore, globalStatus, isAllStores);
+    const labels = globalMenuViewLabels(groupOwnedReady);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (isAllStores || !sharedPosAdvertised) return () => { cancelled = true; };
+        endpoints.menu.globalStatus()
+            .then(response => {
+                if (!cancelled && selectedStore) {
+                    setGlobalStatusSelection({
+                        restaurantId: selectedStore.restaurant_id,
+                        syncToken: lastDbSync,
+                        status: response.data,
+                    });
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setGlobalStatusSelection(null);
+            });
+        return () => { cancelled = true; };
+    }, [isAllStores, selectedStore?.restaurant_id, sharedPosAdvertised, lastDbSync]);
+    const displayedActiveTab = !groupOwnedReady && (activeTab === 'catalog' || activeTab === 'history')
+        ? 'summary'
+        : activeTab;
 
     const menuTabs = [
         { id: 'summary' as const, label: '📊 Summary' },
+        ...(groupOwnedReady ? [{ id: 'catalog' as const, label: `📚 ${labels.catalog}` }] : []),
         { id: 'items' as const, label: '📋 Menu Items' },
         { id: 'variants' as const, label: '📏 Variants' },
-        { id: 'matrix' as const, label: '🕸️ Menu Matrix' },
+        { id: 'matrix' as const, label: `🕸️ ${labels.matrix}` },
+        ...(groupOwnedReady ? [{ id: 'history' as const, label: `🕘 ${labels.history}` }] : []),
         { id: 'resolutions' as const, label: '✨ Resolutions' },
     ];
 
@@ -3511,7 +3867,7 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
                 {menuTabs.map((tab) => (
                     <TabButton
                         key={tab.id}
-                        active={activeTab === tab.id}
+                        active={displayedActiveTab === tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         variant="segmented"
                         size="large"
@@ -3521,13 +3877,15 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
                 ))}
             </div>
 
-            {activeTab === 'summary' && <SummaryTab lastDbSync={lastDbSync} />}
-            {activeTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
-            {activeTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
-            {activeTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} />}
-            {activeTab === 'resolutions' && (
+            {displayedActiveTab === 'summary' && <SummaryTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'catalog' && groupOwnedReady && <GroupCatalogTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} groupOwnedReady={groupOwnedReady} />}
+            {displayedActiveTab === 'history' && groupOwnedReady && <GroupHistoryTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'resolutions' && (
                 <SingleStoreOnly what="Menu resolutions">
-                    <ResolutionsTab lastDbSync={lastDbSync} />
+                    <ResolutionsTab lastDbSync={lastDbSync} showHistory={!groupOwnedReady} />
                 </SingleStoreOnly>
             )}
         </div>

@@ -457,6 +457,23 @@ export interface Store {
     is_bound: boolean;
     menu_group_id?: string | null;
     menu_capabilities?: string[];
+    clean_rebuild_status?: 'required' | 'rebuilding' | 'complete' | null;
+    last_archive_path?: string | null;
+}
+
+export interface GlobalMenuDiagnostics {
+    menu_group_id?: string | null;
+    bootstrap_state: 'not_started' | 'in_progress' | 'complete' | 'error';
+    catalog_revision: number;
+    mapping_count: number;
+    price_count: number;
+    assignment_coverage: { linked: number; total: number; complete: boolean };
+    history_count: number;
+    history_cursor?: string | null;
+    quarantine_count: number;
+    catalog_digest: string;
+    matrix_digest: string;
+    history_digest: string;
 }
 
 export interface GlobalMenuStatus {
@@ -486,6 +503,42 @@ export interface GlobalMenuStatus {
     history_cursor?: string | null;
     bootstrap_status: 'not_started' | 'in_progress' | 'complete' | 'error';
     reason: string;
+    mapping_count?: number;
+    price_count?: number;
+    assignment_coverage?: { linked: number; total: number; complete: boolean };
+    history_count?: number;
+    catalog_digest?: string;
+    matrix_digest?: string;
+    history_digest?: string;
+    diagnostics?: GlobalMenuDiagnostics;
+}
+
+export interface GlobalMenuCatalogItem {
+    global_menu_item_id: string;
+    canonical_name: string;
+    canonical_type: string;
+    active_pos_rules: number;
+    is_verified: boolean;
+    server_revision: number;
+    updated_at: string;
+}
+
+export interface GlobalMenuCatalogVariant {
+    global_variant_id: string;
+    canonical_name: string;
+    description?: string | null;
+    unit?: string | null;
+    value?: string | number | null;
+    is_verified: boolean;
+    server_revision: number;
+    updated_at: string;
+}
+
+export interface GlobalMenuCatalogResponse {
+    menu_group_id: string;
+    catalog_revision: number;
+    items: GlobalMenuCatalogItem[];
+    variants: GlobalMenuCatalogVariant[];
 }
 
 export interface GlobalMenuPreview {
@@ -532,6 +585,7 @@ export interface GlobalMenuResolutionLocator {
     rule_scope: 'restaurant' | 'group';
     restaurant_id?: string | null;
     confirm_group_wide: boolean;
+    price?: string;
 }
 
 export interface GlobalMenuResolutionContext {

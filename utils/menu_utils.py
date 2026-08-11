@@ -63,6 +63,24 @@ def _commit_strict_plan(
 
 def _strict_mode_edit_blocked_response(conn, *, emit_sync_event: bool = True) -> Optional[Dict[str, Any]]:
     """Prevent legacy local-first edits when strict mode is on but cloud readiness is missing."""
+    if emit_sync_event:
+        try:
+            from src.core.global_menu_schema import resolve_global_menu_capability
+
+            global_status = resolve_global_menu_capability(conn)
+        except Exception:
+            global_status = None
+        if global_status is not None and global_status.server_advertised:
+            return {
+                "status": "error",
+                "message": (
+                    "Canonical menu changes are group-owned in global menu mode; "
+                    "use the global preview and commit workflow"
+                ),
+                "code": "global_menu_shadow_write_blocked",
+                "recommended_action": "use_global_menu_mutations",
+            }
+
     from src.core.menu_mutation_commit import strict_mode_edit_blocked_response
 
     return strict_mode_edit_blocked_response(conn, emit_sync_event=emit_sync_event)
@@ -1450,6 +1468,10 @@ def update_menu_variant_mapping(
     new_variant_id: str,
 ) -> Dict[str, Any]:
     """Move an existing menu-item/variant mapping to a different variant everywhere it is used."""
+    blocked = _strict_mode_edit_blocked_response(conn)
+    if blocked:
+        return blocked
+
     menu_item_id = str(menu_item_id).strip()
     current_variant_id = str(current_variant_id).strip()
     new_variant_id = str(new_variant_id).strip()

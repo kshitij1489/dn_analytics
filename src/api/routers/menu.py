@@ -80,16 +80,14 @@ def _ensure_menu_edit_allowed(conn) -> None:
         status = resolve_global_menu_capability(conn)
     except Exception:
         status = None
-    if status is not None and status.mutation_advertised and status.active:
-        return
-    if status is not None and status.mutation_advertised:
+    if status is not None and status.server_advertised:
         from src.core.global_menu_schema import GlobalMenuCapabilityError
 
-        _raise_global_menu_error(
-            GlobalMenuCapabilityError(
-                "Global menu capability is advertised but this local projection is not ready"
-            )
+        error = GlobalMenuCapabilityError(
+            "Canonical menu changes are group-owned; use the global preview and commit workflow"
         )
+        error.code = "global_menu_shadow_write_blocked"
+        _raise_global_menu_error(error)
 
     from src.core.menu_mutation_commit import (
         build_menu_edit_http_exception,
@@ -163,6 +161,8 @@ def _raise_global_menu_error(error: BaseException) -> None:
         "global_menu_operation_unsupported",
         "global_menu_resolution_disabled",
         "global_menu_resolution_not_ready",
+        "global_menu_shared_pos_catalog_required",
+        "global_menu_shadow_write_blocked",
     }:
         status_code = 409
     else:
@@ -209,8 +209,56 @@ def _commit_global_request(conn, request) -> Dict[str, Any]:
 @router.get("/global/status")
 def get_global_menu_status(conn=Depends(get_db)):
     from src.core.global_menu_schema import resolve_global_menu_capability
+    from src.core.queries.global_menu_diagnostics import fetch_global_menu_diagnostics
 
-    return resolve_global_menu_capability(conn).to_dict()
+    status = resolve_global_menu_capability(conn).to_dict()
+    diagnostics = fetch_global_menu_diagnostics(conn)
+    return {
+        **status,
+        "mapping_count": diagnostics["mapping_count"],
+        "price_count": diagnostics["price_count"],
+        "assignment_coverage": diagnostics["assignment_coverage"],
+        "history_count": diagnostics["history_count"],
+        "catalog_digest": diagnostics["catalog_digest"],
+        "matrix_digest": diagnostics["matrix_digest"],
+        "history_digest": diagnostics["history_digest"],
+        "diagnostics": diagnostics,
+    }
+
+
+def _require_shared_group_view(conn):
+    from src.core.global_menu_schema import (
+        GlobalMenuCapabilityError,
+        resolve_global_menu_capability,
+    )
+
+    capability = resolve_global_menu_capability(conn)
+    if not capability.shared_pos_catalog_ready:
+        error = GlobalMenuCapabilityError(
+            "The shared group catalog is unavailable until bootstrap completes"
+        )
+        error.code = "global_menu_shared_pos_catalog_required"
+        _raise_global_menu_error(error)
+    return capability
+
+
+@router.get("/global/catalog")
+def get_global_menu_catalog(conn=Depends(get_db)):
+    """Active canonical items and variants owned by the selected menu group."""
+    capability = _require_shared_group_view(conn)
+    catalog = menu_queries.fetch_group_menu_catalog(conn, capability.menu_group_id)
+    return {
+        "menu_group_id": capability.menu_group_id,
+        "catalog_revision": capability.catalog_revision,
+        **catalog,
+    }
+
+
+@router.get("/global/matrix")
+def get_global_menu_matrix(conn=Depends(get_db)):
+    """Active shared Petpooja locator rules and their current catalog price."""
+    capability = _require_shared_group_view(conn)
+    return menu_queries.fetch_group_menu_matrix(conn, capability.menu_group_id)
 
 
 @router.post("/global/mutations/preview")
@@ -871,9 +919,9 @@ def get_variants_list(reader: ScopedReader = Depends(get_reader)):
 @router.post("/variants/create")
 def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get_authorized_db)):
     """Create a new variant type; uses the clustering pipeline's deterministic ID scheme."""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.create_variant_type(
         conn,
         req.variant_name,
@@ -993,9 +1041,9 @@ def preview_merge(
 @router.post("/merge")
 def execute_merge(req: MergeRequest, conn=Depends(get_authorized_db)):
     """Merge source menu item into target"""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     if req.variant_mappings is not None:
         res = menu_utils.merge_menu_items_with_variant_mappings(
             conn,
@@ -1014,9 +1062,9 @@ def execute_merge(req: MergeRequest, conn=Depends(get_authorized_db)):
 @router.post("/retype")
 def retype_menu_item_endpoint(req: RetypeMenuItemRequest, conn=Depends(get_authorized_db)):
     """Change a menu item's type; relinks all history into the retyped item."""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.retype_menu_item(conn, req.menu_item_id, req.new_type)
     return _finalize_menu_edit_response(res)
 
@@ -1024,9 +1072,9 @@ def retype_menu_item_endpoint(req: RetypeMenuItemRequest, conn=Depends(get_autho
 @router.post("/merge/undo")
 def undo_merge(req: UndoMergeRequest, conn=Depends(get_authorized_db)):
     """Undo a previous merge operation"""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.undo_merge(conn, req.merge_id)
     return _finalize_menu_edit_response(res)
 
@@ -1227,9 +1275,9 @@ def check_remap_target(order_item_id: str, conn=Depends(get_db)):
 @router.post("/remap")
 def execute_remap(req: RemapRequest, conn=Depends(get_authorized_db)):
     """Remap an order item to a different menu item/variant"""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.remap_order_item_cluster(conn, req.order_item_id, req.new_menu_item_id, req.new_variant_id)
     if res.get("status") == "success":
         # A remap resolves any open silent-reuse anomaly for this id.
@@ -1247,9 +1295,9 @@ def update_variant_mapping(
     req: UpdateVariantMappingRequest, conn=Depends(get_authorized_db)
 ):
     """Update an existing menu item + variant mapping to a different variant everywhere it is used."""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.update_menu_variant_mapping(
         conn,
         req.menu_item_id,
@@ -1301,9 +1349,9 @@ def resolve_variant_endpoint(
     req: ResolveVariantRequest, conn=Depends(get_authorized_db)
 ):
     """Resolve a single unresolved menu item + variant pair."""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.resolve_menu_item_variant(
         conn,
         req.source_menu_item_id,
@@ -1320,9 +1368,9 @@ def resolve_variant_endpoint(
 @router.post("/resolutions/verify")
 def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_authorized_db)):
     """Verify a menu item, optionally renaming it"""
-    _ensure_menu_edit_allowed(conn)
     if _global_menu_request_active(conn, req):
         return _commit_global_request(conn, req)
+    _ensure_menu_edit_allowed(conn)
     res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type, req.new_variant_id)
     return _finalize_menu_edit_response(res)
 

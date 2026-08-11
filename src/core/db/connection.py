@@ -218,7 +218,12 @@ def get_db_connection(db_url=None):
 def get_profile_connection(profile, *, apply_schema: bool = True):
     """Open and verify one immutable RestaurantProfile."""
     from src.core.db.control import app_data_root
-    from src.core.profiles import ProfileMismatch, validate_restaurant_id
+    from src.core.profiles import (
+        CleanProfileRebuildRequired,
+        ProfileMismatch,
+        registered_profile_rebuild_status,
+        validate_restaurant_id,
+    )
 
     restaurant_id = validate_restaurant_id(profile.restaurant_id)
     root = app_data_root().resolve()
@@ -227,6 +232,11 @@ def get_profile_connection(profile, *, apply_schema: bool = True):
         path.relative_to(root)
     except ValueError as exc:
         raise ProfileMismatch(f"Profile path is outside app-data root: {path}") from exc
+    rebuild_status = registered_profile_rebuild_status(restaurant_id, path)
+    if rebuild_status == "required":
+        raise CleanProfileRebuildRequired(
+            f"Restaurant profile {restaurant_id} requires an archived clean rebuild"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(path)
     try:

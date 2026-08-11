@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from src.api.dependencies import (
@@ -15,6 +17,7 @@ from src.core.services.cloud_pull_orchestrator import (
     collect_forecast_pull_warnings,
     collect_global_menu_history_warnings,
     collect_menu_pull_errors,
+    collect_shared_pos_observation_warnings,
     run_best_effort_cloud_pulls,
 )
 from src.core.client_learning_shipper import run_all as run_client_learning_shippers
@@ -50,6 +53,37 @@ def _format_customer_pull_failure(errors: list) -> str:
     return f"Customer pull failed ({len(errors)} streams); first: {stream}: {message}"
 
 
+def _format_observation_error(block) -> Optional[str]:
+    if not isinstance(block, dict):
+        return "observation result is missing"
+    error = block.get("error")
+    if isinstance(error, str) and error:
+        return error
+    if block.get("status") == "error":
+        return str(error or "observation failed")
+    return None
+
+
+def _global_failure_code(messages) -> Optional[str]:
+    for candidate in (
+        "invalid_api_key",
+        "invalid_token",
+        "invalid_credentials",
+        "restaurant_list_not_configured",
+        "restaurant_selector_not_a_parameter",
+        "retired_parameter",
+        "retired_field",
+    ):
+        if any(
+            message == candidate
+            or message.startswith(f"{candidate}:")
+            or f" {candidate}:" in message
+            for message in messages
+        ):
+            return candidate
+    return None
+
+
 def _menu_items_empty(conn) -> bool:
     row = conn.execute("SELECT COUNT(*) FROM menu_items").fetchone()
     return bool(row and row[0] == 0)
@@ -76,14 +110,31 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
     menu_bootstrap_pulled = False
     pre_bootstrap_error = None
     global_mode_active = False
+    global_capability = None
+    from src.core.profiles import profile_rebuild_status_for_connection
+
+    rebuild_in_progress = profile_rebuild_status_for_connection(conn) == "rebuilding"
     try:
         from src.core.global_menu_schema import resolve_global_menu_capability
 
-        global_mode_active = resolve_global_menu_capability(
+        global_capability = resolve_global_menu_capability(
             conn, allow_profile_sync=True
-        ).active
+        )
+        global_mode_active = global_capability.active
     except Exception:
         global_mode_active = False
+
+    if rebuild_in_progress and not (
+        global_capability is not None
+        and global_capability.active
+        and global_capability.shared_pos_catalog_advertised
+    ):
+        yield SyncStatus(
+            "error",
+            "Clean rebuild stopped: the refreshed registry does not advertise the shared POS catalog",
+            code="clean_rebuild_capability_missing",
+        )
+        return
 
     if global_mode_active:
         from src.core.global_menu_sync import pull_global_menu_state
@@ -92,12 +143,17 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
             "info",
             "Pulling global menu rules before order sync...",
         )
-        global_pull = pull_global_menu_state(conn, allow_profile_sync=True)
+        try:
+            global_pull = pull_global_menu_state(conn, allow_profile_sync=True)
+        except Exception as exc:
+            global_pull = {"status": "error", "error": str(exc)}
         if global_pull.get("error") or global_pull.get("status") == "error":
+            error_message = str(global_pull.get("error") or "unknown error")
             yield SyncStatus(
                 "error",
-                f"Global menu pull failed before order sync: {global_pull.get('error') or 'unknown error'}",
-                code="global_menu_sync_failed",
+                f"Global menu pull failed before order sync: {error_message}",
+                code=_global_failure_code([error_message])
+                or "global_menu_sync_failed",
             )
             return
         yield SyncStatus("info", "Global menu rules are current.")
@@ -156,9 +212,21 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
         stats=final_stats,
     )
 
-    cloud = run_best_effort_cloud_pulls(
-        conn, skip_menu_bootstrap=menu_bootstrap_pulled, already_locked=already_locked
-    )
+    cloud_pull_options = {
+        "skip_menu_bootstrap": menu_bootstrap_pulled,
+        "already_locked": already_locked,
+    }
+    if global_mode_active:
+        cloud_pull_options.update(
+            {
+                "skip_global_menu_state": True,
+                "send_shared_pos_observation": bool(
+                    global_capability is not None
+                    and global_capability.shared_pos_catalog_advertised
+                ),
+            }
+        )
+    cloud = run_best_effort_cloud_pulls(conn, **cloud_pull_options)
     final_message = final_status.message or "Sync complete"
     menu_pull_errors = list(collect_menu_pull_errors(cloud))
     customer_pull_errors = list(collect_customer_pull_errors(cloud))
@@ -198,6 +266,14 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 {"stream": stream, "warning": message}
                 for stream, message in history_pull_warnings
             ]
+        observation_warnings = list(
+            collect_shared_pos_observation_warnings(cloud)
+        )
+        if observation_warnings:
+            final_stats["shared_pos_observation_warnings"] = [
+                {"stream": stream, "warning": message}
+                for stream, message in observation_warnings
+            ]
         if pull_failure_messages:
             final_message = f"{final_message} · {' · '.join(pull_failure_messages)}"
         else:
@@ -206,33 +282,76 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 customer_pull_warnings
                 + forecast_pull_warnings
                 + history_pull_warnings
+                + observation_warnings
             )
             for _stream, warning in pull_warnings:
                 final_message = f"{final_message} · Warning: {warning}"
 
-    terminal_type = "error" if (menu_pull_errors or customer_pull_errors) else "done"
+    rebuild_errors: list[str] = []
+    if global_mode_active:
+        try:
+            from src.core.queries.global_menu_diagnostics import (
+                fetch_global_menu_diagnostics,
+            )
+
+            diagnostics = fetch_global_menu_diagnostics(conn)
+            final_stats["global_menu_diagnostics"] = diagnostics
+            if rebuild_in_progress:
+                coverage = diagnostics["assignment_coverage"]
+                if diagnostics["bootstrap_state"] != "complete":
+                    rebuild_errors.append("global catalog bootstrap is incomplete")
+                if diagnostics["quarantine_count"]:
+                    rebuild_errors.append(
+                        f"{diagnostics['quarantine_count']} global menu payload(s) remain quarantined"
+                    )
+                if not coverage["complete"]:
+                    rebuild_errors.append(
+                        "assignment coverage is incomplete "
+                        f"({coverage['linked']}/{coverage['total']})"
+                    )
+        except Exception as exc:
+            if rebuild_in_progress:
+                rebuild_errors.append(f"diagnostics failed: {exc}")
+
+    if rebuild_in_progress:
+        observation = cloud.get("shared_pos_observation")
+        observation_confirmed = bool(
+            isinstance(observation, dict)
+            and not _format_observation_error(observation)
+            and (observation.get("sent") is True or observation.get("skipped"))
+        )
+        if not observation_confirmed:
+            rebuild_errors.append("the settled shared POS observation was not confirmed")
+
+    terminal_type = (
+        "error"
+        if (menu_pull_errors or customer_pull_errors or rebuild_errors)
+        else "done"
+    )
     failure_code = None
     if menu_pull_errors or customer_pull_errors:
         failure_messages = [message for _stream, message in (*menu_pull_errors, *customer_pull_errors)]
-        for candidate in (
-            "invalid_api_key",
-            "invalid_token",
-            "invalid_credentials",
-            "restaurant_list_not_configured",
-            "restaurant_selector_not_a_parameter",
-            "retired_parameter",
-            "retired_field",
-        ):
-            if any(
-                message == candidate
-                or message.startswith(f"{candidate}:")
-                or f" {candidate}:" in message
-                for message in failure_messages
-            ):
-                failure_code = candidate
-                break
+        failure_code = _global_failure_code(failure_messages)
         if failure_code:
             final_stats["failure_code"] = failure_code
+
+    if rebuild_errors:
+        failure_code = failure_code or "clean_rebuild_incomplete"
+        final_stats["failure_code"] = failure_code
+        final_stats["clean_rebuild_errors"] = rebuild_errors
+        final_message = f"{final_message} · Clean rebuild incomplete: {'; '.join(rebuild_errors)}"
+    elif rebuild_in_progress and terminal_type == "done":
+        try:
+            from src.core.profiles import complete_profile_rebuild_for_connection
+
+            if not complete_profile_rebuild_for_connection(conn):
+                raise RuntimeError("profile rebuild marker changed before finalization")
+            final_stats["clean_rebuild_status"] = "complete"
+        except Exception as exc:
+            terminal_type = "error"
+            failure_code = "clean_rebuild_finalize_failed"
+            final_stats["failure_code"] = failure_code
+            final_message = f"{final_message} · Clean rebuild finalization failed: {exc}"
 
     yield SyncStatus(
         terminal_type,
@@ -291,7 +410,47 @@ def run_sync(request: SyncRunRequest, scope: AnalyticsScope = Depends(get_analyt
 
     def sync_wrapper():
         # The immutable profile was captured before this thread started.
-        conn, _ = get_profile_connection(profile)
+        captured_profile = profile
+        if captured_profile.clean_rebuild_status == "required":
+            yield SyncStatus(
+                "error",
+                "This profile must be archived and reset before Sync DB can rebuild it",
+                code="clean_profile_rebuild_required",
+            )
+            return
+        if captured_profile.clean_rebuild_status == "rebuilding":
+            yield SyncStatus(
+                "info",
+                "Refreshing restaurant registry and shared-menu capabilities...",
+            )
+            try:
+                from pathlib import Path
+
+                from src.core.profiles import (
+                    get_profile,
+                    refresh_allowed_restaurants_from_server,
+                )
+
+                refresh_allowed_restaurants_from_server()
+                refreshed = get_profile(
+                    captured_profile.restaurant_id, require_authorized=True
+                )
+                if Path(refreshed.database_path).resolve() != Path(
+                    captured_profile.database_path
+                ).resolve():
+                    raise RuntimeError("Restaurant profile path changed during rebuild capture")
+                captured_profile = refreshed
+            except Exception as exc:
+                yield SyncStatus(
+                    "error",
+                    f"Clean rebuild registry refresh failed: {exc}",
+                    code=str(
+                        getattr(exc, "code", "clean_rebuild_registry_refresh_failed")
+                    ),
+                )
+                return
+
+        conn, _ = get_profile_connection(captured_profile)
 
         try:
             yield from iter_sync_statuses(conn)

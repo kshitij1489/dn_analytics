@@ -5,20 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core.central_api import error_from_response, unscoped_analytics_headers
-from src.core.db.control import get_global_config
 from src.core.profiles import (
     ALL_STORES_TOKEN,
     ProfileError,
+    ProfileRegistryRefreshError,
     bind_and_select_profile,
     federation_profiles,
     list_profiles,
     select_all_stores,
     selected_profile,
     selected_selection,
-    upsert_allowed_restaurants,
+    refresh_allowed_restaurants_from_server,
 )
-from utils.api_client import normalize_integration_orders_base_url
 
 
 router = APIRouter()
@@ -76,41 +74,17 @@ def get_store_selection():
 
 @router.post("/stores/refresh")
 def refresh_stores():
-    config = get_global_config(("integration_orders_url", "integration_orders_key"))
-    base_url = normalize_integration_orders_base_url(config.get("integration_orders_url") or "")
-    api_key = config.get("integration_orders_key") or ""
-    if not base_url or not api_key:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "Configure the Orders Integration URL and API key first",
-                "code": "restaurant_list_not_configured",
-            },
-        )
     try:
-        import requests
-
-        response = requests.get(
-            f"{base_url}/restaurants/",
-            headers=unscoped_analytics_headers(api_key),
-            timeout=30,
-        )
-        if response.status_code >= 400:
-            error = error_from_response(response)
-            raise HTTPException(
-                status_code=response.status_code,
-                detail={"error": error.message, "code": error.code},
-            )
-        from src.core.analytics_stream_contract import parse_allowed_restaurants
-
-        restaurants = parse_allowed_restaurants(response.json())
-        return {"profiles": [_serialize(p) for p in upsert_allowed_restaurants(restaurants)]}
-    except HTTPException:
-        raise
-    except Exception as exc:
+        return {
+            "profiles": [
+                _serialize(profile)
+                for profile in refresh_allowed_restaurants_from_server()
+            ]
+        }
+    except ProfileRegistryRefreshError as exc:
         raise HTTPException(
-            status_code=502,
-            detail={"error": str(exc), "code": "restaurant_list_transport_error"},
+            status_code=exc.http_status,
+            detail={"error": str(exc), "code": exc.code},
         ) from exc
 
 

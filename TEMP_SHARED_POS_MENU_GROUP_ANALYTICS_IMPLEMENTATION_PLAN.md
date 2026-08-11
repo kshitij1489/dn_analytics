@@ -1,6 +1,6 @@
 # Temporary Analytics Implementation Plan: Shared Petpooja Menu Group
 
-**Status:** implementation in progress; Phases A–D complete on 2026-08-11 for a controlled clean rebuild  
+**Status:** analytics implementation complete; Phases A–F complete on 2026-08-12; coordinated central stop gate, profile resets and activation remain open
 **Frozen wire contract:** `contracts/central_server_analytics_app_api_contract.md`, revision 1.7, especially §9 and §25  
 **Golden fixtures:** `contracts/fixtures/1/`  
 **Deployment model:** one controlled desktop installation containing the Dach & Nona and Super Mart restaurant profiles  

@@ -19,6 +19,7 @@ from src.core.db.control import (
 
 ALL_STORES_TOKEN = "__all__"
 PROFILE_SCHEMA_VERSION = 1
+SHARED_POS_CATALOG_CAPABILITY = "global_menu_shared_pos_catalog_v1"
 
 
 class ProfileError(RuntimeError):
@@ -51,6 +52,17 @@ class AllStoresUnavailable(ProfileError):
     code = "all_stores_unavailable"
 
 
+class CleanProfileRebuildRequired(ProfileError):
+    code = "clean_profile_rebuild_required"
+
+
+class ProfileRegistryRefreshError(ProfileError):
+    def __init__(self, message: str, *, code: str, http_status: int):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
+
+
 @dataclass(frozen=True)
 class RestaurantProfile:
     restaurant_id: str
@@ -62,6 +74,8 @@ class RestaurantProfile:
     is_bound: bool = False
     menu_group_id: Optional[str] = None
     menu_capabilities: tuple[str, ...] = ()
+    clean_rebuild_status: Optional[str] = None
+    last_archive_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -130,7 +144,15 @@ def _identity_for_path(path: Path) -> Optional[str]:
 
 def _profile_from_row(row: sqlite3.Row) -> RestaurantProfile:
     path = _canonical_under_root(Path(row["database_path"]))
-    identity = _identity_for_path(path)
+    clean_rebuild_status = (
+        str(row["clean_rebuild_status"]).strip()
+        if row["clean_rebuild_status"]
+        else None
+    )
+    # A revision-1.6 file awaiting the controlled revision-1.7 rebuild must
+    # not even be opened for identity/schema discovery. Its registered path
+    # and existence are enough for the reset route to capture it safely.
+    identity = None if clean_rebuild_status == "required" else _identity_for_path(path)
     try:
         raw_capabilities = json.loads(row["menu_capabilities"] or "[]")
     except (TypeError, ValueError):
@@ -145,9 +167,15 @@ def _profile_from_row(row: sqlite3.Row) -> RestaurantProfile:
         database_path=str(path),
         authorization_state=str(row["authorization_state"]),
         local_address=row["local_address"],
-        is_bound=identity == str(row["restaurant_id"]),
+        is_bound=(
+            path.is_file()
+            if clean_rebuild_status == "required"
+            else identity == str(row["restaurant_id"])
+        ),
         menu_group_id=str(row["menu_group_id"]).strip() if row["menu_group_id"] else None,
         menu_capabilities=capabilities,
+        clean_rebuild_status=clean_rebuild_status,
+        last_archive_path=row["last_archive_path"],
     )
 
 
@@ -158,7 +186,8 @@ def list_profiles() -> List[RestaurantProfile]:
         rows = conn.execute(
             """
             SELECT restaurant_id, display_name, timezone, database_path,
-                   authorization_state, local_address, menu_group_id, menu_capabilities
+                   authorization_state, local_address, menu_group_id, menu_capabilities,
+                   clean_rebuild_status, last_archive_path
             FROM restaurant_profiles
             ORDER BY display_name, restaurant_id
             """
@@ -176,7 +205,8 @@ def get_profile(restaurant_id: str, *, require_authorized: bool = False) -> Rest
         row = conn.execute(
             """
             SELECT restaurant_id, display_name, timezone, database_path,
-                   authorization_state, local_address, menu_group_id, menu_capabilities
+                   authorization_state, local_address, menu_group_id, menu_capabilities,
+                   clean_rebuild_status, last_archive_path
             FROM restaurant_profiles WHERE restaurant_id=?
             """,
             (restaurant_id,),
@@ -189,6 +219,92 @@ def get_profile(restaurant_id: str, *, require_authorized: bool = False) -> Rest
     if require_authorized and profile.authorization_state != "authorized":
         raise ProfileError(f"Restaurant profile is not authorized: {restaurant_id}")
     return profile
+
+
+def mark_profile_clean_rebuild(
+    restaurant_id: str,
+    status: str,
+    *,
+    archive_path: Optional[str] = None,
+) -> None:
+    """Persist the operator rebuild lifecycle without opening the profile DB."""
+    restaurant_id = validate_restaurant_id(restaurant_id)
+    if status not in {"required", "rebuilding", "complete"}:
+        raise ValueError(f"Invalid clean rebuild status: {status}")
+    ensure_control_schema()
+    conn = get_control_connection()
+    try:
+        updated = conn.execute(
+            """
+            UPDATE restaurant_profiles
+            SET clean_rebuild_status=?,
+                last_archive_path=COALESCE(?, last_archive_path),
+                updated_at=CURRENT_TIMESTAMP
+            WHERE restaurant_id=?
+            """,
+            (status, archive_path, restaurant_id),
+        )
+        if updated.rowcount != 1:
+            raise ProfileError(f"Unknown restaurant profile: {restaurant_id}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def registered_profile_rebuild_status(
+    restaurant_id: str, database_path: str | Path
+) -> Optional[str]:
+    """Read a rebuild marker for an exact registry path without opening SQLite."""
+    restaurant_id = validate_restaurant_id(restaurant_id)
+    ensure_control_schema()
+    conn = get_control_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT database_path, clean_rebuild_status
+            FROM restaurant_profiles WHERE restaurant_id=?
+            """,
+            (restaurant_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    if Path(str(row[0])).expanduser().resolve() != Path(database_path).expanduser().resolve():
+        return None
+    return str(row[1]) if row[1] else None
+
+
+def profile_rebuild_status_for_connection(conn) -> Optional[str]:
+    """Return the control-plane rebuild marker for this exact registered file."""
+    try:
+        identity = conn.execute(
+            "SELECT restaurant_id FROM restaurant_profile_identity WHERE singleton_id=1"
+        ).fetchone()
+        if not identity:
+            return None
+        database_rows = conn.execute("PRAGMA database_list").fetchall()
+        main_path = next(
+            (str(row[2]) for row in database_rows if str(row[1]) == "main"), ""
+        )
+        if not main_path:
+            return None
+        return registered_profile_rebuild_status(str(identity[0]), main_path)
+    except Exception:
+        return None
+
+
+def complete_profile_rebuild_for_connection(conn) -> bool:
+    """Mark a registered fresh profile complete after its Phase-F sync passes."""
+    if profile_rebuild_status_for_connection(conn) != "rebuilding":
+        return False
+    identity = conn.execute(
+        "SELECT restaurant_id FROM restaurant_profile_identity WHERE singleton_id=1"
+    ).fetchone()
+    if not identity:
+        return False
+    mark_profile_clean_rebuild(str(identity[0]), "complete")
+    return True
 
 
 def selected_selection() -> Dict[str, Optional[str]]:
@@ -432,6 +548,24 @@ def _write_identity(path: Path, restaurant_id: str) -> None:
         conn.close()
 
 
+def _persist_restaurant_selection(restaurant_id: str) -> None:
+    conn = get_control_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO app_selection (singleton_id, selection_mode, restaurant_id, updated_at)
+            VALUES (1, 'restaurant', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(singleton_id) DO UPDATE SET
+                selection_mode='restaurant', restaurant_id=excluded.restaurant_id,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (restaurant_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def bind_and_select_profile(
     restaurant_id: str, *, confirm_existing_binding: bool = False
 ) -> RestaurantProfile:
@@ -441,6 +575,12 @@ def bind_and_select_profile(
     # initialize a new profile for an unauthorized restaurant.
     path = _canonical_under_root(Path(profile.database_path))
     existing_path = _canonical_under_root(existing_analytics_db_path())
+    if profile.clean_rebuild_status == "required" and path.is_file():
+        # Keep the old file opaque. Selection is allowed so the operator can
+        # invoke the selected-profile reset endpoint, but every DB opener will
+        # refuse it until reset_database archives and recreates it.
+        _persist_restaurant_selection(profile.restaurant_id)
+        return get_profile(profile.restaurant_id)
     if profile.authorization_state != "authorized" and not profile.is_bound:
         # First-upgrade recovery: a populated legacy database may belong to a
         # restaurant that is absent from the current grant list. It can be bound
@@ -504,22 +644,20 @@ def bind_and_select_profile(
                 f"Confirm binding the existing database to {profile.display_name}"
             )
         _write_identity(path, profile.restaurant_id)
+        if profile.clean_rebuild_status == "required":
+            # No old file existed, so no archive is needed; the fresh schema
+            # still owes the ordered catalog/order/assignment/history/
+            # observation hydration when shared-POS is advertised.
+            mark_profile_clean_rebuild(
+                profile.restaurant_id,
+                (
+                    "rebuilding"
+                    if SHARED_POS_CATALOG_CAPABILITY in profile.menu_capabilities
+                    else "complete"
+                ),
+            )
 
-    conn = get_control_connection()
-    try:
-        conn.execute(
-            """
-            INSERT INTO app_selection (singleton_id, selection_mode, restaurant_id, updated_at)
-            VALUES (1, 'restaurant', ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(singleton_id) DO UPDATE SET
-                selection_mode='restaurant', restaurant_id=excluded.restaurant_id,
-                updated_at=CURRENT_TIMESTAMP
-            """,
-            (profile.restaurant_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _persist_restaurant_selection(profile.restaurant_id)
     return get_profile(profile.restaurant_id)
 
 
@@ -538,8 +676,23 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
             """
         )
         existing_path = existing_analytics_db_path().resolve()
-        existing_identity = _identity_for_path(existing_path)
-        existing_ids = _business_restaurant_ids(existing_path) if existing_path.exists() else []
+        registered_existing = conn.execute(
+            "SELECT restaurant_id FROM restaurant_profiles WHERE database_path=?",
+            (str(_canonical_under_root(existing_path)),),
+        ).fetchone()
+        if registered_existing is not None:
+            # The control registry already owns this path. Do not reopen a
+            # potentially revision-1.6 profile merely to rediscover identity
+            # while applying the capability response that may require reset.
+            existing_identity = str(registered_existing[0])
+            existing_ids = [existing_identity]
+        else:
+            existing_identity = _identity_for_path(existing_path)
+            existing_ids = (
+                _business_restaurant_ids(existing_path)
+                if existing_path.exists()
+                else []
+            )
         for raw in restaurants:
             rid = validate_restaurant_id(raw.get("restaurant_id"))
             display_name = str(raw.get("display_name") or rid)
@@ -551,6 +704,11 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
                     for value in (raw.get("menu_capabilities") or [])
                     if str(value).strip()
                 }
+            )
+            clean_rebuild_status = (
+                "required"
+                if SHARED_POS_CATALOG_CAPABILITY in menu_capabilities
+                else None
             )
             current = conn.execute(
                 "SELECT database_path FROM restaurant_profiles WHERE restaurant_id=?", (rid,)
@@ -566,14 +724,20 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
                 INSERT INTO restaurant_profiles (
                     restaurant_id, display_name, timezone, database_path,
                     authorization_state, last_listed_at, menu_group_id,
-                    menu_capabilities, updated_at
-                ) VALUES (?, ?, ?, ?, 'authorized', CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
+                    menu_capabilities, clean_rebuild_status, updated_at
+                ) VALUES (?, ?, ?, ?, 'authorized', CURRENT_TIMESTAMP, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(restaurant_id) DO UPDATE SET
                     display_name=excluded.display_name,
                     timezone=excluded.timezone,
                     authorization_state='authorized',
                     menu_group_id=excluded.menu_group_id,
                     menu_capabilities=excluded.menu_capabilities,
+                    clean_rebuild_status=CASE
+                        WHEN restaurant_profiles.clean_rebuild_status IS NULL
+                         AND excluded.clean_rebuild_status='required'
+                        THEN 'required'
+                        ELSE restaurant_profiles.clean_rebuild_status
+                    END,
                     last_listed_at=CURRENT_TIMESTAMP,
                     updated_at=CURRENT_TIMESTAMP
                 """,
@@ -584,6 +748,7 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
                     str(db_path),
                     menu_group_id,
                     json.dumps(menu_capabilities, separators=(",", ":")),
+                    clean_rebuild_status,
                 ),
             )
 
@@ -631,3 +796,54 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
     finally:
         conn.close()
     return list_profiles()
+
+
+def refresh_allowed_restaurants_from_server() -> List[RestaurantProfile]:
+    """Refresh authorization/capabilities without touching any profile database."""
+    from src.core.central_api import error_from_response, unscoped_analytics_headers
+    from src.core.db.control import get_global_config
+    from utils.api_client import normalize_integration_orders_base_url
+
+    config = get_global_config(("integration_orders_url", "integration_orders_key"))
+    base_url = normalize_integration_orders_base_url(
+        config.get("integration_orders_url") or ""
+    )
+    api_key = config.get("integration_orders_key") or ""
+    if not base_url or not api_key:
+        raise ProfileRegistryRefreshError(
+            "Configure the Orders Integration URL and API key first",
+            code="restaurant_list_not_configured",
+            http_status=409,
+        )
+    try:
+        import requests
+
+        response = requests.get(
+            f"{base_url}/restaurants/",
+            headers=unscoped_analytics_headers(api_key),
+            timeout=30,
+        )
+    except Exception as exc:
+        raise ProfileRegistryRefreshError(
+            str(exc),
+            code="restaurant_list_transport_error",
+            http_status=502,
+        ) from exc
+    if response.status_code >= 400:
+        error = error_from_response(response)
+        raise ProfileRegistryRefreshError(
+            error.message,
+            code=error.code,
+            http_status=response.status_code,
+        )
+    try:
+        from src.core.analytics_stream_contract import parse_allowed_restaurants
+
+        restaurants = parse_allowed_restaurants(response.json())
+    except Exception as exc:
+        raise ProfileRegistryRefreshError(
+            str(exc),
+            code=getattr(exc, "code", "restaurant_list_response_invalid"),
+            http_status=502,
+        ) from exc
+    return upsert_allowed_restaurants(restaurants)

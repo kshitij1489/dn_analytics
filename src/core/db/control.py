@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional
 
 
-CONTROL_SCHEMA_VERSION = 3
+CONTROL_SCHEMA_VERSION = 4
 
 PROFILE_LOCAL_CONFIG_KEYS = {
     "sync_device_id",
@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS restaurant_profiles (
     last_sync_at TEXT,
     menu_group_id TEXT,
     menu_capabilities TEXT NOT NULL DEFAULT '[]',
+    clean_rebuild_status TEXT CHECK (
+        clean_rebuild_status IS NULL
+        OR clean_rebuild_status IN ('required', 'rebuilding', 'complete')
+    ),
+    last_archive_path TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (menu_group_id IS NULL OR TRIM(menu_group_id) <> '')
@@ -151,6 +156,13 @@ def ensure_control_schema(conn: Optional[sqlite3.Connection] = None) -> None:
     owned = conn is None
     target = conn or get_control_connection()
     try:
+        try:
+            previous = target.execute(
+                "SELECT value FROM control_metadata WHERE key='schema_version'"
+            ).fetchone()
+            previous_version = int(previous[0]) if previous else None
+        except (sqlite3.Error, TypeError, ValueError):
+            previous_version = None
         target.executescript(CONTROL_SCHEMA_SQL)
         profile_columns = {
             str(row[1]) for row in target.execute("PRAGMA table_info(restaurant_profiles)").fetchall()
@@ -161,6 +173,39 @@ def ensure_control_schema(conn: Optional[sqlite3.Connection] = None) -> None:
             target.execute(
                 "ALTER TABLE restaurant_profiles ADD COLUMN menu_capabilities TEXT NOT NULL DEFAULT '[]'"
             )
+        if "clean_rebuild_status" not in profile_columns:
+            target.execute(
+                "ALTER TABLE restaurant_profiles ADD COLUMN clean_rebuild_status TEXT"
+            )
+        if "last_archive_path" not in profile_columns:
+            target.execute(
+                "ALTER TABLE restaurant_profiles ADD COLUMN last_archive_path TEXT"
+            )
+        if previous_version is not None and previous_version < CONTROL_SCHEMA_VERSION:
+            # Every profile already registered by a pre-Phase-F control DB is
+            # an old-generation file (or an uninitialized cached row). Mark it
+            # without opening its analytics path. The profile binding/reset
+            # flows resolve the marker after creating a canonical fresh file.
+            target.execute(
+                """
+                UPDATE restaurant_profiles
+                SET clean_rebuild_status='required', updated_at=CURRENT_TIMESTAMP
+                WHERE clean_rebuild_status IS NULL
+                """
+            )
+        # Revision 1.7 has no in-place profile migration. Once the central
+        # registry advertises the shared-POS capability, an existing profile
+        # must be archived and recreated before ordinary runtime code opens it.
+        # This marker lives in the control DB specifically so checking it never
+        # needs to inspect the old analytics schema.
+        target.execute(
+            """
+            UPDATE restaurant_profiles
+            SET clean_rebuild_status='required', updated_at=CURRENT_TIMESTAMP
+            WHERE clean_rebuild_status IS NULL
+              AND menu_capabilities LIKE '%\"global_menu_shared_pos_catalog_v1\"%'
+            """
+        )
         _migrate_app_selection(target)
         target.execute(
             """
@@ -316,6 +361,18 @@ def copy_legacy_global_config_once(analytics_path: Optional[Path] = None) -> Non
         return
     control = get_control_connection()
     try:
+        rebuild = control.execute(
+            """
+            SELECT clean_rebuild_status
+            FROM restaurant_profiles WHERE database_path=?
+            """,
+            (str(path),),
+        ).fetchone()
+        if rebuild and str(rebuild[0] or "") == "required":
+            # Revision-1.7 clean rebuilds treat the old profile as opaque. Any
+            # global config needed for cutover must already be in the preserved
+            # control DB; do not inspect the revision-1.6 system_config table.
+            return
         marker = control.execute(
             "SELECT value FROM control_metadata WHERE key='legacy_global_config_copied'"
         ).fetchone()
