@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Card } from '../components/Card';
-import { ErrorPopup } from '../components';
+import { ErrorPopup, SingleStoreOnly } from '../components';
 import type { PopupMessage } from '../components';
 import { endpoints } from '../api';
-import type { SyncIdentityResponse } from '../types/api';
+import type { GlobalMenuStatus, SyncIdentityResponse } from '../types/api';
+import { useStore } from '../contexts/StoreContext';
 
 // Type declaration for Electron IPC
 declare global {
@@ -18,7 +19,7 @@ declare global {
     }
 }
 
-type Tab = 'users' | 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
+type Tab = 'users' | 'stores' | 'ai_models' | 'integrations' | 'repository' | 'databases' | 'updates';
 type UpdateStatus = 'checking' | 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error' | null;
 type CloudActionKey = 'push' | 'pullCustomerMerges' | 'pullMenuBootstrap' | 'pullMenuMerges';
 
@@ -88,6 +89,10 @@ function buildCloudPushPopup(result: CloudPushResult): PopupMessage {
 }
 
 export default function Configuration() {
+    // The user profile and sync identity live in one restaurant's database, so
+    // they are unreadable in All Stores mode. Configuration itself stays open —
+    // it is where a restaurant gets picked.
+    const { stores, refreshStores, isAllStores, selectionGeneration } = useStore();
     const [activeTab, setActiveTab] = useState<Tab>('ai_models');
     const [settings, setSettings] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
@@ -100,7 +105,10 @@ export default function Configuration() {
     const [userLoadError, setUserLoadError] = useState<string | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
     const [syncIdentity, setSyncIdentity] = useState<SyncIdentityResponse | null>(null);
+    const [globalMenuStatus, setGlobalMenuStatus] = useState<GlobalMenuStatus | null>(null);
     const [cloudActionPending, setCloudActionPending] = useState<Record<CloudActionKey, boolean>>(INITIAL_CLOUD_ACTION_PENDING);
+
+    const [storesLoadError, setStoresLoadError] = useState<string | null>(null);
 
     // Updates Tab State
     const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
@@ -128,8 +136,24 @@ export default function Configuration() {
     }, []);
 
     useEffect(() => {
-        if (activeTab === 'users') loadUsers();
-    }, [activeTab]);
+        if (activeTab === 'users' && !isAllStores) loadUsers();
+    }, [activeTab, isAllStores]);
+
+    useEffect(() => {
+        if (isAllStores) {
+            setGlobalMenuStatus(null);
+            return;
+        }
+        let cancelled = false;
+        endpoints.menu.globalStatus()
+            .then((response) => {
+                if (!cancelled) setGlobalMenuStatus(response.data);
+            })
+            .catch(() => {
+                if (!cancelled) setGlobalMenuStatus(null);
+            });
+        return () => { cancelled = true; };
+    }, [isAllStores, selectionGeneration]);
 
     const loadUsers = async () => {
         setUserLoadError(null);
@@ -151,6 +175,7 @@ export default function Configuration() {
     };
 
     const loadSyncIdentity = async () => {
+        if (isAllStores) return;
         try {
             const res = await endpoints.config.getSyncIdentity();
             setSyncIdentity(res.data);
@@ -176,6 +201,17 @@ export default function Configuration() {
             setPopup({ type: 'error', message: errorMsg });
         } finally {
             setSavingUser(false);
+        }
+    };
+
+    const loadStores = async () => {
+        setStoresLoadError(null);
+        try {
+            await refreshStores();
+            setPopup({ type: 'success', message: "Restaurant list refreshed from Dachnona." });
+        } catch (e) {
+            console.error("Failed to load stores", e);
+            setStoresLoadError("Failed to load stores. Please try again.");
         }
     };
 
@@ -386,6 +422,7 @@ export default function Configuration() {
             <div style={{ display: 'flex', gap: '5px', marginBottom: '30px', background: 'var(--card-bg)', padding: '5px', borderRadius: '30px', border: '1px solid var(--border-color)', width: 'fit-content' }}>
                 {[
                     { id: 'users', label: '👤 User Profile' },
+                    { id: 'stores', label: '🏪 Stores' },
                     { id: 'ai_models', label: '🧠 AI Models' },
                     { id: 'integrations', label: '🔌 Integrations' },
                     { id: 'repository', label: '📦 Repository' },
@@ -452,6 +489,7 @@ export default function Configuration() {
             {loading ? <div>Loading settings...</div> : (
                 <div style={{ maxWidth: '1200px', width: '100%' }}>
                     {activeTab === 'users' && (
+                        <SingleStoreOnly what="The user profile">
                         <Card title="User Profile">
                             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
                                 Configure the current user identity. This information is used for cloud data synchronization.
@@ -529,25 +567,76 @@ export default function Configuration() {
                                 </button>
                             </div>
                         </Card>
+                        </SingleStoreOnly>
                     )}
 
+                    {activeTab === 'stores' && (
+                        <Card title="Restaurant Profiles">
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                                Restaurant IDs, names, and timezones come from your authenticated Dachnona account.
+                                Profiles cannot be created, renamed, or deleted locally.
+                            </p>
+                            {storesLoadError && (
+                                <p style={{ color: 'var(--error-color, #c53030)', marginBottom: '12px', fontSize: '0.9em' }}>
+                                    {storesLoadError}
+                                </p>
+                            )}
+                            <button
+                                onClick={() => void loadStores()}
+                                style={{
+                                    padding: '10px 18px',
+                                    background: 'var(--accent-color)',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    fontWeight: 600,
+                                    marginBottom: '20px',
+                                }}
+                            >
+                                Refresh from Dachnona
+                            </button>
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.95em' }}>
+                                    <thead>
+                                        <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
+                                            <th style={{ padding: '12px 16px' }}>Restaurant ID</th>
+                                            <th style={{ padding: '12px 16px' }}>Display name</th>
+                                            <th style={{ padding: '12px 16px' }}>Timezone</th>
+                                            <th style={{ padding: '12px 16px' }}>Local profile</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {stores.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={4} style={{ padding: '24px 16px', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                                                    No authorized restaurants are cached. Configure Orders Integration, then refresh.
+                                                </td>
+                                            </tr>
+                                        ) : stores.map((store) => (
+                                            <tr key={store.restaurant_id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                <td style={{ padding: '12px 16px', fontFamily: 'monospace' }}>{store.restaurant_id}</td>
+                                                <td style={{ padding: '12px 16px' }}>{store.display_name}</td>
+                                                <td style={{ padding: '12px 16px' }}>{store.timezone}</td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    {store.authorization_state === 'authorized' ? (store.is_bound ? 'Ready' : 'Not initialized') : 'Unauthorized · offline only'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </Card>
+                    )}
                     {activeTab === 'ai_models' && (
                         <Card title="AI Model Configuration">
-                            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Configure API keys and models for AI services.</p>
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Configure the OpenAI API key and model used by AI Mode.</p>
                             <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
 
                             <h4 style={{ color: 'var(--accent-color)', marginBottom: '10px' }}>OpenAI (GPT)</h4>
                             {renderInput("API Key", "openai_api_key", "password", "sk-...")}
-                            {renderInput("Model Name", "openai_model", "text", "gpt-4-turbo")}
+                            {renderInput("Model Name", "openai_model", "text", "gpt-5-mini")}
                             {renderTestButton('openai')}
-
-                            <h4 style={{ color: 'var(--accent-color)', marginBottom: '10px', marginTop: '20px' }}>Anthropic (Claude)</h4>
-                            {renderInput("API Key", "anthropic_api_key", "password", "sk-ant-...")}
-                            {renderInput("Model Name", "anthropic_model", "text", "claude-3-opus-20240229")}
-
-                            <h4 style={{ color: 'var(--accent-color)', marginBottom: '10px', marginTop: '20px' }}>Google (Gemini)</h4>
-                            {renderInput("API Key", "gemini_api_key", "password", "AIza...")}
-                            {renderInput("Model Name", "gemini_model", "text", "gemini-1.5-pro")}
 
                             <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <button
@@ -604,6 +693,10 @@ export default function Configuration() {
                             </p>
                             {renderInput("Cloud Server URL", "cloud_sync_url", "url", "https://api.example.com")}
                             {renderInput("Cloud API Key", "cloud_sync_api_key", "password")}
+                            {renderInput("Global Menu Editor Key", "global_menu_editor_key", "password")}
+                            <p style={{ fontSize: '0.82em', color: 'var(--text-secondary)', marginTop: '-8px', marginBottom: '14px' }}>
+                                Required only for menu-group mutations; read/sync access does not grant global editing.
+                            </p>
                             {renderTestButton('cloud_sync')}
                             {syncIdentity && (
                                 <div style={{
@@ -645,7 +738,7 @@ export default function Configuration() {
                                 <button
                                     onClick={() => runCloudAction('pullCustomerMerges', async () => {
                                         try {
-                                            const res = await endpoints.customers.pullFromCloud(200);
+                                            const res = await endpoints.customers.pullMergesFromCloud(200);
                                             setPopup({
                                                 type: 'success',
                                                 message: `Customer merge pull complete. Applied: ${res.data.merge_events_applied ?? 0}, Undone: ${res.data.undo_events_applied ?? 0}`,
@@ -666,7 +759,7 @@ export default function Configuration() {
                                 >
                                     {cloudActionPending.pullCustomerMerges ? 'Pulling Customer Merges...' : 'Pull Customer Merges'}
                                 </button>
-                                <button
+                                {!globalMenuStatus?.server_advertised && <button
                                     onClick={() => runCloudAction('pullMenuBootstrap', async () => {
                                         try {
                                             const res = await endpoints.menu.pullBootstrapFromCloud('seed_and_relink_orders');
@@ -692,8 +785,8 @@ export default function Configuration() {
                                     }, cloudActionPending.pullMenuBootstrap)}
                                 >
                                     {cloudActionPending.pullMenuBootstrap ? 'Pulling Menu Bootstrap...' : 'Pull Menu Bootstrap'}
-                                </button>
-                                <button
+                                </button>}
+                                {!globalMenuStatus?.server_advertised && <button
                                     onClick={() => runCloudAction('pullMenuMerges', async () => {
                                         try {
                                             const res = await endpoints.menu.pullMergeEventsFromCloud(200);
@@ -716,11 +809,17 @@ export default function Configuration() {
                                     }, cloudActionPending.pullMenuMerges)}
                                 >
                                     {cloudActionPending.pullMenuMerges ? 'Pulling Menu Merges...' : 'Pull Menu Merges'}
-                                </button>
+                                </button>}
                             </div>
-                            <p style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-                                Menu bootstrap pull restores snapshot-backed menu mappings and can relink historical <code>order_items</code>, but it does not restore addon remaps or menu merge audit history by itself.
-                            </p>
+                            {globalMenuStatus?.server_advertised ? (
+                                <p style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                                    Global menu mode is active. Use Sync DB to refresh the canonical catalog, rules, and restaurant assignment snapshot.
+                                </p>
+                            ) : (
+                                <p style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                                    Menu bootstrap pull restores snapshot-backed menu mappings and can relink historical <code>order_items</code>, but it does not restore addon remaps or menu merge audit history by itself.
+                                </p>
+                            )}
                             <div style={{ marginBottom: '20px' }}></div>
                             <hr style={{ border: 0, borderTop: '1px solid var(--border-color)', marginBottom: '20px' }} />
 
@@ -956,7 +1055,7 @@ export default function Configuration() {
                                             <button
                                                 onClick={async () => {
                                                     if (!window.confirm("⚠️ Are you sure you want to HARD RESET Item Demand Forecasts?")) return;
-                                                    if (!window.confirm("This will delete all trained models and history. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    if (!window.confirm("This will clear the local central forecast cache. Run Sync DB to re-pull from the server.")) return;
                                                     try {
                                                         const res = await endpoints.config.resetDb("item_demand");
                                                         setPopup({ type: 'success', message: res.data.message });
@@ -980,7 +1079,7 @@ export default function Configuration() {
                                             <button
                                                 onClick={async () => {
                                                     if (!window.confirm("⚠️ Are you sure you want to HARD RESET Sales Forecasts?")) return;
-                                                    if (!window.confirm("This will delete the GP model and clear all forecast caches. Charts will be empty — use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    if (!window.confirm("This will clear the local central revenue forecast cache. Run Sync DB to re-pull.")) return;
                                                     try {
                                                         const res = await endpoints.config.resetDb("sales_forecast");
                                                         setPopup({ type: 'success', message: res.data.message });
@@ -1004,7 +1103,7 @@ export default function Configuration() {
                                             <button
                                                 onClick={async () => {
                                                     if (!window.confirm("⚠️ Are you sure you want to HARD RESET Volume Forecasts?")) return;
-                                                    if (!window.confirm("This will delete all volume models and cache. Use Pull from Cloud or Full Retrain to populate.")) return;
+                                                    if (!window.confirm("This will clear the local central volume forecast cache. Run Sync DB to re-pull.")) return;
                                                     try {
                                                         const res = await endpoints.config.resetDb("volume_forecast");
                                                         setPopup({ type: 'success', message: res.data.message });

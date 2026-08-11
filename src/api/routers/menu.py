@@ -9,26 +9,88 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 from datetime import datetime, timedelta
 from src.core.queries import menu_queries, table_queries
-from src.api.dependencies import get_db
+from src.api.dependencies import ScopedReader, get_authorized_db, get_db, get_reader
 from src.api.utils import df_to_json
+from src.core.queries.multi_store import FederationAbort
+from src.core.queries.multi_store_reducers import (
+    AllTrue,
+    AnyTrue,
+    First,
+    Min,
+    Ratio,
+    Sum,
+    group_rows,
+    group_menu_identity_rows,
+    identity_aware_federated_data,
+    menu_identity_payload,
+    union_rows,
+)
 from src.core.utils.business_date import get_current_business_date
 from src.api.models import (
     CreateVariantTypeRequest,
     MergeRequest,
+    RetypeMenuItemRequest,
     UndoMergeRequest,
     RemapRequest,
     UpdateVariantMappingRequest,
     ResolveVariantRequest,
     VerifyRequest,
+    GlobalMenuMutationPreviewRequest,
+    GlobalMenuLocalMutationPreviewRequest,
+    GlobalMenuMutationCommitRequest,
+    GlobalMenuResolutionContextRequest,
 )
 from utils.clean_order_item import suggest_variant_for_resolution
 from utils import menu_utils
+from src.core.mapping_anomalies import (
+    list_open_anomalies,
+    dismiss_anomaly,
+)
 
 router = APIRouter()
 
+# All Stores reads the whole catalog per store before grouping. Menu catalogs are
+# small; this bound keeps a pathological one from fanning out unbounded.
+MENU_FEDERATION_ROW_LIMIT = 5000
+
+
+def _enforce_menu_federation_bound(count: int, surface: str) -> None:
+    """Refuse a truncated All Stores catalog instead of returning partial data."""
+    if count <= MENU_FEDERATION_ROW_LIMIT:
+        return
+    raise FederationAbort(
+        HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"All Stores {surface} is bounded to {MENU_FEDERATION_ROW_LIMIT} "
+                    "rows per store; narrow the filter or search"
+                ),
+                "code": "deep_page_not_supported",
+            },
+        )
+    )
+
 
 def _ensure_menu_edit_allowed(conn) -> None:
-    """Block human menu edits when strict mode is on but cloud readiness is missing."""
+    """Block human menu edits when cloud readiness is missing (the server is always strict)."""
+    try:
+        from src.core.global_menu_schema import resolve_global_menu_capability
+
+        status = resolve_global_menu_capability(conn)
+    except Exception:
+        status = None
+    if status is not None and status.mutation_advertised and status.active:
+        return
+    if status is not None and status.mutation_advertised:
+        from src.core.global_menu_schema import GlobalMenuCapabilityError
+
+        _raise_global_menu_error(
+            GlobalMenuCapabilityError(
+                "Global menu capability is advertised but this local projection is not ready"
+            )
+        )
+
     from src.core.menu_mutation_commit import (
         build_menu_edit_http_exception,
         strict_mode_edit_blocked_response,
@@ -39,6 +101,198 @@ def _ensure_menu_edit_allowed(conn) -> None:
         exc = build_menu_edit_http_exception(blocked)
         if exc:
             raise exc
+
+
+def _global_menu_active(conn) -> bool:
+    from src.core.global_menu_schema import resolve_global_menu_capability
+
+    status = resolve_global_menu_capability(conn)
+    return status.active and status.mutation_advertised
+
+
+def _global_menu_request_active(conn, request) -> bool:
+    """Never reinterpret a global-preview commit as a legacy local mutation."""
+    active = _global_menu_active(conn)
+    preview_fields = (
+        "global_mutation_id",
+        "global_preview_digest",
+        "global_menu_group_id",
+        "global_preview_revision",
+        "global_mutation_type",
+        "global_mutation_payload",
+    )
+    requested = any(getattr(request, field, None) is not None for field in preview_fields)
+    if requested and not active:
+        from src.core.global_menu_mutation import is_global_menu_resolution_mutation
+        from src.core.global_menu_schema import resolve_global_menu_capability
+
+        try:
+            status = resolve_global_menu_capability(conn)
+        except Exception:
+            status = None
+        active = bool(
+            status is not None
+            and status.resolution_ready
+            and is_global_menu_resolution_mutation(
+                getattr(request, "global_mutation_type", None)
+            )
+        )
+    if requested and not active:
+        from src.core.global_menu_schema import GlobalMenuCapabilityError
+
+        _raise_global_menu_error(
+            GlobalMenuCapabilityError(
+                "Global menu capability is unavailable or stale; refresh the restaurant registry"
+            )
+        )
+    return active
+
+
+def _raise_global_menu_error(error: BaseException) -> None:
+    code = str(getattr(error, "code", "global_menu_mutation_failed"))
+    if code in {"global_menu_editor_required", "global_menu_editor_forbidden"}:
+        status_code = 403
+    elif code in {
+        "global_menu_preview_required",
+        "global_menu_preview_stale",
+        "global_menu_preview_blocked",
+        "global_menu_coverage_incomplete",
+        "global_menu_identity_unresolved",
+        "global_menu_capability_required",
+        "global_menu_mutations_disabled",
+        "global_menu_operation_unsupported",
+        "global_menu_resolution_disabled",
+        "global_menu_resolution_not_ready",
+    }:
+        status_code = 409
+    else:
+        status_code = 503
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error": str(error), "code": code},
+    ) from error
+
+
+def _ensure_legacy_menu_pull_allowed(conn) -> None:
+    """Legacy menu streams cannot mutate a global-menu projection."""
+    from src.core.global_menu_schema import resolve_global_menu_capability
+
+    status = resolve_global_menu_capability(conn)
+    if not status.server_advertised:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": (
+                "Legacy menu pulls are disabled while global menu mode is active; "
+                "use Sync DB to refresh the global snapshot and assignments"
+            ),
+            "code": "global_menu_legacy_pull_disabled",
+        },
+    )
+
+
+def _commit_global_request(conn, request) -> Dict[str, Any]:
+    from src.core.global_menu_mutation import (
+        commit_global_mutation,
+        preview_reference_from_request,
+    )
+
+    try:
+        return commit_global_mutation(
+            conn, preview=preview_reference_from_request(request)
+        )
+    except Exception as exc:
+        _raise_global_menu_error(exc)
+
+
+@router.get("/global/status")
+def get_global_menu_status(conn=Depends(get_db)):
+    from src.core.global_menu_schema import resolve_global_menu_capability
+
+    return resolve_global_menu_capability(conn).to_dict()
+
+
+@router.post("/global/mutations/preview")
+def preview_global_menu_mutation(
+    request: GlobalMenuMutationPreviewRequest,
+    conn=Depends(get_authorized_db),
+):
+    from src.core.global_menu_mutation import preview_global_mutation
+
+    try:
+        return preview_global_mutation(
+            conn,
+            action={"mutation_type": request.mutation_type, "payload": request.payload},
+            mutation_id=request.mutation_id,
+        )
+    except Exception as exc:
+        _raise_global_menu_error(exc)
+
+
+@router.post("/global/mutations/preview-local")
+def preview_local_global_menu_mutation(
+    request: GlobalMenuLocalMutationPreviewRequest,
+    conn=Depends(get_authorized_db),
+):
+    from src.core.global_menu_mutation import (
+        build_global_action_from_local,
+        preview_global_mutation,
+    )
+
+    try:
+        action = build_global_action_from_local(
+            conn,
+            mutation_type=request.mutation_type,
+            source_local_menu_item_id=request.source_local_menu_item_id,
+            source_local_variant_id=request.source_local_variant_id,
+            target_local_menu_item_id=request.target_local_menu_item_id,
+            target_local_variant_id=request.target_local_variant_id,
+            details=request.details,
+        )
+        return preview_global_mutation(
+            conn, action=action, mutation_id=request.mutation_id
+        )
+    except Exception as exc:
+        _raise_global_menu_error(exc)
+
+
+@router.post("/global/mutations/commit")
+def commit_global_menu_mutation(
+    request: GlobalMenuMutationCommitRequest,
+    conn=Depends(get_authorized_db),
+):
+    return _commit_global_request(conn, request)
+
+
+@router.get("/global/mutations/{mutation_id}")
+def get_global_menu_mutation_status(
+    mutation_id: str,
+    conn=Depends(get_authorized_db),
+):
+    from src.core.global_menu_mutation import global_mutation_status
+
+    try:
+        return global_mutation_status(conn, mutation_id)
+    except Exception as exc:
+        _raise_global_menu_error(exc)
+
+
+@router.post("/global/resolution-context")
+def get_global_menu_resolution_context(
+    request: GlobalMenuResolutionContextRequest,
+    conn=Depends(get_authorized_db),
+):
+    from src.core.global_menu_mutation import global_resolution_context
+
+    try:
+        return global_resolution_context(
+            conn,
+            local_menu_item_id=request.local_menu_item_id,
+            local_variant_id=request.local_variant_id,
+        )
+    except Exception as exc:
+        _raise_global_menu_error(exc)
 
 
 def _finalize_menu_edit_response(res: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,25 +351,81 @@ def get_menu_stats(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     days: Optional[List[str]] = Query(None),
-    conn=Depends(get_db)
+    reader: ScopedReader = Depends(get_reader),
 ):
-    """Get menu items with optional filtering"""
-    df = menu_queries.fetch_menu_stats(
-        conn, 
-        name_search=name_search,  
-        type_choice=type_choice, 
-        start_date=start_date, 
-        end_date=end_date, 
-        selected_weekdays=days
-    )
-    return df_to_json(df)
+    """Get menu items with optional filtering.
+
+    All Stores groups by the durable name/type dimensions and recomputes every
+    rate from combined counts; transient menu_item_id never groups (plan §7.3).
+    """
+
+    def query(conn, _profile):
+        rows = df_to_json(
+            menu_queries.fetch_menu_stats(
+                conn,
+                name_search=name_search,
+                type_choice=type_choice,
+                start_date=start_date,
+                end_date=end_date,
+                selected_weekdays=days,
+                include_identity=reader.is_all,
+            )
+        )
+        return (
+            menu_identity_payload(conn, rows, item_field="menu_item_id")
+            if reader.is_all
+            else rows
+        )
+
+    def reduce(pairs):
+        rows, coverage = group_menu_identity_rows(
+            pairs,
+            legacy_group_by=("Item Name", "Type"),
+            spec={
+                "As Addon (Qty)": Sum(),
+                "As Item (Qty)": Sum(),
+                "Total Sold (Qty)": Sum(),
+                "Total Revenue": Sum(),
+                "Repeat Revenue": Sum(),
+                "Total GMS": Sum(),
+                "Total ML": Sum(),
+                "Total COUNT": Sum(),
+                "Reorder Count": Sum(),
+                "Repeat Customer (Lifetime)": Sum(),
+                "Unique Customers": Sum(),
+                "Reorder Rate %": Ratio(
+                    "Repeat Customer (Lifetime)", "Unique Customers", scale=100.0
+                ),
+                "Repeat Revenue %": Ratio("Repeat Revenue", "Total Revenue", scale=100.0),
+            },
+            sort_by="Total Revenue",
+            descending=True,
+            item_id_field="menu_item_id",
+            canonical_item_name_field="Item Name",
+            canonical_item_type_field="Type",
+            contributor_fields=("menu_item_id",),
+        )
+        return identity_aware_federated_data(rows, coverage)
+
+    return reader.read(query, reduce)
 
 
 @router.get("/types")
-def get_menu_types(conn=Depends(get_db)):
+def get_menu_types(reader: ScopedReader = Depends(get_reader)):
     """Get list of menu item types"""
-    types = menu_queries.fetch_menu_types(conn)
-    return types
+
+    def query(conn, _profile):
+        return menu_queries.fetch_menu_types(conn)
+
+    def reduce(pairs):
+        combined = []
+        for _profile, types in pairs:
+            for menu_type in types or []:
+                if menu_type not in combined:
+                    combined.append(menu_type)
+        return sorted(combined, key=lambda value: str(value))
+
+    return reader.read(query, reduce)
 
 
 # --- Paginated View Endpoints ---
@@ -135,25 +445,86 @@ def get_menu_summary(
         description="Rollup column to sort by: day_1, day_2, day_3, day_5, day_7, day_14, month_1, month_2, lifetime.",
     ),
     sort_desc: bool = Query(True, description="Descending when true."),
-    conn=Depends(get_db),
+    reader: ScopedReader = Depends(get_reader),
 ):
     """Rolling quantity or unit-volume totals by menu item (Menu → Summary)."""
     if mode not in ("volume", "quantity"):
         raise HTTPException(status_code=400, detail="mode must be 'volume' or 'quantity'")
-    end_bd = as_of_date or get_current_business_date()
-    df, count, err = menu_queries.fetch_menu_summary_rollups(
-        conn,
-        mode=mode,
-        as_of_date=end_bd,
-        page=page,
-        page_size=page_size,
-        name_search=name_search,
-        sort_by=sort_by,
-        sort_desc=sort_desc,
+    window_columns = (
+        "day_1", "day_2", "day_3", "day_5", "day_7", "day_14",
+        "month_1", "month_2", "lifetime",
     )
-    if err:
-        raise HTTPException(status_code=500, detail=err)
-    return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size, "as_of_date": end_bd}
+
+    def query(conn, _profile):
+        # This executes inside ScopedReader's per-profile timezone context.
+        end_bd = as_of_date or get_current_business_date()
+        # Menu catalogs are small, so All Stores reads every row once and
+        # paginates after grouping instead of paging each store separately.
+        df, count, err = menu_queries.fetch_menu_summary_rollups(
+            conn,
+            mode=mode,
+            as_of_date=end_bd,
+            page=1 if reader.is_all else page,
+            page_size=MENU_FEDERATION_ROW_LIMIT if reader.is_all else page_size,
+            name_search=name_search,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+        )
+        if err:
+            raise HTTPException(status_code=500, detail=err)
+        if reader.is_all:
+            _enforce_menu_federation_bound(count, "menu summary")
+        rows = df_to_json(df)
+        if reader.is_all:
+            identity = menu_identity_payload(conn, rows, item_field="menu_item_id")
+            rows = identity["rows"]
+        else:
+            identity = None
+        return {
+            "data": rows,
+            "total": count,
+            "as_of_date": end_bd,
+            "identity": identity["identity"] if identity else None,
+        }
+
+    def reduce(pairs):
+        group_by = ("name", "type", "unit") if mode == "volume" else ("name", "type")
+        identity_pairs = [
+            (
+                profile,
+                {"rows": value["data"], "identity": value.get("identity") or {}},
+            )
+            for profile, value in pairs
+        ]
+        rows, coverage = group_menu_identity_rows(
+            identity_pairs,
+            legacy_group_by=group_by,
+            spec={column: Sum() for column in window_columns},
+            sort_by=sort_by if sort_by in window_columns else "lifetime",
+            descending=sort_desc,
+            contributor_fields=("menu_item_id", "lifetime"),
+            item_id_field="menu_item_id",
+            canonical_item_name_field="name",
+            canonical_item_type_field="type",
+            additional_group_by=("unit",) if mode == "volume" else (),
+        )
+        start = (page - 1) * page_size
+        as_of_dates = {
+            profile.restaurant_id: value["as_of_date"] for profile, value in pairs
+        }
+        return identity_aware_federated_data({
+            "data": rows[start:start + page_size],
+            "total": len(rows),
+            "page": page,
+            "page_size": page_size,
+            "as_of_date": max(as_of_dates.values(), default=None),
+            "as_of_dates": as_of_dates,
+        }, coverage)
+
+    result = reader.read(query, reduce)
+    if reader.is_all:
+        return result
+    return {**result, "page": page, "page_size": page_size}
 
 
 @router.get("/summary-timeseries")
@@ -170,32 +541,79 @@ def get_menu_summary_timeseries(
         None,
         description="Business date upper bound (YYYY-MM-DD). Defaults to current business date.",
     ),
-    conn=Depends(get_db),
+    reader: ScopedReader = Depends(get_reader),
 ):
     """
     Daily quantity, volume, and revenue for selected menu items (Menu Summary chart).
 
     Uses the same event-level definitions as Menu → Summary rollups and Menu Items revenue.
+
+    All Stores accepts every contributor ID behind a combined row; each store
+    matches only its own IDs and the series are combined by item name and date.
     """
     ids = tuple(x.strip() for x in menu_item_ids.split(",") if x.strip())
     if not ids:
         raise HTTPException(status_code=400, detail="menu_item_ids is required")
-    if len(ids) > 15:
-        raise HTTPException(status_code=400, detail="At most 15 menu items per request")
+    max_ids = 15 * max(1, len(reader.scope.profiles)) if reader.is_all else 15
+    if len(ids) > max_ids:
+        raise HTTPException(status_code=400, detail=f"At most {max_ids} menu items per request")
 
-    end_bd = end_date or get_current_business_date()
-    if start_date:
-        start_bd = start_date
-    else:
-        end_dt = datetime.fromisoformat(end_bd)
-        start_bd = (end_dt - timedelta(days=365)).date().isoformat()
+    def query(conn, _profile):
+        # Defaults are profile-local; explicit dates remain identical for all.
+        end_bd = end_date or get_current_business_date()
+        if start_date:
+            start_bd = start_date
+        else:
+            end_dt = datetime.fromisoformat(end_bd)
+            start_bd = (end_dt - timedelta(days=365)).date().isoformat()
+        df, err = menu_queries.fetch_menu_items_daily_timeseries(
+            conn, ids, start_date=start_bd, end_date=end_bd
+        )
+        if err:
+            raise HTTPException(status_code=500, detail=err)
+        rows = df_to_json(df)
+        identity = menu_identity_payload(conn, rows, item_field="menu_item_id") if reader.is_all else None
+        return {
+            "data": identity["rows"] if identity else rows,
+            "identity": identity["identity"] if identity else None,
+            "start_date": start_bd,
+            "end_date": end_bd,
+        }
 
-    df, err = menu_queries.fetch_menu_items_daily_timeseries(
-        conn, ids, start_date=start_bd, end_date=end_bd
-    )
-    if err:
-        raise HTTPException(status_code=500, detail=err)
-    return {"data": df_to_json(df), "start_date": start_bd, "end_date": end_bd}
+    def reduce(pairs):
+        start_dates = {
+            profile.restaurant_id: value["start_date"] for profile, value in pairs
+        }
+        end_dates = {
+            profile.restaurant_id: value["end_date"] for profile, value in pairs
+        }
+        identity_pairs = [
+            (profile, {"rows": value["data"], "identity": value.get("identity") or {}})
+            for profile, value in pairs
+        ]
+        rows, coverage = group_menu_identity_rows(
+                identity_pairs,
+                legacy_group_by=("menu_item_name", "date"),
+                spec={"quantity": Sum(), "volume": Sum(), "revenue": Sum()},
+                sort_by="date",
+                descending=False,
+                contributor_fields=("menu_item_id",),
+                item_id_field="menu_item_id",
+                canonical_item_name_field="menu_item_name",
+                additional_group_by=("date",),
+            )
+        return identity_aware_federated_data({
+            "data": rows,
+            "start_date": min(start_dates.values(), default=None),
+            "end_date": max(end_dates.values(), default=None),
+            "start_dates": start_dates,
+            "end_dates": end_dates,
+        }, coverage)
+
+    result = reader.read(query, reduce)
+    if reader.is_all:
+        return result
+    return result
 
 
 @router.get("/items-view")
@@ -207,34 +625,79 @@ def get_menu_items_view(
     filters: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    conn=Depends(get_db)
+    reader: ScopedReader = Depends(get_reader),
 ):
     """Paginated view of menu_items_summary_view"""
     filter_dict = json.loads(filters) if filters else {}
-    if start_date or end_date:
-        df, count, err = menu_queries.fetch_menu_items_summary(
-            conn,
-            page=page,
-            page_size=page_size,
-            sort_column=sort_by,
-            sort_direction="DESC" if sort_desc else "ASC",
-            filters=filter_dict,
-            start_date=start_date,
-            end_date=end_date,
+
+    def query(conn, _profile):
+        fetch_page = 1 if reader.is_all else page
+        fetch_size = MENU_FEDERATION_ROW_LIMIT if reader.is_all else page_size
+        if start_date or end_date:
+            df, count, err = menu_queries.fetch_menu_items_summary(
+                conn,
+                page=fetch_page,
+                page_size=fetch_size,
+                sort_column=sort_by,
+                sort_direction="DESC" if sort_desc else "ASC",
+                filters=filter_dict,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        else:
+            df, count, err = table_queries.fetch_paginated_table(
+                conn,
+                "menu_items_summary_view",
+                fetch_page,
+                fetch_size,
+                sort_by,
+                "DESC" if sort_desc else "ASC",
+                filter_dict,
+            )
+        if err:
+            raise HTTPException(500, err)
+        if reader.is_all:
+            _enforce_menu_federation_bound(count, "menu items")
+        rows = df_to_json(df)
+        identity = menu_identity_payload(conn, rows, item_field="menu_item_id") if reader.is_all else None
+        return {
+            "data": identity["rows"] if identity else rows,
+            "identity": identity["identity"] if identity else None,
+            "total": count,
+        }
+
+    def reduce(pairs):
+        identity_pairs = [
+            (profile, {"rows": value["data"], "identity": value.get("identity") or {}})
+            for profile, value in pairs
+        ]
+        rows, coverage = group_menu_identity_rows(
+            identity_pairs,
+            legacy_group_by=("name", "type"),
+            spec={
+                "total_revenue": Sum(),
+                "total_sold": Sum(),
+                "sold_as_item": Sum(),
+                "sold_as_addon": Sum(),
+                "is_active": AnyTrue(),
+            },
+            sort_by=sort_by,
+            descending=sort_desc,
+            contributor_fields=("menu_item_id", "total_revenue", "total_sold"),
+            item_id_field="menu_item_id",
+            canonical_item_name_field="name",
+            canonical_item_type_field="type",
         )
-    else:
-        df, count, err = table_queries.fetch_paginated_table(
-            conn, 
-            "menu_items_summary_view", 
-            page, 
-            page_size, 
-            sort_by, 
-            "DESC" if sort_desc else "ASC", 
-            filter_dict
+        start = (page - 1) * page_size
+        return identity_aware_federated_data(
+            {"data": rows[start:start + page_size], "total": len(rows)}, coverage
         )
-    if err: 
-        raise HTTPException(500, err)
-    return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size}
+
+    result = reader.read(query, reduce)
+    if reader.is_all:
+        result["data"].update({"page": page, "page_size": page_size})
+        return result
+    return {**result, "page": page, "page_size": page_size}
 
 
 @router.get("/variants-view")
@@ -244,36 +707,131 @@ def get_variants_view(
     sort_by: str = "variant_name", 
     sort_desc: bool = False,
     filters: Optional[str] = None,
-    conn=Depends(get_db)
+    reader: ScopedReader = Depends(get_reader),
 ):
     """Paginated view of variants"""
     filter_dict = json.loads(filters) if filters else {}
-    df, count, err = table_queries.fetch_paginated_table(
-        conn, 
-        "variants", 
-        page, 
-        page_size, 
-        sort_by, 
-        "DESC" if sort_desc else "ASC", 
-        filter_dict
-    )
-    if err: 
-        raise HTTPException(500, err)
-    return {"data": df_to_json(df), "total": count, "page": page, "page_size": page_size}
+
+    def query(conn, _profile):
+        df, count, err = table_queries.fetch_paginated_table(
+            conn,
+            "variants",
+            1 if reader.is_all else page,
+            MENU_FEDERATION_ROW_LIMIT if reader.is_all else page_size,
+            sort_by,
+            "DESC" if sort_desc else "ASC",
+            filter_dict,
+        )
+        if err:
+            raise HTTPException(500, err)
+        if reader.is_all:
+            _enforce_menu_federation_bound(count, "variants")
+        rows = df_to_json(df)
+        identity = menu_identity_payload(
+            conn,
+            rows,
+            item_field=None,
+            variant_field="variant_id",
+            variant_only=True,
+        ) if reader.is_all else None
+        return {
+            "data": identity["rows"] if identity else rows,
+            "identity": identity["identity"] if identity else None,
+            "total": count,
+        }
+
+    def reduce(pairs):
+        # Variants combine on their durable dimensions: name, unit, and value.
+        identity_pairs = [
+            (profile, {"rows": value["data"], "identity": value.get("identity") or {}})
+            for profile, value in pairs
+        ]
+        rows, coverage = group_menu_identity_rows(
+            identity_pairs,
+            legacy_group_by=("variant_name", "unit", "value"),
+            spec={"description": First(), "is_verified": AllTrue()},
+            sort_by=sort_by,
+            descending=sort_desc,
+            contributor_fields=("variant_id",),
+            item_id_field=None,
+            variant_id_field="variant_id",
+            canonical_variant_name_field="variant_name",
+            identity_kind="variant",
+        )
+        start = (page - 1) * page_size
+        return identity_aware_federated_data(
+            {"data": rows[start:start + page_size], "total": len(rows)}, coverage
+        )
+
+    result = reader.read(query, reduce)
+    if reader.is_all:
+        result["data"].update({"page": page, "page_size": page_size})
+        return result
+    return {**result, "page": page, "page_size": page_size}
 
 
 @router.get("/matrix")
-def get_menu_matrix(conn=Depends(get_db)):
+def get_menu_matrix(reader: ScopedReader = Depends(get_reader)):
     """Full menu matrix for client-side pagination"""
-    df = menu_queries.fetch_menu_matrix(conn)
-    return df_to_json(df)
+
+    def query(conn, _profile):
+        rows = df_to_json(menu_queries.fetch_menu_matrix(conn))
+        return (
+            menu_identity_payload(
+                conn,
+                rows,
+                item_field="menu_item_id",
+                variant_field="variant_id",
+            )
+            if reader.is_all
+            else rows
+        )
+
+    def reduce(pairs):
+        rows, coverage = group_menu_identity_rows(
+            pairs,
+            legacy_group_by=("name", "type", "variant_name"),
+            spec={
+                "mapping_count": Sum(),
+                "order_count": Sum(),
+                # Stores can price the same variant differently, so there is no
+                # single "the" price. Show the lowest and keep every store's own
+                # price in `contributors` rather than letting sort order decide.
+                "price": Min(),
+                "is_active": AnyTrue(),
+                "addon_eligible": AnyTrue(),
+                "delivery_eligible": AnyTrue(),
+                "is_verified": AllTrue(),
+            },
+            sort_by="name",
+            descending=False,
+            contributor_fields=("menu_item_id", "variant_id", "price"),
+            item_id_field="menu_item_id",
+            variant_id_field="variant_id",
+            canonical_item_name_field="name",
+            canonical_item_type_field="type",
+            canonical_variant_name_field="variant_name",
+        )
+        return identity_aware_federated_data(rows, coverage)
+
+    return reader.read(query, reduce)
 
 
 # --- Dropdown List Endpoints ---
 
 @router.get("/list")
-def get_menu_list(conn=Depends(get_db)):
+def get_menu_list(reader: ScopedReader = Depends(get_reader)):
     """Lightweight list of all items for dropdowns"""
+
+    def reduce(pairs):
+        # Menu edits are physical-store-only, so this list stays a plain
+        # attributed union rather than a merged catalog.
+        return union_rows(pairs, key_fields=("menu_item_id",), sort_by="name", descending=False)
+
+    return reader.read(_menu_list_rows, reduce)
+
+
+def _menu_list_rows(conn, _profile=None):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT menu_item_id, name, type, is_verified
@@ -294,18 +852,28 @@ def get_menu_list(conn=Depends(get_db)):
 
 
 @router.get("/variants/list")
-def get_variants_list(conn=Depends(get_db)):
+def get_variants_list(reader: ScopedReader = Depends(get_reader)):
     """Lightweight list of all variants for dropdowns"""
-    cursor = conn.cursor()
-    cursor.execute("SELECT variant_id, variant_name FROM variants ORDER BY variant_name")
-    data = [{"variant_id": row[0], "name": row[1]} for row in cursor.fetchall()]
-    cursor.close()
-    return data
+
+    def query(conn, _profile):
+        cursor = conn.cursor()
+        cursor.execute("SELECT variant_id, variant_name FROM variants ORDER BY variant_name")
+        data = [{"variant_id": row[0], "name": row[1]} for row in cursor.fetchall()]
+        cursor.close()
+        return data
+
+    def reduce(pairs):
+        return union_rows(pairs, key_fields=("variant_id",), sort_by="name", descending=False)
+
+    return reader.read(query, reduce)
 
 
 @router.post("/variants/create")
-def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get_db)):
+def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get_authorized_db)):
     """Create a new variant type; uses the clustering pipeline's deterministic ID scheme."""
+    _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.create_variant_type(
         conn,
         req.variant_name,
@@ -313,9 +881,7 @@ def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get
         req.unit,
         req.value,
     )
-    if res['status'] == 'error':
-        raise HTTPException(400, res['message'])
-    return res
+    return _finalize_menu_edit_response(res)
 
 
 # --- Merge Logic ---
@@ -325,6 +891,18 @@ def get_merge_history(limit: int = 20, offset: int = 0, conn=Depends(get_db)):
     """Get paginated merge/resolution history"""
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    from src.core.global_menu_schema import resolve_global_menu_capability
+
+    global_capability = resolve_global_menu_capability(conn)
+    if global_capability is not None and global_capability.active:
+        from src.core.global_menu_history import list_cached_global_menu_history
+
+        return list_cached_global_menu_history(
+            conn,
+            capability=global_capability,
+            limit=limit,
+            offset=offset,
+        )
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM merge_history")
     total = int(cursor.fetchone()[0] or 0)
@@ -381,19 +959,43 @@ def preview_merge(
     source_id: str,
     target_id: str,
     source_variant_id: Optional[str] = None,
+    target_variant_id: Optional[str] = None,
     conn=Depends(get_db),
 ):
     """Preview the impact of merging a source menu item into a target."""
     res = menu_utils.preview_merge_menu_items(conn, source_id, target_id, source_variant_id)
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
+    if _global_menu_active(conn):
+        from src.core.global_menu_mutation import (
+            build_global_action_from_local,
+            preview_global_mutation,
+        )
+
+        try:
+            global_preview = preview_global_mutation(
+                conn,
+                action=build_global_action_from_local(
+                    conn,
+                    mutation_type="variant_merge" if source_variant_id else "menu_merge",
+                    source_local_menu_item_id=source_id,
+                    source_local_variant_id=source_variant_id,
+                    target_local_menu_item_id=target_id,
+                    target_local_variant_id=target_variant_id,
+                ),
+            )
+        except Exception as exc:
+            _raise_global_menu_error(exc)
+        res["global_menu"] = global_preview
     return res
 
 
 @router.post("/merge")
-def execute_merge(req: MergeRequest, conn=Depends(get_db)):
+def execute_merge(req: MergeRequest, conn=Depends(get_authorized_db)):
     """Merge source menu item into target"""
     _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     if req.variant_mappings is not None:
         res = menu_utils.merge_menu_items_with_variant_mappings(
             conn,
@@ -409,17 +1011,30 @@ def execute_merge(req: MergeRequest, conn=Depends(get_db)):
     return _finalize_menu_edit_response(res)
 
 
+@router.post("/retype")
+def retype_menu_item_endpoint(req: RetypeMenuItemRequest, conn=Depends(get_authorized_db)):
+    """Change a menu item's type; relinks all history into the retyped item."""
+    _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
+    res = menu_utils.retype_menu_item(conn, req.menu_item_id, req.new_type)
+    return _finalize_menu_edit_response(res)
+
+
 @router.post("/merge/undo")
-def undo_merge(req: UndoMergeRequest, conn=Depends(get_db)):
+def undo_merge(req: UndoMergeRequest, conn=Depends(get_authorized_db)):
     """Undo a previous merge operation"""
     _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.undo_merge(conn, req.merge_id)
     return _finalize_menu_edit_response(res)
 
 
 @router.post("/merge/pull-from-cloud")
-def pull_menu_merges_from_cloud(limit: int = 100, conn=Depends(get_db)):
+def pull_menu_merges_from_cloud(limit: int = 100, conn=Depends(get_authorized_db)):
     """Manually pull menu merge events from cloud and replay them locally."""
+    _ensure_legacy_menu_pull_allowed(conn)
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.menu_merge_sync import (
         get_menu_merge_pull_endpoint,
@@ -448,8 +1063,11 @@ def pull_menu_merges_from_cloud(limit: int = 100, conn=Depends(get_db)):
 
 
 @router.post("/mapping-verifications/pull-from-cloud")
-def pull_menu_mapping_verifications_from_cloud(limit: int = 100, conn=Depends(get_db)):
+def pull_menu_mapping_verifications_from_cloud(
+    limit: int = 100, conn=Depends(get_authorized_db)
+):
     """Pull menu mapping verification events from cloud and apply locally."""
+    _ensure_legacy_menu_pull_allowed(conn)
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.menu_mapping_verification_sync import (
         get_menu_mapping_verification_pull_endpoint,
@@ -488,17 +1106,28 @@ def get_sync_conflicts(include_resolved: bool = False, conn=Depends(get_db)):
 
     conflicts = list_sync_conflicts(conn, include_resolved=include_resolved)
     unresolved_count = sum(1 for conflict in conflicts if not conflict.get("resolved_at"))
+    from src.core.global_menu_schema import list_global_menu_quarantine
+
+    global_conflicts = list_global_menu_quarantine(
+        conn, include_resolved=include_resolved
+    )
+    global_unresolved_count = sum(
+        1 for conflict in global_conflicts if not conflict.get("resolved_at")
+    )
     notices = list_supersede_notices(conn, include_acknowledged=include_resolved)
     open_notices = sum(1 for notice in notices if not notice.get("acknowledged_at"))
     return {
-        "count": unresolved_count + open_notices,
+        "count": unresolved_count + global_unresolved_count + open_notices,
         "conflicts": conflicts,
+        "global_menu_conflicts": global_conflicts,
         "supersede_notices": notices,
     }
 
 
 @router.post("/sync-conflicts/notices/{notice_id}/acknowledge")
-def acknowledge_supersede_notice_endpoint(notice_id: int, conn=Depends(get_db)):
+def acknowledge_supersede_notice_endpoint(
+    notice_id: int, conn=Depends(get_authorized_db)
+):
     """Acknowledge a 'your resolution was superseded' notice."""
     from src.core.menu_assignment_apply import acknowledge_supersede_notice
 
@@ -510,7 +1139,9 @@ def acknowledge_supersede_notice_endpoint(notice_id: int, conn=Depends(get_db)):
 
 
 @router.post("/sync-conflicts/{remote_event_id}/dismiss")
-def dismiss_sync_conflict_endpoint(remote_event_id: str, conn=Depends(get_db)):
+def dismiss_sync_conflict_endpoint(
+    remote_event_id: str, conn=Depends(get_authorized_db)
+):
     """Dismiss a quarantined sync event so it stops retrying (kept for audit)."""
     from src.core.menu_sync_quarantine import dismiss_sync_conflict
 
@@ -524,9 +1155,10 @@ def dismiss_sync_conflict_endpoint(remote_event_id: str, conn=Depends(get_db)):
 @router.post("/bootstrap/pull-from-cloud")
 def pull_menu_bootstrap_from_cloud(
     apply_mode: str = "seed_and_relink_orders",
-    conn=Depends(get_db),
+    conn=Depends(get_authorized_db),
 ):
     """Manually pull the latest menu bootstrap snapshot from cloud and apply it locally."""
+    _ensure_legacy_menu_pull_allowed(conn)
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.menu_bootstrap_sync import (
         SUPPORTED_MENU_BOOTSTRAP_APPLY_MODES,
@@ -593,16 +1225,31 @@ def check_remap_target(order_item_id: str, conn=Depends(get_db)):
 
 
 @router.post("/remap")
-def execute_remap(req: RemapRequest, conn=Depends(get_db)):
+def execute_remap(req: RemapRequest, conn=Depends(get_authorized_db)):
     """Remap an order item to a different menu item/variant"""
     _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.remap_order_item_cluster(conn, req.order_item_id, req.new_menu_item_id, req.new_variant_id)
+    if res.get("status") == "success":
+        # A remap resolves any open silent-reuse anomaly for this id.
+        try:
+            from src.core.mapping_anomalies import close_anomalies_for_order_item
+
+            close_anomalies_for_order_item(conn, req.order_item_id, resolution="remapped")
+        except Exception:
+            pass
     return _finalize_menu_edit_response(res)
 
 
 @router.post("/variant-mapping/update")
-def update_variant_mapping(req: UpdateVariantMappingRequest, conn=Depends(get_db)):
+def update_variant_mapping(
+    req: UpdateVariantMappingRequest, conn=Depends(get_authorized_db)
+):
     """Update an existing menu item + variant mapping to a different variant everywhere it is used."""
+    _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.update_menu_variant_mapping(
         conn,
         req.menu_item_id,
@@ -619,7 +1266,17 @@ def update_variant_mapping(req: UpdateVariantMappingRequest, conn=Depends(get_db
 @router.get("/resolutions/unverified")
 def get_unverified(conn=Depends(get_db)):
     """Get list of unresolved menu item + variant pairs."""
-    df = menu_queries.fetch_unverified_items(conn)
+    try:
+        from src.core.global_menu_schema import resolve_global_menu_capability
+
+        include_global_identity_gaps = resolve_global_menu_capability(
+            conn
+        ).resolution_ready
+    except Exception:
+        include_global_identity_gaps = False
+    df = menu_queries.fetch_unverified_items(
+        conn, include_global_identity_gaps=include_global_identity_gaps
+    )
     items = df_to_json(df)
     for item in items:
         suggested_variant = suggest_variant_for_resolution(item.get("sample_order_name") or item.get("name"), item.get("type"))
@@ -640,9 +1297,13 @@ def get_unverified(conn=Depends(get_db)):
 
 
 @router.post("/resolutions/resolve")
-def resolve_variant_endpoint(req: ResolveVariantRequest, conn=Depends(get_db)):
+def resolve_variant_endpoint(
+    req: ResolveVariantRequest, conn=Depends(get_authorized_db)
+):
     """Resolve a single unresolved menu item + variant pair."""
     _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.resolve_menu_item_variant(
         conn,
         req.source_menu_item_id,
@@ -657,8 +1318,31 @@ def resolve_variant_endpoint(req: ResolveVariantRequest, conn=Depends(get_db)):
 
 
 @router.post("/resolutions/verify")
-def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_db)):
+def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_authorized_db)):
     """Verify a menu item, optionally renaming it"""
     _ensure_menu_edit_allowed(conn)
+    if _global_menu_request_active(conn, req):
+        return _commit_global_request(conn, req)
     res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type, req.new_variant_id)
     return _finalize_menu_edit_response(res)
+
+
+# --- Suspect mappings (silent-reuse guard) ---
+
+@router.get("/resolutions/suspect-mappings")
+def get_suspect_mappings(conn=Depends(get_db)):
+    """
+    Open silent-reuse anomalies: PetPooja ids whose incoming name resolves to a
+    different product core than the id's verified mapping. Human triages each —
+    dismiss (benign relabel) or remap (real reuse) via POST /menu/remap.
+    """
+    return list_open_anomalies(conn)
+
+
+@router.post("/resolutions/suspect-mappings/{anomaly_id}/dismiss")
+def dismiss_suspect_mapping(anomaly_id: int, conn=Depends(get_authorized_db)):
+    """Mark a suspect mapping as a benign relabel; the core is remembered so it won't re-fire."""
+    res = dismiss_anomaly(conn, anomaly_id)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res

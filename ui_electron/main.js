@@ -117,10 +117,16 @@ ipcMain.handle('get-app-version', () => {
     return app.getVersion();
 });
 
-function startPythonParams(dbPath) {
+function startPythonParams(dbPath, appDataRoot) {
     const isDev = process.env.NODE_ENV === 'development';
 
-    const env = { ...process.env, DB_URL: dbPath };
+    const env = {
+        ...process.env,
+        DB_URL: dbPath,
+        ANALYTICS_DB_PATH: dbPath,
+        ANALYTICS_APP_DATA_ROOT: appDataRoot,
+        ANALYTICS_CONTROL_DB_PATH: path.join(appDataRoot, 'analytics-control.db'),
+    };
     // Prod cwd is read-only; use userData for error logs.
     if (!isDev) {
         const userDataPath = path.dirname(dbPath);
@@ -187,7 +193,7 @@ app.whenReady().then(() => {
         appendBackendLog(`Backend log file: ${backendLogPath}`);
     }
 
-    apiProcess = startPythonParams(dbPath);
+    apiProcess = startPythonParams(dbPath, userDataPath);
     console.log(`Python API started with PID: ${apiProcess.pid}`);
 
     // Setup Auto Updater

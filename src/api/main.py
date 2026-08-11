@@ -16,6 +16,7 @@ from src.api.routers import (
     forecast_volume,
     weather,
     conversations,
+    profiles,
 )
 
 app = FastAPI(title="Analytics Backend")
@@ -29,22 +30,8 @@ async def start_background_tasks():
 
 @app.on_event("shutdown")
 def shutdown_handler():
-    """Signal background training tasks to stop and wait for them to finish."""
-    from src.api.routers import forecast_training_status
-    import time
+    print("[Shutdown] Analytics backend stopping.")
 
-    forecast_training_status.signal_shutdown()
-    if forecast_training_status.is_training():
-        print("[Shutdown] Waiting for active forecast training to finish (up to 60s)…")
-        deadline = time.time() + 60
-        while forecast_training_status.is_training() and time.time() < deadline:
-            time.sleep(1)
-        if forecast_training_status.is_training():
-            print("[Shutdown] Training did not finish in time — proceeding with shutdown.")
-        else:
-            print("[Shutdown] Training finished cleanly.")
-    else:
-        print("[Shutdown] No active training — shutting down immediately.")
 
 @app.on_event("startup")
 def startup_db_check():
@@ -52,129 +39,29 @@ def startup_db_check():
     from src.core.error_log import get_error_logger
     get_error_logger()
     try:
-        from src.core.db.connection import get_db_connection, BASE_DIR
-        import os
+        from src.core.db.control import (
+            copy_legacy_global_config_once,
+            ensure_control_schema,
+        )
+        from src.core.db.connection import get_profile_connection
+        from src.core.profiles import ProfileError, selected_profile
 
-        conn, _ = get_db_connection()
-        if conn:
-            # 1. Apply Full Schema (Idempotent: CREATE TABLE IF NOT EXISTS / migrations)
-            # This ensures missing tables are created in new installs and migrations run.
-            schema_file = os.path.join(BASE_DIR, "database", "schema_sqlite.sql")
-            if os.path.exists(schema_file):
-                try:
-                    with open(schema_file, 'r') as f:
-                        schema_sql = f.read()
-                    conn.executescript(schema_sql)
-                    print(f"Startup: Applied schema from {schema_file}")
-                except Exception as e:
-                    print(f"Startup: Warning - Failed to apply schema file: {e}")
-            else:
-                print(f"Startup: Warning - Schema file not found at {schema_file}")
+        ensure_control_schema()
+        copy_legacy_global_config_once()
+        try:
+            profile = selected_profile()
+        except ProfileError:
+            print("Startup: control database ready; waiting for restaurant selection.")
+            return
+        conn, _ = get_profile_connection(profile, apply_schema=True)
+        try:
+            from src.core.sync_identity import get_device_identity
 
-            # 2. Check/Create weather_daily table if missing (Migration for existing users)
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS weather_daily (
-                date TEXT,        -- YYYY-MM-DD
-                city TEXT,
-                
-                -- Observed Metrics (Actuals)
-                temp_max DECIMAL(4,1),
-                temp_min DECIMAL(4,1),
-                temp_mean DECIMAL(4,1),
-                precipitation_sum DECIMAL(6,1),
-                rain_sum DECIMAL(6,1),
-                wind_speed_max DECIMAL(4,1),
-                
-                -- Weather Codes (WMO)
-                weather_code INTEGER,
-                
-                -- Forecast Snapshot (JSON)
-                forecast_snapshot TEXT,
-                
-                -- Metadata
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                
-                PRIMARY KEY (date, city)
-            );
-            """)
-            # Migration: AI Conversations tables
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS ai_conversations (
-                conversation_id TEXT PRIMARY KEY,
-                title TEXT,
-                started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                synced_at TEXT
-            );
-            """)
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS ai_messages (
-                message_id TEXT PRIMARY KEY,
-                conversation_id TEXT NOT NULL REFERENCES ai_conversations(conversation_id) ON DELETE CASCADE,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                type TEXT,
-                sql_query TEXT,
-                explanation TEXT,
-                query_id TEXT,
-                query_status TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id);")
-            # Migration: client-learning uploaded_at on ai_logs and ai_feedback
-            for table, col in [("ai_logs", "uploaded_at"), ("ai_feedback", "uploaded_at")]:
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT;")
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    pass  # Column already exists
-            # Migration: forecast cloud sync uploaded_at on forecast + backtest caches
-            # Older installs may have forecast tables without this column, which would
-            # silently disable cloud push for those tables because the shippers catch
-            # the missing-column read error and return empty batches.
-            for table in [
-                "forecast_cache",
-                "item_forecast_cache",
-                "volume_forecast_cache",
-                "revenue_backtest_cache",
-                "item_backtest_cache",
-                "volume_backtest_cache",
-            ]:
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN uploaded_at TEXT;")
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    pass  # Column already exists
-            # Migration: app_users — drop old table (user_id schema) if present, create new (employee_id PK), seed if empty
-            try:
-                cur = conn.execute("SELECT user_id FROM app_users LIMIT 1")
-                cur.fetchone()
-                conn.execute("DROP TABLE app_users")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS app_users (
-                    employee_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    is_active BOOLEAN DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            cur = conn.execute("SELECT COUNT(*) FROM app_users")
-            if cur.fetchone()[0] == 0:
-                conn.execute("INSERT INTO app_users (name, employee_id, is_active) VALUES ('Owner', '0001', 1)")
-                conn.commit()
-            # Forecast bootstrap: DISABLED at startup. Use manual "Pull from Cloud"
-            # or "Full Retrain" buttons in Configuration → Forecast section.
-
+            get_device_identity(conn)
+            conn.commit()
+        finally:
             conn.close()
-            print("Startup: Verified weather_daily, ai_conversations, and app_users schema.")
+        print(f"Startup: verified restaurant profile {profile.restaurant_id}.")
     except Exception as e:
         print(f"Startup DB Check Failed: {e}")
         try:
@@ -215,6 +102,7 @@ app.include_router(sql.router, prefix="/api/sql", tags=["SQL"])
 app.include_router(system.router, prefix="/api/system", tags=["System"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
 app.include_router(config.router, prefix="/api/config", tags=["Config"])
+app.include_router(profiles.router, prefix="/api/config", tags=["Restaurant Profiles"])
 app.include_router(today.router)
 app.include_router(forecast.router, prefix="/api/forecast", tags=["Forecast"])
 app.include_router(forecast_items.router, prefix="/api/forecast", tags=["Forecast Items"])

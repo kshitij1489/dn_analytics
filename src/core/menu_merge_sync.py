@@ -27,6 +27,7 @@ from src.core.menu_sync_quarantine import (
     quarantine_event,
     record_quarantine_retry_failure,
 )
+from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
 from src.core.sync_cursor_migration import ensure_sync_cursor_schema
 from utils import menu_utils
 
@@ -190,7 +191,26 @@ def _history_signature(history_row: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-def _find_matching_local_merge(conn, event: Dict[str, Any]) -> Optional[int]:
+def _find_matching_local_merge(
+    conn,
+    event: Dict[str, Any],
+    *,
+    unclaimed_only: bool = False,
+) -> Optional[int]:
+    """Find the local merge_history row this event is the echo of.
+
+    The signature is content-only (item pair + variant pair), so the same
+    operation repeated months apart looks identical. `unclaimed_only` limits the
+    search to rows no remote event has claimed yet, which is what an apply needs:
+    a row already linked to an earlier remote event belongs to that event, not to
+    this one. Without it, a strict-mode resolution — whose local row is rolled
+    back by _commit_strict_plan and only ever materializes from the server's
+    accepted response — matches a stale historical row and is swallowed as a
+    duplicate, so it never reaches Resolution History and can never be undone.
+
+    Undo applies pass the default: they need the claimed row of the merge being
+    reverted.
+    """
     source_item = event.get("source_item")
     target_item = event.get("target_item")
     if not isinstance(source_item, dict) or not isinstance(target_item, dict):
@@ -201,13 +221,24 @@ def _find_matching_local_merge(conn, event: Dict[str, Any]) -> Optional[int]:
     if not source_id or not target_id:
         return None
 
+    claimed_clause = (
+        """
+          AND NOT EXISTS (
+              SELECT 1
+              FROM menu_merge_remote_events r
+              WHERE r.local_merge_id = h.merge_id
+          )
+        """
+        if unclaimed_only
+        else ""
+    )
     event_signature = _event_signature(source_id, target_id, _normalize_merge_payload(event.get("merge_payload")))
     rows = conn.execute(
-        """
-        SELECT *
-        FROM merge_history
-        WHERE source_id = ? AND target_id = ?
-        ORDER BY merge_id DESC
+        f"""
+        SELECT h.*
+        FROM merge_history h
+        WHERE h.source_id = ? AND h.target_id = ?{claimed_clause}
+        ORDER BY h.merge_id DESC
         """,
         (source_id, target_id),
     ).fetchall()
@@ -334,8 +365,12 @@ def _ensure_variant_exists(conn, variant_id: Any, variant_name: Any) -> None:
 
 def _merge_has_local_event(conn, merge_id: int) -> bool:
     """
-    True when this merge_history row has an outbox event — i.e. the merge was
-    authored on this install (remote-applied merges never emit outbox events).
+    True when this merge_history row has a LEGACY outbox event — i.e. the merge
+    was authored on this install in the pre-strict era. Strict-mode commits never
+    write menu_merge_sync_events, but they also never reach this check: their
+    self-applied events are deduped earlier by remote_event_id. So this only
+    decides authorship for merges that predate the strict cutover, where the
+    outbox row is the sole surviving signal.
     """
     row = conn.execute(
         "SELECT 1 FROM menu_merge_sync_events WHERE merge_id = ? LIMIT 1",
@@ -475,7 +510,7 @@ def _apply_remote_merge_event_assignments(
 
     server_seq = coerce_server_seq(event.get("server_seq"))
 
-    existing_merge_id = _find_matching_local_merge(conn, event)
+    existing_merge_id = _find_matching_local_merge(conn, event, unclaimed_only=True)
     if existing_merge_id is not None:
         # Same operation already exists locally. Stamp the server's ordering on
         # the affected rows and clear pending_local; when it is the echo of our
@@ -633,7 +668,7 @@ def _apply_remote_merge_event_legacy(conn, event: Dict[str, Any], remote_cursor:
     if _remote_event_exists(conn, remote_event_id):
         return {"status": "duplicate", "local_merge_id": _lookup_remote_local_merge_id(conn, remote_event_id)}
 
-    existing_merge_id = _find_matching_local_merge(conn, event)
+    existing_merge_id = _find_matching_local_merge(conn, event, unclaimed_only=True)
     if existing_merge_id is not None:
         _record_remote_event(
             conn,
@@ -723,7 +758,6 @@ def _apply_remote_merge_event_legacy(conn, event: Dict[str, Any], remote_cursor:
             target_variant_id=None if target_variant_id == menu_utils.NULL_VARIANT_SENTINEL else target_variant_id,
             new_variant_name=target_variant_name if target_variant_id == menu_utils.NULL_VARIANT_SENTINEL else None,
             emit_sync_event=False,
-            emit_mapping_verification_events=False,
         )
     else:
         raise ValueError(f"Unsupported menu merge kind '{merge_kind}'")
@@ -733,7 +767,8 @@ def _apply_remote_merge_event_legacy(conn, event: Dict[str, Any], remote_cursor:
 
     local_merge_id = result.get("merge_id")
     if local_merge_id is None:
-        local_merge_id = _find_matching_local_merge(conn, event)
+        # The replay above just wrote the row, so it is still unclaimed.
+        local_merge_id = _find_matching_local_merge(conn, event, unclaimed_only=True)
     if local_merge_id is None:
         raise ValueError(f"Could not resolve local merge_id for remote event {remote_event_id}")
 
@@ -798,14 +833,15 @@ def _apply_remote_undo_event_legacy(conn, event: Dict[str, Any], remote_cursor: 
 
 
 def _fetch_remote_events(
+    conn,
     endpoint: str,
     auth: Optional[str],
     cursor: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if auth:
-        headers["Authorization"] = f"Bearer {auth}"
+    from src.core.central_api import response_error_text, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="sync", credential=auth)
 
     params: Dict[str, str] = {}
     if cursor:
@@ -818,7 +854,11 @@ def _fetch_remote_events(
 
         response = requests.get(endpoint, headers=headers, params=params or None, timeout=60)
         if response.status_code >= 400:
-            return {"events": [], "next_cursor": cursor, "error": f"HTTP {response.status_code}"}
+            return {
+                "events": [],
+                "next_cursor": cursor,
+                "error": response_error_text(response, conn=conn),
+            }
         data = response.json()
     except Exception as exc:
         return {"events": [], "next_cursor": cursor, "error": str(exc)}
@@ -902,7 +942,16 @@ def _run_assignment_batch_epilogue(conn, touched_menu_item_ids: Set[str]) -> Non
             menu_utils._recalculate_menu_item_stats(cursor, menu_item_id)
         for menu_item_id in menu_item_ids:
             menu_utils._sync_menu_item_resolution_state(cursor, menu_item_id)
-        menu_utils._clear_item_and_volume_forecast_cache(cursor, menu_item_ids)
+        # State-scoped GC: the touched set under-approximates items whose last
+        # reference just moved away (order-row moves never record the previous
+        # owner), so re-derive husk liveness from state instead of events.
+        swept = menu_utils.sweep_orphan_menu_entities(cursor)
+        menu_utils._clear_item_and_volume_forecast_cache(
+            cursor, sorted(set(menu_item_ids) | set(swept["menu_item_ids"]))
+        )
+        # Assignments changed (and GC may have deleted parents): refresh the
+        # derived itemcode projection in the same transaction (plan §8).
+        rebuild_itemcode_mappings_best_effort(conn, cursor=cursor)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -915,10 +964,35 @@ def _run_assignment_batch_epilogue(conn, touched_menu_item_ids: Set[str]) -> Non
         menu_utils._clear_impacted_models(clear_item_models=True, clear_volume_models=True)
     except Exception:
         logger.exception("Assignment apply epilogue could not clear model artifacts")
+
+
+def _run_orphan_sweep(conn) -> int:
+    """
+    Standalone state-scoped GC for pulls that ran no assignment batch (the
+    epilogue embeds the same sweep). Best-effort — a failure here must not
+    fail the pull. Returns the number of menu items swept.
+    """
+    cursor = conn.cursor()
     try:
-        menu_utils.export_to_backups(conn)
+        swept = menu_utils.sweep_orphan_menu_entities(cursor)
+        if swept["menu_item_ids"]:
+            menu_utils._clear_item_and_volume_forecast_cache(
+                cursor, swept["menu_item_ids"]
+            )
+        conn.commit()
+        if swept["menu_item_ids"] or swept["variant_ids"]:
+            logger.info(
+                "Husk sweep removed %d menu items, %d variants",
+                len(swept["menu_item_ids"]),
+                len(swept["variant_ids"]),
+            )
+        return len(swept["menu_item_ids"])
     except Exception:
-        logger.exception("Assignment apply epilogue could not export backups")
+        conn.rollback()
+        logger.exception("Husk sweep failed")
+        return 0
+    finally:
+        cursor.close()
 
 
 def retry_quarantined_menu_merge_events(conn) -> Dict[str, Any]:
@@ -961,7 +1035,7 @@ def pull_and_apply_menu_merge_events(
     touched_menu_item_ids: Set[str] = set(retry_stats.get("touched_menu_item_ids") or ())
 
     cursor_before = cursor if cursor is not None else get_menu_merge_pull_cursor(conn)
-    fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
+    fetch_result = _fetch_remote_events(conn, endpoint, auth=auth, cursor=cursor_before, limit=limit)
     if fetch_result.get("error"):
         if touched_menu_item_ids and is_assignment_apply_enabled():
             _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
@@ -1081,5 +1155,10 @@ def pull_and_apply_menu_merge_events(
     if touched_menu_item_ids and is_assignment_apply_enabled():
         _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
         stats["epilogue_menu_item_ids"] = len(touched_menu_item_ids)
+    else:
+        # Even an event-less pull sweeps husks: earlier batches (or older
+        # builds) may have stripped an item's last reference without GC'ing
+        # it, so every completed pull re-asserts the liveness invariant.
+        stats["husks_swept"] = _run_orphan_sweep(conn)
 
     return stats

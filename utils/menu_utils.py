@@ -9,8 +9,14 @@ from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 import json
 from datetime import datetime, timezone
-from scripts.seed_from_backups import export_to_backups
+from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
 from src.core.menu_assignment_schema import ensure_assignment_sync_schema
+from src.core.order_item_key import (
+    AssignmentKeyIndex,
+    local_addon_pks_for_assignment_key,
+    local_order_item_pks_for_assignment_key,
+    update_local_order_rows_for_assignment_key,
+)
 from utils.id_generator import generate_deterministic_id
 from utils.menu_item_variant_enforcement import ensure_menu_item_has_variant_mapping
 from utils.variant_metadata import infer_variant_metadata
@@ -71,9 +77,30 @@ def _build_catalog_delta_for_ids(cursor, item_ids: List[str], variant_ids: List[
             catalog_delta["items"].append({"menu_item_id": str(r[0]), "name": str(r[1]), "type": str(r[2]), "is_verified": bool(r[3])})
     if variant_ids:
         in_clause, params = _build_in_clause(variant_ids)
-        cursor.execute(f"SELECT variant_id, variant_name, is_verified FROM variants WHERE variant_id {in_clause}", params)
+        variant_columns = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(variants)").fetchall()
+            if len(row) > 1
+        }
+        select_columns = ["variant_id", "variant_name", "is_verified"]
+        for optional_column in ("description", "unit", "value"):
+            if optional_column in variant_columns:
+                select_columns.append(optional_column)
+        cursor.execute(
+            f"SELECT {', '.join(select_columns)} FROM variants WHERE variant_id {in_clause}",
+            params,
+        )
         for r in cursor.fetchall():
-            catalog_delta["variants"].append({"variant_id": str(r[0]), "variant_name": str(r[1]), "is_verified": bool(r[2])})
+            row = dict(zip(select_columns, r))
+            variant = {
+                "variant_id": str(row["variant_id"]),
+                "variant_name": str(row["variant_name"]),
+                "is_verified": bool(row["is_verified"]),
+            }
+            for optional_column in ("description", "unit", "value"):
+                if optional_column in row:
+                    variant[optional_column] = row[optional_column]
+            catalog_delta["variants"].append(variant)
     return catalog_delta
 
 
@@ -251,7 +278,28 @@ def _recalculate_menu_item_stats(cursor, menu_item_id: str) -> None:
     ))
 
 
+def _global_link_table_exists(cursor, table: str) -> bool:
+    return cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def _is_global_menu_item_linked(cursor, menu_item_id: str) -> bool:
+    return bool(
+        _global_link_table_exists(cursor, "menu_item_global_links")
+        and cursor.execute(
+            "SELECT 1 FROM menu_item_global_links WHERE local_menu_item_id=?",
+            (menu_item_id,),
+        ).fetchone()
+    )
+
+
 def _sync_menu_item_resolution_state(cursor, menu_item_id: str) -> None:
+    # In global mode the central canonical row owns verification and lifecycle.
+    # Local assignment shape must not silently flip that authoritative flag or
+    # garbage-collect its projection target.
+    if _is_global_menu_item_linked(cursor, menu_item_id):
+        return
     cursor.execute(
         "SELECT COUNT(*) FROM menu_item_variants WHERE menu_item_id = ?",
         (menu_item_id,),
@@ -270,6 +318,16 @@ def _sync_menu_item_resolution_state(cursor, menu_item_id: str) -> None:
         remaining_usage = int(cursor.fetchone()[0] or 0)
 
         if remaining_usage == 0:
+            # A bare local projection owner is intentionally retained: global
+            # rules/redirects may route the next unseen POS locator to it.
+            # Another menu_item may point here via the suggestion_id self-FK
+            # (a stale merge suggestion). Clear those pointers first, else the
+            # DELETE trips FOREIGN KEY constraint failed and aborts the whole
+            # menu ground-truth pull (surfaces to the user as "Sync Failed").
+            cursor.execute(
+                "UPDATE menu_items SET suggestion_id = NULL WHERE suggestion_id = ?",
+                (menu_item_id,),
+            )
             cursor.execute("DELETE FROM menu_items WHERE menu_item_id = ?", (menu_item_id,))
         else:
             cursor.execute(
@@ -295,6 +353,115 @@ def _sync_menu_item_resolution_state(cursor, menu_item_id: str) -> None:
             updated_at = CURRENT_TIMESTAMP
         WHERE menu_item_id = ?
     """, (1 if unresolved_mappings == 0 else 0, menu_item_id))
+
+
+def sweep_orphan_menu_entities(cursor) -> Dict[str, List[str]]:
+    """
+    State-scoped GC: delete menu_items and variants that nothing references
+    (no menu_item_variants row, no order_items row, no order_item_addons row).
+
+    _sync_menu_item_resolution_state only garbage-collects the ids in the
+    current batch's touched set, and reference-moving appliers can strip an
+    item's last reference without ever putting that id in the touched set
+    (e.g. update_local_order_rows_for_assignment_key moves order rows whose
+    previous owner is never recorded). A missed id was previously a permanent
+    husk — visible in /menu/list and /menu/variants/list dropdowns but absent
+    from the Menu Matrix. This sweep re-derives liveness from state instead of
+    events, so it is idempotent and self-heals husks from any past cause.
+    Pattern note: docs/MENU_SYNC_ARCHITECTURE.md ("state-scoped GC").
+    """
+    global_item_guard = (
+        """
+            AND NOT EXISTS (
+                SELECT 1 FROM menu_item_global_links gl
+                WHERE gl.local_menu_item_id = mi.menu_item_id
+            )
+        """
+        if _global_link_table_exists(cursor, "menu_item_global_links")
+        else ""
+    )
+    orphan_item_sql = f"""
+        SELECT mi.menu_item_id FROM menu_items mi
+        WHERE NOT EXISTS (
+                SELECT 1 FROM menu_item_variants miv
+                WHERE miv.menu_item_id = mi.menu_item_id
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM order_items oi
+                WHERE oi.menu_item_id = mi.menu_item_id
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM order_item_addons oa
+                WHERE oa.menu_item_id = mi.menu_item_id
+            )
+            {global_item_guard}
+    """
+    cursor.execute(orphan_item_sql)
+    husk_item_ids = [str(row[0]) for row in cursor.fetchall()]
+
+    if husk_item_ids:
+        placeholders = ",".join("?" for _ in husk_item_ids)
+        # Stale merge suggestions may point at a husk via the suggestion_id
+        # self-FK; clear them or the DELETE trips FOREIGN KEY constraint failed.
+        cursor.execute(
+            f"UPDATE menu_items SET suggestion_id = NULL WHERE suggestion_id IN ({placeholders})",
+            husk_item_ids,
+        )
+        cursor.execute(
+            f"DELETE FROM menu_items WHERE menu_item_id IN ({placeholders})",
+            husk_item_ids,
+        )
+
+    # Variants have the same husk failure mode (merge moves the last mapping
+    # off a variant, nothing deletes the row) and the same dropdown symptom.
+    # Unlike menu items, a bare variant row is a legitimate transient state:
+    # POST /menu/variants/create inserts the row before any mapping references
+    # it. A 7-day grace window keeps those alive; husks converge on a later
+    # sweep. NULL created_at (pre-column rows) counts as old. Schemas without
+    # the created_at column (legacy) skip the variant sweep entirely — no age
+    # signal, no delete. The UNKNOWN parking variant needs no exemption: it is
+    # recreated on demand via ensure_variant_exists.
+    husk_variant_ids: List[str] = []
+    cursor.execute("PRAGMA table_info(variants)")
+    if any(row[1] == "created_at" for row in cursor.fetchall()):
+        global_variant_guard = (
+            """
+                AND NOT EXISTS (
+                    SELECT 1 FROM variant_global_links gl
+                    WHERE gl.local_variant_id = v.variant_id
+                )
+            """
+            if _global_link_table_exists(cursor, "variant_global_links")
+            else ""
+        )
+        cursor.execute(
+            f"""
+            SELECT v.variant_id FROM variants v
+            WHERE (v.created_at IS NULL OR v.created_at < datetime('now', '-7 days'))
+                AND NOT EXISTS (
+                    SELECT 1 FROM menu_item_variants miv
+                    WHERE miv.variant_id = v.variant_id
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM order_items oi
+                    WHERE oi.variant_id = v.variant_id
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM order_item_addons oa
+                    WHERE oa.variant_id = v.variant_id
+                )
+                {global_variant_guard}
+            """
+        )
+        husk_variant_ids = [str(row[0]) for row in cursor.fetchall()]
+        if husk_variant_ids:
+            placeholders = ",".join("?" for _ in husk_variant_ids)
+            cursor.execute(
+                f"DELETE FROM variants WHERE variant_id IN ({placeholders})",
+                husk_variant_ids,
+            )
+
+    return {"menu_item_ids": husk_item_ids, "variant_ids": husk_variant_ids}
 
 
 def _fetch_menu_item_record(cursor, item_id: str):
@@ -374,6 +541,10 @@ def create_variant_type(
     metadata = infer_variant_metadata(normalized_name, {"unit": unit, "value": value})
     description_text = (description or "").strip() or None
 
+    blocked = _strict_mode_edit_blocked_response(conn)
+    if blocked:
+        return blocked
+
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT variant_name FROM variants WHERE variant_id = ?", (variant_id,))
@@ -384,20 +555,53 @@ def create_variant_type(
                 "message": f"Variant type '{existing[0]}' already exists.",
             }
 
-        cursor.execute("""
-            INSERT INTO variants (variant_id, variant_name, description, unit, value, is_verified)
-            VALUES (?, ?, ?, ?, ?, 1)
-        """, (variant_id, normalized_name, description_text, metadata["unit"], metadata["value"]))
-        conn.commit()
-        export_to_backups(conn)
-        return {
-            "status": "success",
-            "message": f"Variant type '{normalized_name}' created.",
-            "variant_id": variant_id,
-            "variant_name": normalized_name,
+        variant_columns = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(variants)").fetchall()
+            if len(row) > 1
+        }
+        insert_columns = ["variant_id", "variant_name", "is_verified"]
+        values = [variant_id, normalized_name, 1]
+        optional_values = {
+            "description": description_text,
             "unit": metadata["unit"],
             "value": metadata["value"],
         }
+        for column_name, column_value in optional_values.items():
+            if column_name in variant_columns:
+                insert_columns.append(column_name)
+                values.append(column_value)
+        placeholders = ", ".join("?" for _ in insert_columns)
+        cursor.execute(
+            f"""
+            INSERT INTO variants ({", ".join(insert_columns)})
+            VALUES ({placeholders})
+            """,
+            values,
+        )
+        from src.core.menu_mutation_commit import (
+            MUTATION_TYPE_CATALOG_UPDATE,
+            build_plan,
+        )
+
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_CATALOG_UPDATE,
+            catalog_delta=_catalog_delta_for_strict_commit(
+                cursor,
+                variant_ids=[variant_id],
+            ),
+        )
+        return _commit_strict_plan(
+            conn,
+            plan,
+            success_message=f"Variant type '{normalized_name}' created.",
+            success_extra={
+                "variant_id": variant_id,
+                "variant_name": normalized_name,
+                "unit": metadata["unit"],
+                "value": metadata["value"],
+            },
+        )
     except Exception as exc:
         conn.rollback()
         return {"status": "error", "message": str(exc)}
@@ -546,28 +750,8 @@ def _clear_impacted_models(
     clear_item_models: bool = False,
     clear_volume_models: bool = False,
 ) -> Optional[str]:
-    """Delete stale local model artifacts after menu assignments move."""
-    errors: List[str] = []
-
-    if clear_item_models:
-        try:
-            from src.core.learning.revenue_forecasting.item_demand_ml.model_io import delete_models as delete_item_models
-
-            delete_item_models()
-        except Exception as e:
-            errors.append(f"item models: {e}")
-
-    if clear_volume_models:
-        try:
-            from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models as delete_volume_models
-
-            delete_volume_models()
-        except Exception as e:
-            errors.append(f"volume models: {e}")
-
-    if not errors:
-        return None
-    return "; ".join(errors)
+    """Legacy hook after menu assignment moves — local ML models removed in Phase 5."""
+    return None
 
 
 def _update_rows_for_variant_mapping(
@@ -838,61 +1022,52 @@ def merge_menu_items_with_variant_mappings(
             from src.core.menu_mutation_commit import (
                 MUTATION_TYPE_MENU_MERGE_APPLIED,
                 build_plan,
-                strict_mode_active,
             )
             from src.core.menu_merge_sync_events import (
                 EVENT_TYPE_APPLIED,
                 build_menu_merge_event_payload,
-                record_menu_merge_applied_event,
             )
 
-            if strict_mode_active(conn):
-                event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
-                if not event:
-                    conn.rollback()
-                    return {"status": "error", "message": "Failed to build merge event"}
-                plan = build_plan(
-                    mutation_type=MUTATION_TYPE_MENU_MERGE_APPLIED,
-                    event=event,
-                    catalog_delta=_catalog_delta_for_strict_commit(
-                        cursor,
-                        item_ids=[target_id, source_id],
-                        variant_ids=list(resolved_variant_ids.values()) + list(resolved_variant_ids.keys()),
-                    ),
-                    order_item_ids=[
-                        str(row["order_item_id"])
-                        for row in history_payload.get("mapping_rows", [])
-                        if isinstance(row, dict) and row.get("order_item_id")
-                    ],
-                )
-                return _commit_strict_plan(
-                    conn,
-                    plan,
-                    success_message=f"Merged '{source_name}' into '{target[1]}' with variant mapping",
-                    success_extra={
-                        "stats": {
-                            "variant_mappings": len(resolved_variant_ids),
-                            "source_total_sold": int(source[4] or 0),
-                            "source_total_revenue": float(source[5] or 0),
-                            "suggestion_refs_updated": len(suggestion_rows),
-                            "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
-                            "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
-                            "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
-                            "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
-                        }
-                    },
-                    clear_item_models=True,
-                    clear_volume_models=True,
-                )
+            event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
+            if not event:
+                conn.rollback()
+                return {"status": "error", "message": "Failed to build merge event"}
+            plan = build_plan(
+                mutation_type=MUTATION_TYPE_MENU_MERGE_APPLIED,
+                event=event,
+                catalog_delta=_catalog_delta_for_strict_commit(
+                    cursor,
+                    item_ids=[target_id, source_id],
+                    variant_ids=list(resolved_variant_ids.values()) + list(resolved_variant_ids.keys()),
+                ),
+                order_item_ids=[
+                    str(row["order_item_id"])
+                    for row in history_payload.get("mapping_rows", [])
+                    if isinstance(row, dict) and row.get("order_item_id")
+                ],
+            )
+            return _commit_strict_plan(
+                conn,
+                plan,
+                success_message=f"Merged '{source_name}' into '{target[1]}' with variant mapping",
+                success_extra={
+                    "stats": {
+                        "variant_mappings": len(resolved_variant_ids),
+                        "source_total_sold": int(source[4] or 0),
+                        "source_total_revenue": float(source[5] or 0),
+                        "suggestion_refs_updated": len(suggestion_rows),
+                        "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
+                        "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
+                        "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
+                        "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
+                    }
+                },
+                clear_item_models=True,
+                clear_volume_models=True,
+            )
 
-            record_menu_merge_applied_event(conn, merge_id)
-
+        rebuild_itemcode_mappings_best_effort(conn, cursor=cursor)
         conn.commit()
-        export_to_backups(conn)
-        if emit_sync_event:
-            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
-
-            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
 
         message = f"Merged '{source_name}' into '{target[1]}' with variant mapping"
@@ -1007,58 +1182,47 @@ def merge_menu_items(
             from src.core.menu_mutation_commit import (
                 MUTATION_TYPE_MENU_MERGE_APPLIED,
                 build_plan,
-                strict_mode_active,
             )
             from src.core.menu_merge_sync_events import (
                 EVENT_TYPE_APPLIED,
                 build_menu_merge_event_payload,
-                record_menu_merge_applied_event,
             )
 
-            if strict_mode_active(conn):
-                event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
-                if not event:
-                    conn.rollback()
-                    return {"status": "error", "message": "Failed to build merge event"}
-                plan = build_plan(
-                    mutation_type=MUTATION_TYPE_MENU_MERGE_APPLIED,
-                    event=event,
-                    catalog_delta=_catalog_delta_for_strict_commit(
-                        cursor,
-                        item_ids=[target_id, source_id],
-                    ),
-                    order_item_ids=affected_ids,
-                )
-                return _commit_strict_plan(
-                    conn,
-                    plan,
-                    success_message=f"Merged '{source_name}' into '{target_name}'",
-                    success_extra={
-                        "stats": {
-                            "orders_relinked": relinked_count,
-                            "mappings_updated": mappings_updated,
-                            "revenue_added": float(source_revenue or 0),
-                            "suggestion_refs_updated": len(suggestion_rows),
-                            "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
-                            "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
-                            "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
-                            "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
-                        }
-                    },
-                    clear_item_models=True,
-                    clear_volume_models=True,
-                )
+            event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
+            if not event:
+                conn.rollback()
+                return {"status": "error", "message": "Failed to build merge event"}
+            plan = build_plan(
+                mutation_type=MUTATION_TYPE_MENU_MERGE_APPLIED,
+                event=event,
+                catalog_delta=_catalog_delta_for_strict_commit(
+                    cursor,
+                    item_ids=[target_id, source_id],
+                ),
+                order_item_ids=affected_ids,
+            )
+            return _commit_strict_plan(
+                conn,
+                plan,
+                success_message=f"Merged '{source_name}' into '{target_name}'",
+                success_extra={
+                    "stats": {
+                        "orders_relinked": relinked_count,
+                        "mappings_updated": mappings_updated,
+                        "revenue_added": float(source_revenue or 0),
+                        "suggestion_refs_updated": len(suggestion_rows),
+                        "item_forecast_cache_cleared": cleared_caches["item_forecast_cache"],
+                        "item_backtest_cache_cleared": cleared_caches["item_backtest_cache"],
+                        "volume_forecast_cache_cleared": cleared_caches["volume_forecast_cache"],
+                        "volume_backtest_cache_cleared": cleared_caches["volume_backtest_cache"],
+                    }
+                },
+                clear_item_models=True,
+                clear_volume_models=True,
+            )
 
-            record_menu_merge_applied_event(conn, merge_id)
-        
+        rebuild_itemcode_mappings_best_effort(conn, cursor=cursor)
         conn.commit()
-
-        # 7. Update Backups
-        export_to_backups(conn)
-        if emit_sync_event:
-            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
-
-            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(clear_item_models=True, clear_volume_models=True)
 
         message = f"Merged '{source_name}' into '{target_name}'"
@@ -1133,50 +1297,56 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
         # history["order_items"] / ["order_item_addons"], so without these rows
         # an undo would revert menu_item_variants while leaving order_items and
         # order_item_addons pointing at the target.
-        cursor.execute(
-            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = ?",
-            (str(order_item_id),),
-        )
-        order_items_history = [
-            {
-                "order_item_id": str(order_item_id),
-                "old_menu_item_id": row[0],
-                "old_variant_id": row[1],
-                "new_menu_item_id": str(new_menu_item_id),
-                "new_variant_id": new_variant_id,
-            }
-            for row in cursor.fetchall()
-        ]
-        cursor.execute(
-            "SELECT order_item_addon_id, menu_item_id, variant_id FROM order_item_addons WHERE order_item_id = ?",
-            (str(order_item_id),),
-        )
-        order_item_addons_history = [
-            {
-                "order_item_addon_id": row[0],
-                "old_menu_item_id": row[1],
-                "old_variant_id": row[2],
-                "new_menu_item_id": str(new_menu_item_id),
-                "new_variant_id": new_variant_id,
-            }
-            for row in cursor.fetchall()
-        ]
+        # order_item_id here is the assignment key (POS itemid or generated
+        # name hash), not a local PK: resolve it to local rows by each row's
+        # OWN identity. Addon rows attached to a parent line are separate
+        # products and must never be moved by parent membership.
+        order_pks = local_order_item_pks_for_assignment_key(conn, str(order_item_id))
+        addon_pks = local_addon_pks_for_assignment_key(conn, str(order_item_id))
 
-        cursor.execute(
-            """
-            UPDATE order_items
-            SET menu_item_id = ?, variant_id = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE order_item_id = ?
-            """,
-            (str(new_menu_item_id), new_variant_id, str(order_item_id)),
-        )
-        cursor.execute(
-            """
-            UPDATE order_item_addons
-            SET menu_item_id = ?, variant_id = ?
-            WHERE order_item_id = ?
-            """,
-            (str(new_menu_item_id), new_variant_id, str(order_item_id)),
+        order_items_history = []
+        if order_pks:
+            placeholders = ", ".join("?" for _ in order_pks)
+            cursor.execute(
+                f"SELECT order_item_id, menu_item_id, variant_id FROM order_items "
+                f"WHERE order_item_id IN ({placeholders})",
+                order_pks,
+            )
+            order_items_history = [
+                {
+                    "order_item_id": row[0],
+                    "old_menu_item_id": row[1],
+                    "old_variant_id": row[2],
+                    "new_menu_item_id": str(new_menu_item_id),
+                    "new_variant_id": new_variant_id,
+                }
+                for row in cursor.fetchall()
+            ]
+        order_item_addons_history = []
+        if addon_pks:
+            placeholders = ", ".join("?" for _ in addon_pks)
+            cursor.execute(
+                f"SELECT order_item_addon_id, menu_item_id, variant_id FROM order_item_addons "
+                f"WHERE order_item_addon_id IN ({placeholders})",
+                addon_pks,
+            )
+            order_item_addons_history = [
+                {
+                    "order_item_addon_id": row[0],
+                    "old_menu_item_id": row[1],
+                    "old_variant_id": row[2],
+                    "new_menu_item_id": str(new_menu_item_id),
+                    "new_variant_id": new_variant_id,
+                }
+                for row in cursor.fetchall()
+            ]
+
+        update_local_order_rows_for_assignment_key(
+            conn,
+            str(order_item_id),
+            menu_item_id=str(new_menu_item_id),
+            variant_id=new_variant_id,
+            variant_specified=True,
         )
 
         if prev_menu_item_id and prev_menu_item_id != str(new_menu_item_id):
@@ -1228,16 +1398,13 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
         from src.core.menu_merge_sync_events import (
             EVENT_TYPE_APPLIED,
             build_menu_merge_event_payload,
-            record_menu_merge_applied_event,
         )
         from src.core.menu_mapping_verification_sync_events import (
             build_menu_mapping_verification_event_payloads,
-            record_menu_mapping_verification_events_chunked,
         )
         from src.core.menu_mutation_commit import (
             MUTATION_TYPE_ORDER_ITEM_REMAP,
             build_plan,
-            strict_mode_active,
         )
 
         verify_emit_rows = [
@@ -1249,43 +1416,26 @@ def remap_order_item_cluster(conn, order_item_id: str, new_menu_item_id: str, ne
             }
         ]
 
-        if strict_mode_active(conn):
-            event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
-            if not event:
-                conn.rollback()
-                return {"status": "error", "message": "Failed to build remap event"}
-            plan = build_plan(
-                mutation_type=MUTATION_TYPE_ORDER_ITEM_REMAP,
-                event=event,
-                verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
-                catalog_delta=_catalog_delta_for_strict_commit(
-                    cursor,
-                    item_ids=[str(new_menu_item_id), source_menu_item_id],
-                    variant_ids=[new_variant_id] if new_variant_id else [],
-                ),
-                order_item_ids=[str(order_item_id)],
-            )
-            return _commit_strict_plan(
-                conn,
-                plan,
-                success_message="Order item remapped successfully",
-            )
-
-        record_menu_merge_applied_event(conn, merge_id)
-
-        # The mapping (menu_item_id / variant_id) rides the merge stream, but
-        # the verification flag rides the verification stream, its sole owner.
-        # Merge apply seeds is_verified only when creating a row, never on an
-        # existing one, so emit a verification event to carry is_verified=1 to
-        # peers whose assignment row already exists.
-        record_menu_mapping_verification_events_chunked(conn, verify_emit_rows)
-
-        conn.commit()
-
-        # 3. Update Backups
-        export_to_backups(conn)
-
-        return {"status": "success", "message": "Order item remapped successfully", "merge_id": merge_id}
+        event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
+        if not event:
+            conn.rollback()
+            return {"status": "error", "message": "Failed to build remap event"}
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_ORDER_ITEM_REMAP,
+            event=event,
+            verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
+            catalog_delta=_catalog_delta_for_strict_commit(
+                cursor,
+                item_ids=[str(new_menu_item_id), source_menu_item_id],
+                variant_ids=[new_variant_id] if new_variant_id else [],
+            ),
+            order_item_ids=[str(order_item_id)],
+        )
+        return _commit_strict_plan(
+            conn,
+            plan,
+            success_message="Order item remapped successfully",
+        )
     except Exception as e:
         conn.rollback()
         return {"status": "error", "message": str(e)}
@@ -1409,14 +1559,6 @@ def update_menu_variant_mapping(
         cleared_caches = _clear_volume_forecast_cache(cursor)
 
         conn.commit()
-        export_to_backups(conn)
-
-        try:
-            from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models
-
-            delete_models()
-        except Exception as e:
-            model_cleanup_error = str(e)
 
         message = (
             f"Updated '{menu_item_name}' from variant '{current_variant_name}' "
@@ -1453,7 +1595,6 @@ def resolve_menu_item_variant(
     target_variant_id: str = None,
     new_variant_name: str = None,
     emit_sync_event: bool = True,
-    emit_mapping_verification_events: bool = True,
 ) -> Dict[str, Any]:
     """Resolve a single unresolved menu item + variant pair."""
     source_menu_item_id = str(source_menu_item_id or "").strip()
@@ -1739,16 +1880,13 @@ def resolve_menu_item_variant(
             from src.core.menu_mutation_commit import (
                 MUTATION_TYPE_RESOLUTION_VARIANT,
                 build_plan,
-                strict_mode_active,
             )
             from src.core.menu_merge_sync_events import (
                 EVENT_TYPE_APPLIED,
                 build_menu_merge_event_payload,
-                record_menu_merge_applied_event,
             )
             from src.core.menu_mapping_verification_sync_events import (
                 build_menu_mapping_verification_event_payloads,
-                record_menu_mapping_verification_events_chunked,
             )
 
             verify_emit_rows = [
@@ -1761,84 +1899,65 @@ def resolve_menu_item_variant(
                 for row in mapping_rows
             ]
 
-            if strict_mode_active(conn):
-                event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
-                if not event:
-                    conn.rollback()
-                    return {"status": "error", "message": "Failed to build resolution event"}
+            event = build_menu_merge_event_payload(conn, merge_id, EVENT_TYPE_APPLIED)
+            if not event:
+                conn.rollback()
+                return {"status": "error", "message": "Failed to build resolution event"}
 
-                catalog_delta = _catalog_delta_for_strict_commit(
-                    cursor,
-                    item_ids=[resolved_target_id, source_menu_item_id],
-                    variant_ids=[
-                        resolved_target_variant_id,
-                        source_variant_db_id,
-                        source_variant_key,
-                    ],
-                )
-
-                plan = build_plan(
-                    mutation_type=MUTATION_TYPE_RESOLUTION_VARIANT,
-                    event=event,
-                    verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
-                    catalog_delta=catalog_delta,
-                    order_item_ids=[str(row["order_item_id"]) for row in mapping_rows],
-                )
-                return _commit_strict_plan(
-                    conn,
-                    plan,
-                    success_message=(
-                        f"Verified '{source_item[1]}' ({source_variant['variant_name']}) as a resolved menu item + variant pair"
-                        if resolved_target_id == source_menu_item_id and resolved_target_variant_id == source_variant_db_id
-                        else (
-                            f"Resolved '{source_item[1]}' ({source_variant['variant_name']}) "
-                            f"into '{target_name}' ({target_variant_name})"
-                        )
-                    ),
-                    success_extra={
-                        "stats": {
-                            "mapping_rows_updated": len(mapping_rows),
-                            "order_items_updated": len(order_item_rows),
-                            "order_item_addons_updated": len(addon_rows),
-                            "suggestion_refs_updated": len(suggestion_rows),
-                            "item_forecast_cache_cleared": cleared_item_caches["item_forecast_cache"],
-                            "item_backtest_cache_cleared": cleared_item_caches["item_backtest_cache"],
-                            "volume_forecast_cache_cleared": (
-                                cleared_item_caches["volume_forecast_cache"] + cleared_volume_caches["volume_forecast_cache"]
-                            ),
-                            "volume_backtest_cache_cleared": (
-                                cleared_item_caches["volume_backtest_cache"] + cleared_volume_caches["volume_backtest_cache"]
-                            ),
-                        }
-                    },
-                    clear_item_models=clear_item_models,
-                    clear_volume_models=clear_volume_models,
-                )
-
-            record_menu_merge_applied_event(conn, merge_id)
-
-        if emit_mapping_verification_events and mapping_rows:
-            from src.core.menu_mapping_verification_sync_events import (
-                record_menu_mapping_verification_events_chunked,
+            catalog_delta = _catalog_delta_for_strict_commit(
+                cursor,
+                item_ids=[resolved_target_id, source_menu_item_id],
+                variant_ids=[
+                    resolved_target_variant_id,
+                    source_variant_db_id,
+                    source_variant_key,
+                ],
             )
 
-            verify_emit_rows = [
-                {
-                    "order_item_id": row["order_item_id"],
-                    "menu_item_id": row["new_menu_item_id"],
-                    "variant_id": row["new_variant_id"],
-                    "is_verified": row.get("new_is_verified", 1),
-                }
-                for row in mapping_rows
-            ]
-            record_menu_mapping_verification_events_chunked(conn, verify_emit_rows)
+            plan = build_plan(
+                mutation_type=MUTATION_TYPE_RESOLUTION_VARIANT,
+                event=event,
+                verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
+                catalog_delta=catalog_delta,
+                order_item_ids=[str(row["order_item_id"]) for row in mapping_rows],
+            )
+            return _commit_strict_plan(
+                conn,
+                plan,
+                success_message=(
+                    f"Verified '{source_item[1]}' ({source_variant['variant_name']}) as a resolved menu item + variant pair"
+                    if resolved_target_id == source_menu_item_id and resolved_target_variant_id == source_variant_db_id
+                    else (
+                        f"Resolved '{source_item[1]}' ({source_variant['variant_name']}) "
+                        f"into '{target_name}' ({target_variant_name})"
+                    )
+                ),
+                success_extra={
+                    "stats": {
+                        "mapping_rows_updated": len(mapping_rows),
+                        "order_items_updated": len(order_item_rows),
+                        "order_item_addons_updated": len(addon_rows),
+                        "suggestion_refs_updated": len(suggestion_rows),
+                        "item_forecast_cache_cleared": cleared_item_caches["item_forecast_cache"],
+                        "item_backtest_cache_cleared": cleared_item_caches["item_backtest_cache"],
+                        "volume_forecast_cache_cleared": (
+                            cleared_item_caches["volume_forecast_cache"] + cleared_volume_caches["volume_forecast_cache"]
+                        ),
+                        "volume_backtest_cache_cleared": (
+                            cleared_item_caches["volume_backtest_cache"] + cleared_volume_caches["volume_backtest_cache"]
+                        ),
+                    }
+                },
+                clear_item_models=clear_item_models,
+                clear_volume_models=clear_volume_models,
+            )
 
+        # Only the remote-replay applier reaches here (emit_sync_event=False);
+        # human edits always return through _commit_strict_plan above. Replay
+        # never re-emits verification events — the verification stream already
+        # carries the authoritative flags.
+        rebuild_itemcode_mappings_best_effort(conn, cursor=cursor)
         conn.commit()
-        export_to_backups(conn)
-        if emit_sync_event:
-            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
-
-            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(
             clear_item_models=clear_item_models,
             clear_volume_models=clear_volume_models,
@@ -1880,7 +1999,7 @@ def resolve_menu_item_variant(
         cursor.close()
 
 
-def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> Dict[str, Any]:
+def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str, emit_sync_event: bool = True) -> Dict[str, Any]:
     """
     Handle resolution where an item is renamed.
     This effectively means:
@@ -1896,11 +2015,11 @@ def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> D
     created_target = False
     try:
         target_id = generate_deterministic_id(new_name, new_type)
-        
+
         # Check existence
         cursor.execute("SELECT menu_item_id FROM menu_items WHERE menu_item_id = ?", (target_id,))
         exists = cursor.fetchone()
-        
+
         if not exists:
             # Create Target (uncommitted until merge succeeds)
             cursor.execute("""
@@ -1909,19 +2028,124 @@ def resolve_item_rename(conn, source_id: str, new_name: str, new_type: str) -> D
             """, (target_id, new_name, new_type))
             ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
             created_target = True
-            
+
         # Merge Source -> Target
         # Note: This handles the full merge logic including deletions
-        result = merge_menu_items(conn, source_id, target_id)
+        result = merge_menu_items(conn, source_id, target_id, emit_sync_event=emit_sync_event)
         if created_target and result.get("status") != "success":
             conn.rollback()
         return result
-        
+
     except Exception as e:
         conn.rollback()
         return {"status": "error", "message": f"Resolution failed: {e}"}
     finally:
         cursor.close()
+
+
+def retype_menu_item(conn, menu_item_id: str, new_type: str, emit_sync_event: bool = True) -> Dict[str, Any]:
+    """
+    Change a menu item's type while keeping its name.
+
+    Because menu_item_id is deterministic over (name, type), a type change is
+    a new catalog identity: the item is merged into the (name, new_type) item
+    — created verified if it does not exist yet — so every variant mapping,
+    order item, addon row, forecast cache, and sync event follows the same
+    path as a normal merge (undoable via merge history, strict-mode commit
+    when active). If an item with the same name and the target type already
+    exists, their histories are consolidated.
+
+    Exception: if the item's current ID already equals hash(name, new_type)
+    — the type label drifted in place during an earlier edit — the label is
+    flipped back in place with no relink or merge.
+    """
+    menu_item_id = str(menu_item_id or "").strip()
+    normalized_new_type = (new_type or "").strip()
+    if not menu_item_id or not normalized_new_type:
+        return {"status": "error", "message": "Menu item and new type are required"}
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT name, type FROM menu_items WHERE menu_item_id = ?",
+            (menu_item_id,),
+        )
+        item = cursor.fetchone()
+    finally:
+        cursor.close()
+
+    if not item:
+        return {"status": "error", "message": "Menu item was not found"}
+
+    item_name = item[0]
+    current_type = item[1]
+    if normalized_new_type == (current_type or "").strip():
+        return {"status": "error", "message": "New type matches the current type. Choose a different target type."}
+
+    success_message = f"Changed type of '{item_name}' from '{current_type}' to '{normalized_new_type}'"
+
+    if generate_deterministic_id(item_name, normalized_new_type) == menu_item_id:
+        # The item's ID already encodes (name, new_type): an earlier edit
+        # changed the type label in place without reissuing the ID. Flip the
+        # label back in place — every mapping already points at this ID, so
+        # there is nothing to relink and no merge to record.
+        blocked = _strict_mode_edit_blocked_response(conn, emit_sync_event=emit_sync_event)
+        if blocked:
+            return blocked
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE menu_items
+                SET type = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE menu_item_id = ?
+                """,
+                (normalized_new_type, menu_item_id),
+            )
+            if emit_sync_event:
+                from src.core.menu_mutation_commit import (
+                    MUTATION_TYPE_CATALOG_UPDATE,
+                    build_plan,
+                )
+
+                plan = build_plan(
+                    mutation_type=MUTATION_TYPE_CATALOG_UPDATE,
+                    catalog_delta=_catalog_delta_for_strict_commit(
+                        cursor,
+                        item_ids=[menu_item_id],
+                    ),
+                )
+                return _commit_strict_plan(
+                    conn,
+                    plan,
+                    success_message=success_message,
+                )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            return {"status": "error", "message": f"Type update failed: {e}"}
+        finally:
+            cursor.close()
+        return {"status": "success", "message": success_message}
+
+    result = resolve_item_rename(
+        conn,
+        menu_item_id,
+        item_name,
+        normalized_new_type,
+        emit_sync_event=emit_sync_event,
+    )
+    if result.get("status") == "success":
+        message = success_message
+        # Keep the model-cleanup warning the merge path may have appended.
+        prior_message = str(result.get("message") or "")
+        cleanup_marker = ". Cleared affected caches but could not delete all local models:"
+        marker_index = prior_message.find(cleanup_marker)
+        if marker_index != -1:
+            message += prior_message[marker_index:]
+        result["message"] = message
+    return result
 
 def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, Any]:
     """
@@ -2038,19 +2262,19 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                     WHERE order_item_id {in_clause}
                 """, [source_id] + params)
                 
-                # 4. Relink Order Items (affected_ids are menu_item_variants.order_item_id; match order_items.order_item_id)
-                cursor.execute(f"""
-                    UPDATE order_items 
-                    SET menu_item_id = ? 
-                    WHERE order_item_id {in_clause}
-                """, [source_id] + params)
-
-                # 5. Relink Order Item Addons (same order_item_id set)
-                cursor.execute(f"""
-                    UPDATE order_item_addons 
-                    SET menu_item_id = ? 
-                    WHERE order_item_id {in_clause}
-                """, [source_id] + params)
+                # 4/5. Relink local order rows. affected_ids are assignment
+                # keys (POS itemid or generated name hash), not local PKs:
+                # resolve each to order_items / order_item_addons rows by the
+                # row's OWN identity — addon rows are separate products and
+                # must never be moved via parent-line membership.
+                key_index = AssignmentKeyIndex(conn)
+                for affected_key in affected_ids:
+                    update_local_order_rows_for_assignment_key(
+                        conn,
+                        affected_key,
+                        menu_item_id=source_id,
+                        key_index=key_index,
+                    )
         
         # 6. Recalculate Stats (Filtered by Success status)
         for mid in [target_id, source_id]:
@@ -2084,17 +2308,14 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
             from src.core.menu_mutation_commit import (
                 MUTATION_TYPE_MENU_MERGE_UNDONE,
                 build_plan,
-                strict_mode_active,
             )
             from src.core.menu_merge_sync import lookup_applied_remote_event_id
             from src.core.menu_merge_sync_events import (
                 EVENT_TYPE_UNDONE,
                 build_menu_merge_event_payload,
-                record_menu_merge_undone_event,
             )
             from src.core.menu_mapping_verification_sync_events import (
                 build_menu_mapping_verification_event_payloads,
-                record_menu_mapping_verification_events_chunked,
             )
 
             undo_verify_rows = []
@@ -2115,96 +2336,54 @@ def undo_merge(conn, merge_id: int, emit_sync_event: bool = True) -> Dict[str, A
                         }
                     )
 
-            if strict_mode_active(conn):
-                applied_remote_id = lookup_applied_remote_event_id(conn, merge_id)
-                event = build_menu_merge_event_payload(
-                    conn,
-                    merge_id,
-                    EVENT_TYPE_UNDONE,
-                    reverts_remote_event_id=applied_remote_id,
-                    occurred_at=datetime.now(timezone.utc).isoformat(),
-                )
-                if not event:
-                    conn.rollback()
-                    return {"status": "error", "message": "Failed to build undo event"}
-                if applied_remote_id:
-                    event["reverts_remote_event_id"] = applied_remote_id
-                order_item_ids: List[str] = []
-                if history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
-                    order_item_ids = [row["order_item_id"] for row in undo_verify_rows]
-                elif history_kind == "variant_merge_v1":
-                    order_item_ids = [
-                        str(row.get("order_item_id"))
-                        for row in history_payload.get("mapping_rows", [])
-                        if isinstance(row, dict) and row.get("order_item_id")
-                    ]
-                elif isinstance(history_payload, dict):
-                    order_item_ids = [str(oid) for oid in history_payload.get("affected_order_item_ids", [])]
-                elif isinstance(history_payload, list):
-                    order_item_ids = [str(oid) for oid in history_payload]
-                plan = build_plan(
-                    mutation_type=MUTATION_TYPE_MENU_MERGE_UNDONE,
-                    event=event,
-                    verification_events=build_menu_mapping_verification_event_payloads(conn, undo_verify_rows),
-                    order_item_ids=order_item_ids,
-                )
-                return _commit_strict_plan(
-                    conn,
-                    plan,
-                    success_message=f"Undid merge of '{history_dict['source_name']}' into target",
-                    clear_item_models=clear_item_models,
-                    clear_volume_models=clear_volume_models,
-                )
-
-            record_menu_merge_undone_event(
+            applied_remote_id = lookup_applied_remote_event_id(conn, merge_id)
+            event = build_menu_merge_event_payload(
                 conn,
-                history_dict,
+                merge_id,
+                EVENT_TYPE_UNDONE,
+                reverts_remote_event_id=applied_remote_id,
                 occurred_at=datetime.now(timezone.utc).isoformat(),
             )
-
-        # Undo of a flag-deciding operation (resolution / remap) must restore
-        # is_verified on peers too. That flag is owned by the verification
-        # stream — the undone merge event only reasserts the mapping, and merge
-        # apply never rewrites is_verified on an existing row — so emit a
-        # verification event carrying each row's restored (old) flag.
-        if emit_sync_event and history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
-            from src.core.menu_mapping_verification_sync_events import (
-                record_menu_mapping_verification_events_chunked,
+            if not event:
+                conn.rollback()
+                return {"status": "error", "message": "Failed to build undo event"}
+            if applied_remote_id:
+                event["reverts_remote_event_id"] = applied_remote_id
+            order_item_ids: List[str] = []
+            if history_kind in ("resolution_variant_v1", "order_item_remap_v1"):
+                order_item_ids = [row["order_item_id"] for row in undo_verify_rows]
+            elif history_kind == "variant_merge_v1":
+                order_item_ids = [
+                    str(row.get("order_item_id"))
+                    for row in history_payload.get("mapping_rows", [])
+                    if isinstance(row, dict) and row.get("order_item_id")
+                ]
+            elif isinstance(history_payload, dict):
+                order_item_ids = [str(oid) for oid in history_payload.get("affected_order_item_ids", [])]
+            elif isinstance(history_payload, list):
+                order_item_ids = [str(oid) for oid in history_payload]
+            plan = build_plan(
+                mutation_type=MUTATION_TYPE_MENU_MERGE_UNDONE,
+                event=event,
+                verification_events=build_menu_mapping_verification_event_payloads(conn, undo_verify_rows),
+                order_item_ids=order_item_ids,
             )
-
-            undo_verify_rows = []
-            for mapping_row in (history_payload.get("mapping_rows", []) if isinstance(history_payload, dict) else []):
-                if not isinstance(mapping_row, dict):
-                    continue
-                oid = str(mapping_row.get("order_item_id") or "").strip()
-                old_menu_item_id = str(mapping_row.get("old_menu_item_id") or source_id or "").strip()
-                if not oid or not old_menu_item_id:
-                    continue
-                undo_verify_rows.append(
-                    {
-                        "order_item_id": oid,
-                        "menu_item_id": old_menu_item_id,
-                        "variant_id": mapping_row.get("old_variant_id"),
-                        "is_verified": int(mapping_row.get("old_is_verified", 0) or 0),
-                    }
-                )
-            if undo_verify_rows:
-                record_menu_mapping_verification_events_chunked(conn, undo_verify_rows)
+            return _commit_strict_plan(
+                conn,
+                plan,
+                success_message=f"Undid merge of '{history_dict['source_name']}' into target",
+                clear_item_models=clear_item_models,
+                clear_volume_models=clear_volume_models,
+            )
 
         ensure_menu_item_has_variant_mapping(conn, source_id, cursor=cursor)
         ensure_menu_item_has_variant_mapping(conn, target_id, cursor=cursor)
 
         # 7. Delete History
         cursor.execute("DELETE FROM merge_history WHERE merge_id = ?", (merge_id,))
-        
+
+        rebuild_itemcode_mappings_best_effort(conn, cursor=cursor)
         conn.commit()
-
-        # 8. Update Backups
-        export_to_backups(conn)
-        if emit_sync_event:
-            from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
-
-            nudge_menu_merge_push_async(conn)
         model_cleanup_error = _clear_impacted_models(
             clear_item_models=clear_item_models,
             clear_volume_models=clear_volume_models,
@@ -2303,26 +2482,22 @@ def verify_item(
             cursor.execute("UPDATE menu_items SET is_verified = 1 WHERE menu_item_id = ?", (item_id,))
 
         if new_variant_id and emit_mapping_verification_events:
-            from src.core.menu_mutation_commit import strict_mode_active
-
-            if strict_mode_active(conn):
-                if not source_variants:
-                    conn.rollback()
-                    return {
-                        "status": "error",
-                        "message": "No source variant mapping was found for this item.",
-                    }
-                return resolve_menu_item_variant(
-                    conn,
-                    item_id,
-                    source_variants[0]["variant_id"],
-                    target_menu_item_id=item_id,
-                    new_name=new_name,
-                    new_type=new_type,
-                    target_variant_id=new_variant_id,
-                    emit_sync_event=True,
-                    emit_mapping_verification_events=True,
-                )
+            if not source_variants:
+                conn.rollback()
+                return {
+                    "status": "error",
+                    "message": "No source variant mapping was found for this item.",
+                }
+            return resolve_menu_item_variant(
+                conn,
+                item_id,
+                source_variants[0]["variant_id"],
+                target_menu_item_id=item_id,
+                new_name=new_name,
+                new_type=new_type,
+                target_variant_id=new_variant_id,
+                emit_sync_event=True,
+            )
 
         if new_variant_id:
             _reassign_menu_item_variant(cursor, item_id, new_variant_id)
@@ -2331,11 +2506,9 @@ def verify_item(
             from src.core.menu_mutation_commit import (
                 MUTATION_TYPE_VERIFY,
                 build_plan,
-                strict_mode_active,
             )
             from src.core.menu_mapping_verification_sync_events import (
                 build_menu_mapping_verification_event_payloads,
-                record_menu_mapping_verification_events_chunked,
             )
 
             cursor.execute(
@@ -2348,53 +2521,11 @@ def verify_item(
             )
             mapping_rows = cursor.fetchall()
 
-            if strict_mode_active(conn):
-                # Emit is_verified=1 for every mapping under this item: the server
-                # materializes the events and the accepted response applies the
-                # same rows locally, so local and server stay in lockstep. Never
-                # emit is_verified=0 from verify — that would reopen mappings
-                # verified on another install.
-                verify_emit_rows = [
-                    {
-                        "order_item_id": str(r[0]),
-                        "menu_item_id": str(r[1]),
-                        "variant_id": r[2],
-                        "is_verified": 1,
-                    }
-                    for r in mapping_rows
-                ]
-                if not verify_emit_rows:
-                    # Catalog-only verify: no assignment rows to commit server-side.
-                    conn.commit()
-                    export_to_backups(conn)
-                    return {"status": "success", "message": "Item verified successfully"}
-                verify_variant_ids = [new_variant_id] if new_variant_id else []
-                if source_variants:
-                    verify_variant_ids.extend(
-                        str(variant["variant_id"])
-                        for variant in source_variants
-                        if variant.get("variant_id")
-                    )
-                plan = build_plan(
-                    mutation_type=MUTATION_TYPE_VERIFY,
-                    verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
-                    catalog_delta=_catalog_delta_for_strict_commit(
-                        cursor,
-                        item_ids=[item_id],
-                        variant_ids=verify_variant_ids,
-                    ),
-                    order_item_ids=[row["order_item_id"] for row in verify_emit_rows],
-                )
-                return _commit_strict_plan(
-                    conn,
-                    plan,
-                    success_message="Item verified successfully",
-                )
-
-            # Legacy outbox path: only echo mappings already verified locally.
-            # The outbox never updates local rows, so emitting is_verified=1 for
-            # a locally-unverified mapping would diverge this install from the
-            # server and its peers.
+            # Emit is_verified=1 for every mapping under this item: the server
+            # materializes the events and the accepted response applies the
+            # same rows locally, so local and server stay in lockstep. Never
+            # emit is_verified=0 from verify — that would reopen mappings
+            # verified on another install.
             verify_emit_rows = [
                 {
                     "order_item_id": str(r[0]),
@@ -2403,12 +2534,49 @@ def verify_item(
                     "is_verified": 1,
                 }
                 for r in mapping_rows
-                if r[3]
             ]
-            record_menu_mapping_verification_events_chunked(conn, verify_emit_rows)
+            if not verify_emit_rows:
+                from src.core.menu_mutation_commit import (
+                    MUTATION_TYPE_CATALOG_UPDATE,
+                    build_plan,
+                )
+
+                plan = build_plan(
+                    mutation_type=MUTATION_TYPE_CATALOG_UPDATE,
+                    catalog_delta=_catalog_delta_for_strict_commit(
+                        cursor,
+                        item_ids=[item_id],
+                    ),
+                )
+                return _commit_strict_plan(
+                    conn,
+                    plan,
+                    success_message="Item verified successfully",
+                )
+            verify_variant_ids = [new_variant_id] if new_variant_id else []
+            if source_variants:
+                verify_variant_ids.extend(
+                    str(variant["variant_id"])
+                    for variant in source_variants
+                    if variant.get("variant_id")
+                )
+            plan = build_plan(
+                mutation_type=MUTATION_TYPE_VERIFY,
+                verification_events=build_menu_mapping_verification_event_payloads(conn, verify_emit_rows),
+                catalog_delta=_catalog_delta_for_strict_commit(
+                    cursor,
+                    item_ids=[item_id],
+                    variant_ids=verify_variant_ids,
+                ),
+                order_item_ids=[row["order_item_id"] for row in verify_emit_rows],
+            )
+            return _commit_strict_plan(
+                conn,
+                plan,
+                success_message="Item verified successfully",
+            )
 
         conn.commit()
-        export_to_backups(conn)
         return {"status": "success", "message": "Item verified successfully"}
     except Exception as e:
         conn.rollback()

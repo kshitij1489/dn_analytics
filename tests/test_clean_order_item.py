@@ -22,6 +22,8 @@ class CleanOrderItemTests(unittest.TestCase):
             CREATE TABLE variants (
                 variant_id TEXT PRIMARY KEY,
                 variant_name TEXT NOT NULL,
+                unit TEXT,
+                value DECIMAL(10,2),
                 is_verified BOOLEAN DEFAULT 0
             );
 
@@ -69,12 +71,55 @@ class CleanOrderItemTests(unittest.TestCase):
             },
         )
 
+    def test_standalone_known_size_checks_are_bounded(self) -> None:
+        cases = [
+            ("Chocolate Ice Cream 1160gm", "UNKNOWN_1160GMS"),
+            ("Chocolate Ice Cream 1400gm", "UNKNOWN_1400GMS"),
+            ("Chocolate Ice Cream 11kg", "UNKNOWN_11KG"),
+        ]
+
+        for raw_name, expected_variant in cases:
+            with self.subTest(raw_name=raw_name):
+                result = clean_order_item_name(raw_name)
+
+                self.assertEqual(result["name"], "Chocolate Ice Cream")
+                self.assertEqual(result["variant"], expected_variant)
+
+    def test_standalone_known_sizes_still_resolve(self) -> None:
+        cases = [
+            ("Chocolate Ice Cream 160gm", "MINI_TUB_160GMS"),
+            ("Chocolate Ice Cream 400gm", "400GMS"),
+            ("Chocolate Ice Cream 1kg", "1KG"),
+        ]
+
+        for raw_name, expected_variant in cases:
+            with self.subTest(raw_name=raw_name):
+                result = clean_order_item_name(raw_name)
+
+                self.assertEqual(result["name"], "Chocolate Ice Cream")
+                self.assertEqual(result["variant"], expected_variant)
+
+    def test_mini_indulgence_respects_unexpected_explicit_size(self) -> None:
+        cases = [
+            ("Chocolate Ice Cream (Mini Indulgence)", "MINI_TUB_200ML"),
+            ("Chocolate Ice Cream (Mini Indulgence (200ml))", "MINI_TUB_200ML"),
+            ("Chocolate Ice Cream (Mini Indulgence (250ml))", "UNKNOWN_250ML"),
+            ("Chocolate Ice Cream (Mini Indulgence (1200ml))", "UNKNOWN_1200ML"),
+        ]
+
+        for raw_name, expected_variant in cases:
+            with self.subTest(raw_name=raw_name):
+                result = clean_order_item_name(raw_name)
+
+                self.assertEqual(result["name"], "Chocolate Ice Cream")
+                self.assertEqual(result["variant"], expected_variant)
+
     def test_cluster_add_reuses_existing_butter_waffle_cones_cluster_for_bracketed_label(self) -> None:
         conn = self._seed_butter_waffle_cones_target()
         try:
             target_menu_item_id = generate_deterministic_id("Butter Waffle Cones", "Extra")
             cluster = OrderItemCluster(conn)
-            menu_item_id, order_item_id, variant_id, item_type = cluster.add(
+            menu_item_id, order_item_id, variant_id, item_type, *_ = cluster.add(
                 "Butter Waffle Cone [2 Pieces]",
                 "NEW_BRACKET_2PC_ID",
             )
@@ -104,7 +149,7 @@ class CleanOrderItemTests(unittest.TestCase):
             conn = self._seed_butter_waffle_cones_target()
             try:
                 cluster = OrderItemCluster(conn)
-                menu_item_id, resolved_order_item_id, variant_id, item_type = cluster.add(
+                menu_item_id, resolved_order_item_id, variant_id, item_type, *_ = cluster.add(
                     "Waffle Cone",
                     order_item_id,
                 )

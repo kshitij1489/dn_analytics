@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "menu_group_id": "group-desserts",
+  "catalog_revision": 7,
+  "mutation_revision": 7,
+  "next_cursor": "snapshot-7",
+  "event_cursor": "event-7",
+  "has_more": false,
+  "coverage": {
+    "linked": 2,
+    "total": 2
+  },
+  "items": [
+    {
+      "global_menu_item_id": "global-vanilla",
+      "canonical_name": "Eggless Vanilla Ice Cream",
+      "canonical_type": "Ice Cream",
+      "is_verified": true,
+      "lifecycle_state": "active",
+      "server_revision": 7
+    }
+  ],
+  "variants": [
+    {
+      "global_variant_id": "global-regular",
+      "canonical_name": "Regular Tub",
+      "unit": "GMS",
+      "value": 300,
+      "is_verified": true,
+      "lifecycle_state": "active",
+      "server_revision": 7
+    }
+  ],
+  "links": {
+    "menu_items": [],
+    "variants": []
+  },
+  "redirects": [],
+  "mapping_rules": [
+    {
+      "rule_id": "rule-rest-1-pos",
+      "locator_scope": "restaurant",
+      "restaurant_id": "rest-1",
+      "locator_kind": "pos-item",
+      "locator_value": "1001",
+      "normalized_locator": "1001",
+      "target_global_menu_item_id": "global-vanilla",
+      "target_global_variant_id": "global-regular",
+      "provenance": "reviewed-pos",
+      "is_verified": true,
+      "server_revision": 7
+    },
+    {
+      "rule_id": "rule-rest-2-pos",
+      "locator_scope": "restaurant",
+      "restaurant_id": "rest-2",
+      "locator_kind": "pos-item",
+      "locator_value": "8442",
+      "normalized_locator": "8442",
+      "target_global_menu_item_id": "global-vanilla",
+      "target_global_variant_id": "global-regular",
+      "provenance": "reviewed-pos",
+      "is_verified": true,
+      "server_revision": 7
+    },
+    {
+      "rule_id": "rule-group-alias",
+      "locator_scope": "group",
+      "restaurant_id": null,
+      "locator_kind": "alias",
+      "locator_value": "vanilla ice cream",
+      "normalized_locator": "vanilla ice cream",
+      "target_global_menu_item_id": "global-vanilla",
+      "target_global_variant_id": "global-regular",
+      "provenance": "approved-alias",
+      "is_verified": true,
+      "server_revision": 7
+    }
+  ]
+}

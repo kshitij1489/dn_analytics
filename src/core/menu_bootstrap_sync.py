@@ -1,20 +1,17 @@
 """
 Menu bootstrap cloud pull/apply helpers.
 
-This consumes the latest menu bootstrap snapshot from Dachnona, writes the same
-backup files used by local export/import flows, reuses perform_seeding(), and
-optionally relinks historical order_items from the seeded snapshot mappings.
+This consumes the latest menu bootstrap snapshot from Dachnona, seeds the
+catalog directly from the in-memory payload, and optionally relinks historical
+order_items from the seeded snapshot mappings.
 """
 
-import json
 import os
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-from scripts.seed_from_backups import perform_seeding
 from src.core.config.cloud_sync_config import get_cloud_sync_config
-from src.core.sync_identity import apply_menu_scope_state, extract_menu_scope_state
-from src.core.utils.path_helper import get_resource_path
+from src.core.menu_catalog_seed import seed_catalog
+from src.core.sync_identity import extract_menu_scope_state
 
 
 # Since Phase C4 (sync conflict plan) the routine pull only seeds the catalog:
@@ -93,19 +90,6 @@ def _normalize_snapshot_payload(data: Any) -> Dict[str, Any]:
         "cluster_state": cluster_state,
         "metadata": metadata,
     }
-
-
-def _write_menu_bootstrap_backups(id_maps: Dict[str, Any], cluster_state: Dict[str, Any]) -> None:
-    data_dir = Path(get_resource_path("data"))
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    id_maps_path = data_dir / "id_maps_backup.json"
-    cluster_state_path = data_dir / "cluster_state_backup.json"
-
-    with open(id_maps_path, "w", encoding="utf-8") as handle:
-        json.dump(id_maps, handle, indent=2, sort_keys=True)
-    with open(cluster_state_path, "w", encoding="utf-8") as handle:
-        json.dump(cluster_state, handle, indent=2, sort_keys=True)
 
 
 def _extract_snapshot_assignments(cluster_state: Dict[str, Any]) -> Dict[int, Dict[str, Optional[str]]]:
@@ -192,19 +176,20 @@ def _relink_order_items_from_snapshot(conn, assignments: Dict[int, Dict[str, Opt
 
 
 def fetch_latest_menu_bootstrap_snapshot(
+    conn,
     endpoint: str,
     auth: Optional[str] = None,
 ) -> Dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if auth:
-        headers["Authorization"] = f"Bearer {auth}"
+    from src.core.central_api import response_error_text, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="sync", credential=auth)
 
     try:
         import requests
 
         response = requests.get(endpoint, headers=headers, timeout=60)
         if response.status_code >= 400:
-            return {"error": f"HTTP {response.status_code}"}
+            return {"error": response_error_text(response, conn=conn)}
         data = response.json()
         scope_state = extract_menu_scope_state(data)
         normalized = _normalize_snapshot_payload(data)
@@ -232,13 +217,19 @@ def apply_menu_bootstrap_snapshot(
         )
 
     assignments = _extract_snapshot_assignments(cluster_state)
-    _write_menu_bootstrap_backups(id_maps, cluster_state)
 
     # seed_only pulls seed the catalog only: menu_item_variants rows are per-
     # order-item assignments owned by the assignment sync stream, and a frozen
     # snapshot must never roll them back past the assignment cursor (I6).
     seed_mappings = apply_mode == "seed_and_relink_orders"
-    if not perform_seeding(conn, seed_mappings=seed_mappings):
+    try:
+        seed_counts = seed_catalog(
+            conn,
+            id_maps,
+            cluster_state,
+            seed_mappings=seed_mappings,
+        )
+    except Exception as exc:
         return {
             "items_seeded": 0,
             "variants_seeded": 0,
@@ -247,17 +238,25 @@ def apply_menu_bootstrap_snapshot(
             "order_items_relinked": 0,
             "apply_mode": apply_mode,
             "warnings": [],
-            "error": "Menu bootstrap seeding failed",
+            "error": f"Menu bootstrap seeding failed: {exc}",
         }
 
     order_items_present = _count_order_items_present(conn, assignments)
     order_items_relinked = 0
     if apply_mode == "seed_and_relink_orders":
         order_items_relinked = _relink_order_items_from_snapshot(conn, assignments)
+        # Contingency restore rewrote assignments; refresh the derived
+        # itemcode projection from them (plan §8; caller commits).
+        from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
+
+        rebuild_itemcode_mappings_best_effort(conn)
 
     return {
-        "items_seeded": len(id_maps.get("menu_id_to_str", {})),
-        "variants_seeded": len(id_maps.get("variant_id_to_str", {})),
+        "items_seeded": seed_counts["items_seeded"],
+        "variants_seeded": seed_counts["variants_seeded"],
+        "mappings_seeded": seed_counts["mappings_seeded"],
+        "stub_count": seed_counts["stub_count"],
+        "skipped_unmapped": seed_counts["skipped_unmapped"],
         "mapping_assignments": len(assignments),
         "order_items_present_in_snapshot": order_items_present,
         "order_items_relinked": order_items_relinked,
@@ -276,7 +275,7 @@ def fetch_and_apply_menu_bootstrap_snapshot(
     auth: Optional[str] = None,
     apply_mode: str = DEFAULT_MENU_BOOTSTRAP_APPLY_MODE,
 ) -> Dict[str, Any]:
-    fetch_result = fetch_latest_menu_bootstrap_snapshot(endpoint, auth=auth)
+    fetch_result = fetch_latest_menu_bootstrap_snapshot(conn, endpoint, auth=auth)
     if fetch_result.get("error"):
         return {
             "items_seeded": 0,
@@ -296,15 +295,12 @@ def fetch_and_apply_menu_bootstrap_snapshot(
         fetch_result["cluster_state"],
         apply_mode=apply_mode,
     )
-    # Mirror only strict_mode_enabled here. The bootstrap does not drain the
-    # menu event streams, so mirroring the advertised menu_revision would break
-    # the invariant "menu_state_revision is current => pull cursors are current"
-    # and let a later commit be accepted while peer events are still unapplied
-    # (plan §12.5). The revision is owned by pull_latest_menu_state and the
+    # menu_revision is deliberately not mirrored here: the bootstrap does not
+    # drain the menu event streams, so advancing it would break the invariant
+    # "menu_state_revision is current => pull cursors are current" and let a
+    # later commit be accepted while peer events are still unapplied (plan
+    # §12.5). The revision is owned by pull_latest_menu_state and the
     # assignment snapshot, which keep the cursors consistent.
-    scope_state = dict(fetch_result.get("scope_state") or {})
-    scope_state.pop("menu_revision", None)
-    apply_menu_scope_state(conn, scope_state)
     conn.commit()
     apply_result["metadata"] = fetch_result.get("metadata", {})
     return apply_result

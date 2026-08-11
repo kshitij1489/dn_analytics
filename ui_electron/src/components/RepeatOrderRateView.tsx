@@ -22,6 +22,7 @@ import {
 } from './customerAnalyticsShared';
 import { CustomerAnalyticsViewToolbar, type CustomerAnalyticsTableViewMode } from './CustomerAnalyticsViewToolbar';
 import { CustomerLink } from './CustomerLink';
+import { useStore } from '../contexts/StoreContext';
 import { DateSelector } from './DateSelector';
 import { KPICard } from './KPICard';
 import { LoadingSpinner } from './LoadingSpinner';
@@ -36,6 +37,9 @@ interface RepeatOrderRateViewProps {
 }
 
 export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: RepeatOrderRateViewProps) {
+    // All Stores rows are profile-qualified: a local customer_id is only
+    // unique inside its own store, so the owning restaurant keys and labels it.
+    const { isAllStores } = useStore();
     const [data, setData] = useState<CustomerRepeatOrderRateResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -162,6 +166,7 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
                         <thead>
                             <tr>
                                 <th onClick={() => sort.handleSort('customer_name')}>Customer{sort.renderSortIcon('customer_name')}</th>
+                                {isAllStores && <th>Store</th>}
                                 <th onClick={() => sort.handleSort('repeat_order_flag')}>Status{sort.renderSortIcon('repeat_order_flag')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('evaluation_order_count')}>Eval Orders{sort.renderSortIcon('evaluation_order_count')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('evaluation_total_spend')}>Eval Spend{sort.renderSortIcon('evaluation_total_spend')}</th>
@@ -172,8 +177,9 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
                         </thead>
                         <tbody>
                             {rows.length > 0 ? rows.map((row) => (
-                                <tr key={String(row.customer_id)}>
-                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} /></td>
+                                <tr key={String((row as any).row_key ?? row.customer_id)}>
+                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} restaurantId={(row as any).restaurant_id} restaurantName={(row as any).restaurant_name} /></td>
+                                    {isAllStores && <td>{(row as any).restaurant_name ?? '—'}</td>}
                                     <td><span className={row.repeat_order_flag ? 'status-returning' : 'status-new'}>{row.repeat_order_status}</span></td>
                                     <td className="text-right">{row.evaluation_order_count}</td>
                                     <td className="text-right">{formatCurrency(row.evaluation_total_spend)}</td>
@@ -182,7 +188,7 @@ export function RepeatOrderRateView({ lastDbSync, sort, filters, setFilters }: R
                                     <td>{row.repeat_order_reason}</td>
                                 </tr>
                             )) : (
-                                <tr><td colSpan={7} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
+                                <tr><td colSpan={isAllStores ? 8 : 7} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
                             )}
                         </tbody>
                     </table>

@@ -22,6 +22,7 @@ import {
 } from './customerAnalyticsShared';
 import { CustomerAnalyticsViewToolbar, type CustomerAnalyticsTableViewMode } from './CustomerAnalyticsViewToolbar';
 import { CustomerLink } from './CustomerLink';
+import { useStore } from '../contexts/StoreContext';
 import { DateSelector } from './DateSelector';
 import { KPICard } from './KPICard';
 import { LoadingSpinner } from './LoadingSpinner';
@@ -42,6 +43,9 @@ function segmentClass(segment: string): string {
 }
 
 export function AffinityView({ lastDbSync, sort, filters, setFilters }: AffinityViewProps) {
+    // All Stores rows are profile-qualified: a local customer_id is only
+    // unique inside its own store, so the owning restaurant keys and labels it.
+    const { isAllStores } = useStore();
     const [data, setData] = useState<CustomerAffinityResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -183,6 +187,7 @@ export function AffinityView({ lastDbSync, sort, filters, setFilters }: Affinity
                         <thead>
                             <tr>
                                 <th onClick={() => sort.handleSort('customer_name')}>Customer{sort.renderSortIcon('customer_name')}</th>
+                                {isAllStores && <th>Store</th>}
                                 <th onClick={() => sort.handleSort('affinity_segment')}>Segment{sort.renderSortIcon('affinity_segment')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('evaluation_order_count')}>Eval orders{sort.renderSortIcon('evaluation_order_count')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('evaluation_total_spend')}>Eval spend{sort.renderSortIcon('evaluation_total_spend')}</th>
@@ -195,8 +200,9 @@ export function AffinityView({ lastDbSync, sort, filters, setFilters }: Affinity
                         </thead>
                         <tbody>
                             {rows.length > 0 ? rows.map((row) => (
-                                <tr key={String(row.customer_id)}>
-                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} /></td>
+                                <tr key={String((row as any).row_key ?? row.customer_id)}>
+                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} restaurantId={(row as any).restaurant_id} restaurantName={(row as any).restaurant_name} /></td>
+                                    {isAllStores && <td>{(row as any).restaurant_name ?? '—'}</td>}
                                     <td><span className={segmentClass(row.affinity_segment)}>{row.affinity_segment}</span></td>
                                     <td className="text-right">{row.evaluation_order_count}</td>
                                     <td className="text-right">{formatCurrency(row.evaluation_total_spend)}</td>
@@ -207,7 +213,7 @@ export function AffinityView({ lastDbSync, sort, filters, setFilters }: Affinity
                                     <td>{row.affinity_reason}</td>
                                 </tr>
                             )) : (
-                                <tr><td colSpan={9} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
+                                <tr><td colSpan={isAllStores ? 10 : 9} className="text-center customers-analytics-empty">No customers found for the selected filters.</td></tr>
                             )}
                         </tbody>
                     </table>

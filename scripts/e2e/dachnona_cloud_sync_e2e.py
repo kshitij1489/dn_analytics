@@ -2,12 +2,10 @@
 """
 End-to-end verifier for the Dachnona cloud sync contract.
 
-This script simulates two local analytics clients against a real cloud server:
-
-1. Source client creates local customer/menu merge events and uploads them.
-2. Target client pulls those events from the cloud and applies them locally.
-3. Source client uploads a menu bootstrap snapshot.
-4. Target client pulls the latest bootstrap snapshot and applies it locally.
+This script validates the current revision-1.2 scoped pull surface and simulates
+two local analytics clients exchanging a menu bootstrap snapshot. Strict menu
+and customer mutations are covered by the dedicated mutation-commit suites;
+the retired batched merge-ingest routes are intentionally not called here.
 
 The script is intentionally isolated:
 - it uses temp SQLite databases
@@ -16,7 +14,8 @@ The script is intentionally isolated:
 
 Run against your Dachnona stack (paths under /desktop-analytics-sync/...):
 
-    python scripts/e2e/dachnona_cloud_sync_e2e.py --base-url http://127.0.0.1:<PORT> --api-key <sync_api_key>
+    python scripts/e2e/dachnona_cloud_sync_e2e.py --base-url http://127.0.0.1:<PORT> \
+        --api-key <sync_api_key> --restaurant-id <restaurant_id>
 
 With db.dachnona "docker compose -f docker-compose.dev.yml up", traffic usually goes through nginx to
 Gunicorn. Use the host:port your compose file publishes for HTTP (often localhost and a mapped port), not a
@@ -26,7 +25,8 @@ proxies the public port.
 If web logs show "Sync API auth failed: missing or invalid Authorization header", pass the same Bearer token
 as the desktop app (system_config cloud_sync_api_key / dev sync secret): --api-key or env DACHNONA_E2E_API_KEY.
 
-Defaults: env DACHNONA_E2E_BASE_URL (else http://127.0.0.1:8000), DACHNONA_E2E_API_KEY.
+Defaults: env DACHNONA_E2E_BASE_URL (else http://127.0.0.1:8000),
+DACHNONA_E2E_API_KEY, and DACHNONA_E2E_RESTAURANT_ID.
 """
 
 from __future__ import annotations
@@ -39,10 +39,8 @@ import sqlite3
 import sys
 import tempfile
 import uuid
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import patch
 
 import requests
 
@@ -51,18 +49,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.seed_from_backups import export_to_backups
-from src.core.customer_merge_shipper import upload_pending as upload_customer_merges
-from src.core.customer_merge_sync import pull_and_apply_customer_merge_events
 from src.core.menu_bootstrap_shipper import upload_pending as upload_menu_bootstrap
 from src.core.menu_bootstrap_sync import (
     fetch_and_apply_menu_bootstrap_snapshot,
     fetch_latest_menu_bootstrap_snapshot,
 )
-from src.core.menu_merge_shipper import upload_pending as upload_menu_merges
-from src.core.menu_merge_sync import pull_and_apply_menu_merge_events
-from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
-from utils import menu_utils
 
 
 class E2EFailure(RuntimeError):
@@ -328,7 +319,26 @@ def init_identity(
     employee_name: str,
     device_id: str,
     install_id: str,
+    restaurant_id: str,
 ) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS restaurant_profile_identity (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            restaurant_id TEXT NOT NULL UNIQUE,
+            bound_at TEXT NOT NULL,
+            profile_schema_version INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO restaurant_profile_identity
+            (singleton_id, restaurant_id, bound_at, profile_schema_version)
+        VALUES (1, ?, CURRENT_TIMESTAMP, 1)
+        """,
+        (restaurant_id,),
+    )
     conn.execute(
         """
         INSERT OR REPLACE INTO app_users (employee_id, name, is_active)
@@ -569,14 +579,15 @@ def read_single_value(conn: sqlite3.Connection, query: str, params: Tuple[Any, .
     return row[0] if row else None
 
 
-def auth_headers(api_key: Optional[str]) -> Dict[str, str]:
+def auth_headers(api_key: Optional[str], restaurant_id: str) -> Dict[str, str]:
     headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    headers["X-Restaurant-ID"] = restaurant_id
     return headers
 
 
-def preflight_sync_api(base_url: str, api_key: Optional[str]) -> None:
+def preflight_sync_api(base_url: str, api_key: Optional[str], restaurant_id: str) -> None:
     """
     Fail fast with actionable errors: Dachnona returns 401 without a valid Bearer token;
     404 usually means base URL does not reach the Django app that mounts desktop-analytics-sync.
@@ -584,7 +595,12 @@ def preflight_sync_api(base_url: str, api_key: Optional[str]) -> None:
     url = f"{base_url}/desktop-analytics-sync/customer-merges"
     info(f"Preflight: GET {url}?limit=1")
     try:
-        response = requests.get(url, headers=auth_headers(api_key), params={"limit": 1}, timeout=20)
+        response = requests.get(
+            url,
+            headers=auth_headers(api_key, restaurant_id),
+            params={"limit": 1},
+            timeout=20,
+        )
     except requests.RequestException as exc:
         fail(f"Preflight: cannot reach sync API ({url}): {exc}")
 
@@ -698,6 +714,7 @@ def verify_merge_ingest_idempotency(
     label: str,
     endpoint: str,
     api_key: Optional[str],
+    restaurant_id: str,
     head_cursor: Optional[str],
     remote_event_id: str,
     page_events: List[Dict[str, Any]],
@@ -711,7 +728,7 @@ def verify_merge_ingest_idempotency(
         sum(1 for e in page_events if e.get("remote_event_id") == remote_event_id) == 1,
         f"{label}: expected exactly one event for remote_event_id={remote_event_id} in pull page, got {page_events!r}",
     )
-    again, _ = fetch_events_page(endpoint, api_key, head_cursor)
+    again, _ = fetch_events_page(endpoint, api_key, restaurant_id, head_cursor)
     require(
         sum(1 for e in again if e.get("remote_event_id") == remote_event_id) == 1,
         f"{label}: idempotency check failed — duplicate pull rows for remote_event_id={remote_event_id}",
@@ -735,13 +752,19 @@ def normalize_events_response(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]
 def fetch_events_page(
     endpoint: str,
     api_key: Optional[str],
+    restaurant_id: str,
     cursor: Optional[str],
     limit: int = 500,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     params: Dict[str, Any] = {"limit": limit}
     if cursor:
         params["cursor"] = cursor
-    response = requests.get(endpoint, headers=auth_headers(api_key), params=params, timeout=30)
+    response = requests.get(
+        endpoint,
+        headers=auth_headers(api_key, restaurant_id),
+        params=params,
+        timeout=30,
+    )
     if response.status_code >= 400:
         fail(f"GET {endpoint} failed with HTTP {response.status_code}: {response.text[:400]}")
     payload = response.json()
@@ -749,10 +772,12 @@ def fetch_events_page(
     return normalize_events_response(payload)
 
 
-def discover_head_cursor(endpoint: str, api_key: Optional[str]) -> Optional[str]:
+def discover_head_cursor(
+    endpoint: str, api_key: Optional[str], restaurant_id: str
+) -> Optional[str]:
     cursor: Optional[str] = None
     while True:
-        events, next_cursor = fetch_events_page(endpoint, api_key, cursor)
+        events, next_cursor = fetch_events_page(endpoint, api_key, restaurant_id, cursor)
         if not events:
             return cursor if next_cursor is None else next_cursor
         if next_cursor is None or next_cursor == cursor:
@@ -763,9 +788,10 @@ def discover_head_cursor(endpoint: str, api_key: Optional[str]) -> Optional[str]
 def fetch_events_since(
     endpoint: str,
     api_key: Optional[str],
+    restaurant_id: str,
     cursor: Optional[str],
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    return fetch_events_page(endpoint, api_key, cursor)
+    return fetch_events_page(endpoint, api_key, restaurant_id, cursor)
 
 
 def get_customer_event_payload(conn: sqlite3.Connection, merge_id: int, event_type: str) -> Dict[str, Any]:
@@ -796,348 +822,11 @@ def get_menu_event_payload(conn: sqlite3.Connection, merge_id: int, event_type: 
     return json.loads(row["payload"])
 
 
-def run_customer_flow(
-    base_url: str,
-    api_key: Optional[str],
-    source_conn: sqlite3.Connection,
-    target_conn: sqlite3.Connection,
-    tag: str,
-) -> None:
-    info("Running customer merge apply/undo flow")
-    endpoint = f"{base_url}/desktop-analytics-sync/customer-merges"
-    ingest_endpoint = f"{endpoint}/ingest"
-    cursor = discover_head_cursor(endpoint, api_key)
-
-    merge_result = merge_customers(
-        source_conn,
-        "1",
-        "2",
-        similarity_score=0.98,
-        model_name="duplicate_matcher_v1",
-        reasons=[f"phone exact match {tag}"],
-        mark_target_verified=True,
-    )
-    require(merge_result.get("status") == "success", f"Local customer merge failed: {merge_result}")
-    merge_id = int(merge_result["merge_id"])
-    applied_payload = get_customer_event_payload(source_conn, merge_id, "customer_merge.applied")
-
-    push_result = upload_customer_merges(
-        source_conn,
-        endpoint=ingest_endpoint,
-        auth=api_key,
-        uploaded_by={"employee_id": "0001", "name": "Owner"},
-        uploaded_from={
-            "device_id": "device-source-customer",
-            "install_id": "install-source-customer",
-            "device_label": "source-customer",
-            "platform": "Darwin",
-            "platform_release": "test",
-            "machine": "arm64",
-        },
-    )
-    require(push_result.get("error") is None, f"Customer merge upload failed: {push_result}")
-    require(push_result.get("events_sent") == 1, f"Expected 1 customer event sent, got: {push_result}")
-
-    remote_events, next_cursor = fetch_events_since(endpoint, api_key, cursor)
-    require(len(remote_events) == 1, f"Expected 1 new remote customer event, got {len(remote_events)}")
-    remote_applied = remote_events[0]
-    require(remote_applied.get("event_type") == "customer_merge.applied", f"Unexpected customer event: {remote_applied}")
-    assert_merge_attribution(
-        remote_applied,
-        install_id="install-source-customer",
-        device_id="device-source-customer",
-        employee_id="0001",
-    )
-    assert_customer_payload_parity(applied_payload, remote_applied)
-
-    info("Verifying customer merge ingest idempotency (duplicate POST)")
-    source_conn.execute(
-        """
-        UPDATE customer_merge_sync_events
-        SET uploaded_at = NULL, upload_attempted_at = NULL, last_error = NULL
-        WHERE merge_id = ? AND event_type = 'customer_merge.applied'
-        """,
-        (merge_id,),
-    )
-    source_conn.commit()
-    dup_push = upload_customer_merges(
-        source_conn,
-        endpoint=ingest_endpoint,
-        auth=api_key,
-        uploaded_by={"employee_id": "0001", "name": "Owner"},
-        uploaded_from={
-            "device_id": "device-source-customer",
-            "install_id": "install-source-customer",
-            "device_label": "source-customer",
-            "platform": "Darwin",
-            "platform_release": "test",
-            "machine": "arm64",
-        },
-    )
-    require(dup_push.get("error") is None, f"Customer merge idempotent re-upload failed: {dup_push}")
-    require(dup_push.get("events_sent") == 1, f"Expected 1 event re-sent on idempotent path, got: {dup_push}")
-    verify_merge_ingest_idempotency(
-        "customer merge",
-        endpoint,
-        api_key,
-        cursor,
-        str(applied_payload.get("remote_event_id")),
-        remote_events,
-    )
-    ok("Customer merge ingest idempotency passed")
-
-    pull_result = pull_and_apply_customer_merge_events(
-        target_conn,
-        endpoint=endpoint,
-        auth=api_key,
-        limit=100,
-        cursor=cursor,
-    )
-    require(pull_result.get("error") is None, f"Customer merge pull failed: {pull_result}")
-    require(pull_result.get("merge_events_applied") == 1, f"Customer merge was not applied: {pull_result}")
-    require(
-        read_single_value(target_conn, "SELECT customer_id FROM orders WHERE order_id = 101") == 2,
-        "Target customer DB did not move the source order during apply",
-    )
-    require(
-        read_single_value(target_conn, "SELECT COUNT(*) FROM customer_merge_remote_events") == 1,
-        "Target customer DB did not record the pulled remote event",
-    )
-    ok("Customer merge apply round-trip passed")
-
-    cursor = next_cursor or pull_result.get("cursor_after")
-    require(cursor is not None, "Customer merge cursor did not advance after apply")
-
-    undo_result = undo_customer_merge(source_conn, merge_id)
-    require(undo_result.get("status") == "success", f"Local customer undo failed: {undo_result}")
-    undone_payload = get_customer_event_payload(source_conn, merge_id, "customer_merge.undone")
-    require(
-        undone_payload.get("reverts_remote_event_id") == applied_payload.get("remote_event_id"),
-        "Customer undo event does not reference the applied remote_event_id",
-    )
-
-    push_result = upload_customer_merges(
-        source_conn,
-        endpoint=ingest_endpoint,
-        auth=api_key,
-        uploaded_by={"employee_id": "0001", "name": "Owner"},
-        uploaded_from={
-            "device_id": "device-source-customer",
-            "install_id": "install-source-customer",
-            "device_label": "source-customer",
-            "platform": "Darwin",
-            "platform_release": "test",
-            "machine": "arm64",
-        },
-    )
-    require(push_result.get("error") is None, f"Customer undo upload failed: {push_result}")
-    require(push_result.get("events_sent") == 1, f"Expected 1 customer undo event sent, got: {push_result}")
-
-    remote_events, next_cursor = fetch_events_since(endpoint, api_key, cursor)
-    require(len(remote_events) == 1, f"Expected 1 new customer undo event, got {len(remote_events)}")
-    remote_undo = remote_events[0]
-    require(remote_undo.get("event_type") == "customer_merge.undone", f"Unexpected customer undo event: {remote_undo}")
-    require(
-        remote_undo.get("reverts_remote_event_id") == applied_payload.get("remote_event_id"),
-        "Remote customer undo event does not reference the original applied event",
-    )
-
-    pull_result = pull_and_apply_customer_merge_events(
-        target_conn,
-        endpoint=endpoint,
-        auth=api_key,
-        limit=100,
-        cursor=cursor,
-    )
-    require(pull_result.get("error") is None, f"Customer undo pull failed: {pull_result}")
-    require(pull_result.get("undo_events_applied") == 1, f"Customer undo was not applied: {pull_result}")
-    require(
-        read_single_value(target_conn, "SELECT customer_id FROM orders WHERE order_id = 101") == 1,
-        "Target customer DB did not restore the moved order during undo",
-    )
-    undone_at = read_single_value(
-        target_conn,
-        "SELECT undone_at FROM customer_merge_history ORDER BY merge_id DESC LIMIT 1",
-    )
-    require(bool(undone_at), "Target customer DB did not mark the pulled merge as undone")
-    ok("Customer merge undo round-trip passed")
-
-
-def run_menu_flow(
-    base_url: str,
-    api_key: Optional[str],
-    source_conn: sqlite3.Connection,
-    target_conn: sqlite3.Connection,
-) -> None:
-    info("Running menu merge apply/undo flow")
-    endpoint = f"{base_url}/desktop-analytics-sync/menu-merges"
-    ingest_endpoint = f"{endpoint}/ingest"
-    cursor = discover_head_cursor(endpoint, api_key)
-
-    source_item = read_single_value(source_conn, "SELECT menu_item_id FROM menu_items ORDER BY menu_item_id ASC LIMIT 1")
-    target_item = read_single_value(source_conn, "SELECT menu_item_id FROM menu_items ORDER BY menu_item_id ASC LIMIT 1 OFFSET 1")
-    require(source_item and target_item, "Menu source fixture is missing source/target items")
-
-    # Patch for the whole flow: pull_and_apply_menu_merge_events calls merge_menu_items / undo_merge on the
-    # target DB, which otherwise runs the real export_to_backups() and overwrites project data/*.json.
-    with patch("utils.menu_utils.export_to_backups", return_value=True):
-        merge_result = menu_utils.merge_menu_items(source_conn, source_item, target_item)
-        require(merge_result.get("status") == "success", f"Local menu merge failed: {merge_result}")
-        merge_id = int(merge_result["merge_id"])
-        applied_payload = get_menu_event_payload(source_conn, merge_id, "menu_merge.applied")
-
-        push_result = upload_menu_merges(
-            source_conn,
-            endpoint=ingest_endpoint,
-            auth=api_key,
-            uploaded_by={"employee_id": "0001", "name": "Owner"},
-            uploaded_from={
-                "device_id": "device-source-menu",
-                "install_id": "install-source-menu",
-                "device_label": "source-menu",
-                "platform": "Darwin",
-                "platform_release": "test",
-                "machine": "arm64",
-            },
-        )
-        require(push_result.get("error") is None, f"Menu merge upload failed: {push_result}")
-        require(push_result.get("events_sent") == 1, f"Expected 1 menu event sent, got: {push_result}")
-
-        remote_events, next_cursor = fetch_events_since(endpoint, api_key, cursor)
-        require(len(remote_events) == 1, f"Expected 1 new remote menu event, got {len(remote_events)}")
-        remote_applied = remote_events[0]
-        require(remote_applied.get("event_type") == "menu_merge.applied", f"Unexpected menu event: {remote_applied}")
-        assert_merge_attribution(
-            remote_applied,
-            install_id="install-source-menu",
-            device_id="device-source-menu",
-            employee_id="0001",
-        )
-        assert_menu_payload_parity(applied_payload, remote_applied)
-
-        info("Verifying menu merge ingest idempotency (duplicate POST)")
-        source_conn.execute(
-            """
-            UPDATE menu_merge_sync_events
-            SET uploaded_at = NULL, upload_attempted_at = NULL, last_error = NULL
-            WHERE merge_id = ? AND event_type = 'menu_merge.applied'
-            """,
-            (merge_id,),
-        )
-        source_conn.commit()
-        dup_push = upload_menu_merges(
-            source_conn,
-            endpoint=ingest_endpoint,
-            auth=api_key,
-            uploaded_by={"employee_id": "0001", "name": "Owner"},
-            uploaded_from={
-                "device_id": "device-source-menu",
-                "install_id": "install-source-menu",
-                "device_label": "source-menu",
-                "platform": "Darwin",
-                "platform_release": "test",
-                "machine": "arm64",
-            },
-        )
-        require(dup_push.get("error") is None, f"Menu merge idempotent re-upload failed: {dup_push}")
-        require(dup_push.get("events_sent") == 1, f"Expected 1 menu event re-sent on idempotent path, got: {dup_push}")
-        verify_merge_ingest_idempotency(
-            "menu merge",
-            endpoint,
-            api_key,
-            cursor,
-            str(applied_payload.get("remote_event_id")),
-            remote_events,
-        )
-        ok("Menu merge ingest idempotency passed")
-
-        pull_result = pull_and_apply_menu_merge_events(
-            target_conn,
-            endpoint=endpoint,
-            auth=api_key,
-            limit=100,
-            cursor=cursor,
-        )
-        require(pull_result.get("error") is None, f"Menu merge pull failed: {pull_result}")
-        require(pull_result.get("merge_events_applied") == 1, f"Menu merge was not applied: {pull_result}")
-        target_item_after_apply = read_single_value(
-            target_conn,
-            "SELECT menu_item_id FROM order_items WHERE order_item_id = 1",
-        )
-        require(
-            target_item_after_apply == target_item,
-            f"Target menu DB did not remap order_items on apply. Expected {target_item}, got {target_item_after_apply}",
-        )
-        ok("Menu merge apply round-trip passed")
-
-        cursor = next_cursor or pull_result.get("cursor_after")
-        require(cursor is not None, "Menu merge cursor did not advance after apply")
-
-        undo_result = menu_utils.undo_merge(source_conn, merge_id)
-        require(undo_result.get("status") == "success", f"Local menu undo failed: {undo_result}")
-        undone_payload = get_menu_event_payload(source_conn, merge_id, "menu_merge.undone")
-        require(
-            undone_payload.get("reverts_remote_event_id") == applied_payload.get("remote_event_id"),
-            "Menu undo event does not reference the applied remote_event_id",
-        )
-
-        push_result = upload_menu_merges(
-            source_conn,
-            endpoint=ingest_endpoint,
-            auth=api_key,
-            uploaded_by={"employee_id": "0001", "name": "Owner"},
-            uploaded_from={
-                "device_id": "device-source-menu",
-                "install_id": "install-source-menu",
-                "device_label": "source-menu",
-                "platform": "Darwin",
-                "platform_release": "test",
-                "machine": "arm64",
-            },
-        )
-        require(push_result.get("error") is None, f"Menu undo upload failed: {push_result}")
-        require(push_result.get("events_sent") == 1, f"Expected 1 menu undo event sent, got: {push_result}")
-
-        remote_events, next_cursor = fetch_events_since(endpoint, api_key, cursor)
-        require(len(remote_events) == 1, f"Expected 1 new menu undo event, got {len(remote_events)}")
-        remote_undo = remote_events[0]
-        require(remote_undo.get("event_type") == "menu_merge.undone", f"Unexpected menu undo event: {remote_undo}")
-        require(
-            remote_undo.get("reverts_remote_event_id") == applied_payload.get("remote_event_id"),
-            "Remote menu undo event does not reference the original applied event",
-        )
-
-        pull_result = pull_and_apply_menu_merge_events(
-            target_conn,
-            endpoint=endpoint,
-            auth=api_key,
-            limit=100,
-            cursor=cursor,
-        )
-        require(pull_result.get("error") is None, f"Menu undo pull failed: {pull_result}")
-        require(pull_result.get("undo_events_applied") == 1, f"Menu undo was not applied: {pull_result}")
-        target_item_after_undo = read_single_value(
-            target_conn,
-            "SELECT menu_item_id FROM order_items WHERE order_item_id = 1",
-        )
-        require(
-            target_item_after_undo == source_item,
-            f"Target menu DB did not restore order_items on undo. Expected {source_item}, got {target_item_after_undo}",
-        )
-        require(
-            read_single_value(target_conn, "SELECT COUNT(*) FROM merge_history") == 0,
-            "Target menu DB still has merge_history rows after undo",
-        )
-        ok("Menu merge undo round-trip passed")
-
-
 def run_bootstrap_flow(
     base_url: str,
     api_key: Optional[str],
     source_conn: sqlite3.Connection,
     target_conn: sqlite3.Connection,
-    source_backup_dir: Path,
-    target_backup_dir: Path,
     expected_item_id: str,
     expected_variant_id: str,
 ) -> None:
@@ -1145,28 +834,24 @@ def run_bootstrap_flow(
     ingest_endpoint = f"{base_url}/desktop-analytics-sync/menu-bootstrap/ingest"
     latest_endpoint = f"{base_url}/desktop-analytics-sync/menu-bootstrap/latest"
 
-    with ExitStack() as stack:
-        stack.enter_context(patch("scripts.seed_from_backups.get_resource_path", return_value=str(source_backup_dir)))
-        stack.enter_context(patch("src.core.menu_bootstrap_shipper.get_resource_path", return_value=str(source_backup_dir)))
-        exported = export_to_backups(source_conn)
-        require(exported, "Failed to export menu bootstrap backup files from source fixture")
-        push_result = upload_menu_bootstrap(
-            endpoint=ingest_endpoint,
-            auth=api_key,
-            uploaded_by={"employee_id": "0001", "name": "Owner"},
-            uploaded_from={
-                "device_id": "device-source-bootstrap",
-                "install_id": "install-source-bootstrap",
-                "device_label": "source-bootstrap",
-                "platform": "Darwin",
-                "platform_release": "test",
-                "machine": "arm64",
-            },
-        )
+    push_result = upload_menu_bootstrap(
+        source_conn,
+        endpoint=ingest_endpoint,
+        auth=api_key,
+        uploaded_by={"employee_id": "0001", "name": "Owner"},
+        uploaded_from={
+            "device_id": "device-source-bootstrap",
+            "install_id": "install-source-bootstrap",
+            "device_label": "source-bootstrap",
+            "platform": "Darwin",
+            "platform_release": "test",
+            "machine": "arm64",
+        },
+    )
     require(push_result.get("error") is None, f"Menu bootstrap upload failed: {push_result}")
     require(push_result.get("sent") is True, f"Menu bootstrap was not uploaded: {push_result}")
 
-    fetch_result = fetch_latest_menu_bootstrap_snapshot(latest_endpoint, auth=api_key)
+    fetch_result = fetch_latest_menu_bootstrap_snapshot(source_conn, latest_endpoint, auth=api_key)
     require(fetch_result.get("error") is None, f"Fetching latest menu bootstrap failed: {fetch_result}")
     require(
         fetch_result.get("id_maps", {}).get("menu_id_to_str", {}).get(expected_item_id) is not None,
@@ -1177,15 +862,12 @@ def run_bootstrap_flow(
         "Latest menu bootstrap snapshot did not return the expected variant",
     )
 
-    with ExitStack() as stack:
-        stack.enter_context(patch("scripts.seed_from_backups.get_resource_path", return_value=str(target_backup_dir)))
-        stack.enter_context(patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(target_backup_dir)))
-        apply_result = fetch_and_apply_menu_bootstrap_snapshot(
-            target_conn,
-            latest_endpoint,
-            auth=api_key,
-            apply_mode="seed_and_relink_orders",
-        )
+    apply_result = fetch_and_apply_menu_bootstrap_snapshot(
+        target_conn,
+        latest_endpoint,
+        auth=api_key,
+        apply_mode="seed_and_relink_orders",
+    )
     require(apply_result.get("error") is None, f"Applying latest menu bootstrap failed: {apply_result}")
     require(
         apply_result.get("order_items_relinked") == 1,
@@ -1215,6 +897,11 @@ def parse_args() -> argparse.Namespace:
         help="Bearer token for Dachnona desktop sync (default: env DACHNONA_E2E_API_KEY). Required when sync middleware enforces auth.",
     )
     parser.add_argument(
+        "--restaurant-id",
+        default=os.environ.get("DACHNONA_E2E_RESTAURANT_ID"),
+        help="Physical restaurant ID for every scoped request (required; or DACHNONA_E2E_RESTAURANT_ID)",
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="Keep temp SQLite databases and backup directories after the run",
@@ -1226,10 +913,14 @@ def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
     api_key = (args.api_key or os.environ.get("DACHNONA_E2E_API_KEY") or "").strip() or None
+    restaurant_id = str(args.restaurant_id or "").strip()
+    if not restaurant_id or restaurant_id == "__all__":
+        print("[FAIL] --restaurant-id must name one physical restaurant")
+        return 2
     tag = uuid.uuid4().hex[:8]
 
     try:
-        preflight_sync_api(base_url, api_key)
+        preflight_sync_api(base_url, api_key, restaurant_id)
     except E2EFailure as exc:
         print(f"[FAIL] {exc}")
         return 1
@@ -1242,51 +933,26 @@ def main() -> int:
     info(f"Using temp workspace: {temp_root}")
     info(f"Using unique test tag: {tag}")
 
-    source_customer_conn = make_conn(temp_root / "source_customer.db")
-    target_customer_conn = make_conn(temp_root / "target_customer.db")
-    source_menu_conn = make_conn(temp_root / "source_menu.db")
-    target_menu_conn = make_conn(temp_root / "target_menu.db")
     source_bootstrap_conn = make_conn(temp_root / "source_bootstrap.db")
     target_bootstrap_conn = make_conn(temp_root / "target_bootstrap.db")
 
     connections = [
-        source_customer_conn,
-        target_customer_conn,
-        source_menu_conn,
-        target_menu_conn,
         source_bootstrap_conn,
         target_bootstrap_conn,
     ]
 
     try:
-        seed_customer_fixture(source_customer_conn, tag)
-        seed_customer_fixture(target_customer_conn, tag)
-        seed_menu_fixture(source_menu_conn, tag)
-        seed_menu_fixture(target_menu_conn, tag)
         bootstrap_ids = seed_bootstrap_source_fixture(source_bootstrap_conn, tag)
         seed_bootstrap_target_fixture(target_bootstrap_conn)
 
-        init_identity(source_customer_conn, "0001", "Owner", "device-source-customer", "install-source-customer")
-        init_identity(target_customer_conn, "0002", "Target", "device-target-customer", "install-target-customer")
-        init_identity(source_menu_conn, "0001", "Owner", "device-source-menu", "install-source-menu")
-        init_identity(target_menu_conn, "0002", "Target", "device-target-menu", "install-target-menu")
-        init_identity(source_bootstrap_conn, "0001", "Owner", "device-source-bootstrap", "install-source-bootstrap")
-        init_identity(target_bootstrap_conn, "0002", "Target", "device-target-bootstrap", "install-target-bootstrap")
+        init_identity(source_bootstrap_conn, "0001", "Owner", "device-source-bootstrap", "install-source-bootstrap", restaurant_id)
+        init_identity(target_bootstrap_conn, "0002", "Target", "device-target-bootstrap", "install-target-bootstrap", restaurant_id)
 
-        source_backup_dir = temp_root / "source_backups"
-        target_backup_dir = temp_root / "target_backups"
-        source_backup_dir.mkdir(parents=True, exist_ok=True)
-        target_backup_dir.mkdir(parents=True, exist_ok=True)
-
-        run_customer_flow(base_url, api_key, source_customer_conn, target_customer_conn, tag)
-        run_menu_flow(base_url, api_key, source_menu_conn, target_menu_conn)
         run_bootstrap_flow(
             base_url,
             api_key,
             source_bootstrap_conn,
             target_bootstrap_conn,
-            source_backup_dir,
-            target_backup_dir,
             expected_item_id=bootstrap_ids["item_id"],
             expected_variant_id=bootstrap_ids["variant_id"],
         )

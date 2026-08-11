@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { endpoints } from '../api';
-import { Card, LoadingSpinner, ResizableTableWrapper, TabButton, TrainingOverlay, ErrorPopup } from '../components';
-import type { TrainingStatus, PopupMessage } from '../components';
+import { Card, LoadingSpinner, ResizableTableWrapper, TabButton, ErrorPopup } from '../components';
+import type { PopupMessage } from '../components';
 import {
     ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, Area
 } from 'recharts';
@@ -42,50 +42,13 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'forecast' | 'menu_forecast' | 'menu_volume'>('forecast');
     const [activeModels, setActiveModels] = useState<string[]>(['weekday_avg', 'holt_winters', 'prophet', 'gp']);
-    const [trainingStatus, setTrainingStatus] = useState<TrainingStatus | null>(null);
-    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
-
-    const trainingActive = trainingStatus?.active ?? false;
 
     const toggleModel = (model: string) => {
         setActiveModels(prev =>
             prev.includes(model) ? prev.filter(m => m !== model) : [...prev, model]
         );
     };
-
-    // Poll training status
-    const pollTrainingStatus = useCallback(async () => {
-        try {
-            const res = await endpoints.forecast.trainingStatus();
-            const status = res.data as TrainingStatus;
-            setTrainingStatus(status);
-            return status.active;
-        } catch {
-            return false;
-        }
-    }, []);
-
-    // Start polling when training becomes active, stop when done
-    useEffect(() => {
-        if (trainingActive && !pollRef.current) {
-            pollRef.current = setInterval(async () => {
-                const still = await pollTrainingStatus();
-                if (!still) {
-                    // Training finished — stop polling and refresh data
-                    if (pollRef.current) clearInterval(pollRef.current);
-                    pollRef.current = null;
-                    loadData();
-                }
-            }, 2000);
-        }
-        return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-        };
-    }, [trainingActive, pollTrainingStatus]);
 
     useEffect(() => {
         loadData();
@@ -98,15 +61,8 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
             const res = await endpoints.forecast.get();
             setData(res.data);
         } catch (e: any) {
-            // 503 = training in progress — show overlay, not error
-            if (e?.response?.status === 503) {
-                const ts = e.response.data?.training_status;
-                if (ts) setTrainingStatus(ts);
-                setData(null);
-            } else {
-                console.error('Failed to fetch forecast:', e);
-                setError(e.message || 'Failed to generate forecast');
-            }
+            console.error('Failed to fetch forecast:', e);
+            setError(e.message || 'Failed to load forecast');
         } finally {
             setLoading(false);
         }
@@ -121,7 +77,7 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     if (loading) return (
         <div className="forecast-loading">
             <LoadingSpinner />
-            <p>Generating 7-day sales forecast (Prophet + Holt-Winters)...</p>
+            <p>Loading sales forecast from central cache...</p>
         </div>
     );
 
@@ -191,13 +147,9 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div className="forecast-page" style={{ position: 'relative' }}>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
-            {/* Training overlay */}
-            {trainingActive && trainingStatus && (
-                <TrainingOverlay status={trainingStatus} />
-            )}
 
             <div className="forecast-header-container">
-                <div className={`forecast-segmented-control${trainingActive ? ' disabled' : ''}`}>
+                <div className="forecast-segmented-control">
                     <TabButton
                         active={activeTab === 'forecast'}
                         onClick={() => setActiveTab('forecast')}
@@ -226,9 +178,9 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
             </div>
 
             {activeTab === 'menu_forecast' ? (
-                <ItemDemandForecast trainingActive={trainingActive} />
+                <ItemDemandForecast />
             ) : activeTab === 'menu_volume' ? (
-                <ItemVolumeForecast trainingActive={trainingActive} />
+                <ItemVolumeForecast />
             ) : (
                 <>
                     {data?.debug_info?.awaiting_action && (
@@ -244,35 +196,7 @@ export default function ForecastPage({ lastDbSync }: { lastDbSync?: number }) {
                             gap: '12px',
                             flexWrap: 'wrap',
                         }}>
-                            <span>{data.debug_info.message || 'Forecast cache is empty. Use Pull from Cloud or Full Retrain to populate.'}</span>
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        const res = await endpoints.forecast.pullFromCloud('revenue');
-                                        const msg = res.data as { revenue_inserted?: number };
-                                        setPopup({ type: 'success', message: `Done. Revenue: ${msg.revenue_inserted ?? 0}` });
-                                        loadData();
-                                    } catch (e: any) {
-                                        setPopup({ type: 'error', message: e.response?.data?.detail || "Pull failed" });
-                                    }
-                                }}
-                                style={{ padding: '8px 14px', background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                            >
-                                Pull from Cloud
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        await endpoints.forecast.fullRetrain('revenue');
-                                        setPopup({ type: 'info', message: 'Sales retrain started. This might take a few minutes.' });
-                                    } catch (e: any) {
-                                        setPopup({ type: 'error', message: e.response?.data?.detail || "Retrain failed" });
-                                    }
-                                }}
-                                style={{ padding: '8px 14px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                            >
-                                Full Retrain
-                            </button>
+                            <span>{data.debug_info.message || 'Forecast cache is empty. Run Sync DB to fetch forecasts from the central server.'}</span>
                         </div>
                     )}
                     <div className="forecast-kpis">

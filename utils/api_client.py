@@ -31,15 +31,10 @@ def normalize_integration_orders_base_url(raw: str) -> str:
 
 
 def orders_integration_request_headers(api_key: str) -> dict:
-    """Headers for GET {base}/orders/ — Dachnona accepts Bearer; legacy stacks used X-API-Key."""
-    key = (api_key or "").strip()
-    return {
-        "Authorization": f"Bearer {key}",
-        "X-API-Key": key,
-        "Accept": "application/json",
-        # Stable UA so edge firewalls (e.g. Cloudflare) can allowlist the desktop client if needed.
-        "User-Agent": "DachnonaAnalyticsDesktop/1.0",
-    }
+    """Unscoped analytics headers (only for the allowed-restaurants endpoint)."""
+    from src.core.central_api import unscoped_analytics_headers
+
+    return unscoped_analytics_headers(api_key)
 
 
 def fetch_stream_raw(
@@ -64,8 +59,11 @@ def fetch_stream_raw(
     """
     # Fetch Config
     try:
-        cursor = conn.execute("SELECT key, value FROM system_config WHERE key IN ('integration_orders_url', 'integration_orders_key')")
-        config = {row[0]: row[1] for row in cursor.fetchall()}
+        from src.core.db.control import resolve_config_values
+
+        config = resolve_config_values(
+            conn, ("integration_orders_url", "integration_orders_key")
+        )
     except Exception as e:
         print(f"Error fetching integration config: {e}")
         return [], 0
@@ -79,7 +77,9 @@ def fetch_stream_raw(
 
     base_url = normalize_integration_orders_base_url(base_url)
 
-    headers = orders_integration_request_headers(api_key)
+    from src.core.central_api import CentralAPIError, error_from_response, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="analytics", credential=api_key)
 
     results = []
     last_stream_id = start_cursor or 0
@@ -87,6 +87,7 @@ def fetch_stream_raw(
     total_available_count = 0
     retries = 0
     MAX_RETRIES = 3
+    page_limit = min(max(int(limit), 1), 500)
     
     print(f"Fetching from {endpoint} endpoint at {base_url}...")
     
@@ -96,7 +97,7 @@ def fetch_stream_raw(
             time.sleep(REQUEST_DELAY)
         
         params = {
-            "limit": min(limit, 500),
+            "limit": page_limit,
             "cursor": last_stream_id,
         }
         
@@ -107,23 +108,31 @@ def fetch_stream_raw(
                 params=params,
                 timeout=60,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise error_from_response(resp, conn=conn)
             
             # Reset retries on success
             retries = 0
             
             payload = resp.json()
-            batch = payload.get("data", [])
+            from src.core.analytics_stream_contract import parse_stream_page
+
+            page = parse_stream_page(payload, endpoint)
+            batch = page.data
             
             # Try to get total from first page
             if page_count == 0:
-                total_available_count = payload.get("total", 0) or payload.get("count", 0)
+                total_available_count = page.total
 
             if not batch:
                 break
             
             results.extend(batch)
-            last_stream_id = batch[-1]["stream_id"]
+            page_cursor = page.next_cursor
+            if page_cursor is not None:
+                last_stream_id = int(page_cursor)
+            else:
+                last_stream_id = int(batch[-1]["stream_id"])
             page_count += 1
             
             print(f"Page {page_count}: Fetched {len(batch)} records (Total: {len(results)})")
@@ -134,9 +143,25 @@ def fetch_stream_raw(
                 break
             
             # Check if we got fewer records than requested (last page)
-            if len(batch) < limit:
+            if len(batch) < page_limit:
                 break
                 
+        except CentralAPIError as e:
+            if not e.retryable:
+                raise
+            retries += 1
+            print(f"Error fetching data (Attempt {retries}/{MAX_RETRIES}): {e}")
+
+            if retries >= MAX_RETRIES:
+                print("❌ Max retries reached. Aborting.")
+                raise Exception(
+                    f"Failed to connect to {endpoint} after {MAX_RETRIES} attempts: {str(e)}"
+                ) from e
+
+            print("Retrying in 5 seconds...")
+            time.sleep(5)
+            continue
+
         except requests.exceptions.RequestException as e:
             retries += 1
             print(f"Error fetching data (Attempt {retries}/{MAX_RETRIES}): {e}")

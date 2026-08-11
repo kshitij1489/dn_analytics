@@ -1,34 +1,61 @@
 import React from 'react';
 import { useNavigation } from '../contexts/NavigationContext';
+import { useStore } from '../contexts/StoreContext';
 
 interface CustomerLinkProps {
     customerId: number | string;
     name: string;
+    /** Owning restaurant, present on All Stores rows. */
+    restaurantId?: string | null;
+    restaurantName?: string | null;
     className?: string;
     style?: React.CSSProperties;
 }
 
-export function CustomerLink({ customerId, name, className, style }: CustomerLinkProps) {
+export function CustomerLink({
+    customerId, name, restaurantId, restaurantName, className, style,
+}: CustomerLinkProps) {
     const { navigate } = useNavigation();
+    const { isAllStores, stores, selectStore } = useStore();
+
+    const openProfile = () => {
+        navigate('customers', {
+            section: 'profiles',
+            mode: 'profile',
+            customerId: customerId,
+        });
+    };
+
+    // A customer profile is a single-store surface: local customer IDs are not
+    // globally unique. From All Stores, switch to the owning restaurant first.
+    const activate = () => {
+        if (!isAllStores) {
+            openProfile();
+            return;
+        }
+        if (!restaurantId) {
+            window.alert('Select one physical restaurant to open a customer profile.');
+            return;
+        }
+        const label = restaurantName
+            || stores.find((store) => store.restaurant_id === restaurantId)?.display_name
+            || restaurantId;
+        if (!window.confirm(`Open this customer in ${label}? The app will switch to that restaurant.`)) {
+            return;
+        }
+        void selectStore(restaurantId).then(openProfile);
+    };
 
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        navigate('customers', {
-            section: 'profiles',
-            mode: 'profile',
-            customerId: customerId
-        });
+        activate();
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            navigate('customers', {
-                section: 'profiles',
-                mode: 'profile',
-                customerId: customerId
-            });
+            activate();
         }
     };
 
@@ -46,7 +73,7 @@ export function CustomerLink({ customerId, name, className, style }: CustomerLin
                 fontWeight: '500',
                 ...style
             }}
-            title="View Customer Profile"
+            title={isAllStores && restaurantName ? `View Customer Profile · ${restaurantName}` : 'View Customer Profile'}
         >
             {name}
         </span>

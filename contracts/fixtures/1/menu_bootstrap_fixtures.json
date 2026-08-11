@@ -1,0 +1,120 @@
+{
+  "description": "Menu bootstrap payload fixtures for 100% coverage of request/response payloads (contract v1.7).",
+  "fixtures": [
+    {
+      "name": "menu_bootstrap_ingest_request",
+      "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
+      "payload": {
+        "id_maps": {
+          "menu_id_to_str": {
+            "item_cold_coffee": "Cold Coffee"
+          },
+          "variant_id_to_str": {
+            "variant_large": "Large"
+          },
+          "type_id_to_str": {
+            "type_beverage": "Beverage"
+          }
+        },
+        "cluster_state": {
+          "item_cold_coffee:type_beverage": {
+            "101": [
+              [
+                "101",
+                "variant_large"
+              ]
+            ]
+          }
+        },
+        "shared_pos_catalog": [
+          {
+            "locator_type": "pos_item",
+            "locator_value": "101",
+            "menu_item_id": "item_cold_coffee",
+            "variant_id": "variant_large",
+            "item_name": "Cold Coffee",
+            "item_type": "Beverage",
+            "variant_name": "Large",
+            "variant_unit": "ml",
+            "variant_value": "500.00",
+            "price": "290.00"
+          }
+        ],
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        },
+        "snapshot_role": "seed_only"
+      }
+    },
+    {
+      "name": "menu_bootstrap_ingest_response",
+      "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
+      "http_status": 200,
+      "payload": {
+        "received": 1,
+        "cluster_state_updated": true,
+        "shared_pos_catalog_updated": true
+      }
+    },
+    {
+      "name": "menu_bootstrap_ingest_response_seed_only_existing",
+      "description": "When snapshot_role is seed_only and a latest row already exists, cluster_state is NOT updated (id_maps still merge forward); an explicitly supplied shared_pos_catalog is still replaced because it is the current restaurant observation used by §25.9.",
+      "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
+      "http_status": 200,
+      "payload": {
+        "received": 1,
+        "cluster_state_updated": false,
+        "shared_pos_catalog_updated": true
+      }
+    },
+    {
+      "name": "menu_bootstrap_latest_response",
+      "endpoint": "GET /desktop-analytics-sync/menu-bootstrap/latest",
+      "http_status": 200,
+      "payload": {
+        "snapshot_id": "menu-bootstrap-2026-04-14T10:00:00Z",
+        "version": 1,
+        "updated_at": "2026-04-14T10:00:00Z",
+        "id_maps": {
+          "menu_id_to_str": {
+            "item_cold_coffee": "Cold Coffee"
+          },
+          "variant_id_to_str": {
+            "variant_large": "Large"
+          },
+          "type_id_to_str": {
+            "type_beverage": "Beverage"
+          }
+        },
+        "cluster_state": {
+          "item_cold_coffee:type_beverage": {
+            "101": [
+              [
+                "101",
+                "variant_large"
+              ]
+            ]
+          }
+        },
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "menu_bootstrap_latest_response_empty",
+      "description": "When no bootstrap has been uploaded yet for the scope.",
+      "endpoint": "GET /desktop-analytics-sync/menu-bootstrap/latest",
+      "http_status": 200,
+      "payload": {
+        "id_maps": {},
+        "cluster_state": {},
+        "menu_revision": 0
+      }
+    }
+  ]
+}

@@ -17,9 +17,7 @@ from typing import Any, Dict, Optional
 SYNC_DEVICE_ID_KEY = "sync_device_id"
 SYNC_INSTALL_ID_KEY = "sync_install_id"
 MENU_STATE_REVISION_KEY = "menu_state_revision"
-MENU_STRICT_MODE_ENABLED_KEY = "menu_strict_mode_enabled"
 CUSTOMER_STATE_REVISION_KEY = "customer_state_revision"
-CUSTOMER_STRICT_MODE_ENABLED_KEY = "customer_strict_mode_enabled"
 
 
 def ensure_sync_identity_tables(conn) -> None:
@@ -108,6 +106,16 @@ def get_device_identity(conn) -> Dict[str, str]:
     }
 
 
+def get_persisted_install_id(conn) -> Optional[str]:
+    """
+    Return the persisted install_id, or None if never established.
+
+    Unlike get_device_identity, this never mints (writes) an identity — safe to
+    call from read paths and inside transactions that may roll back.
+    """
+    return _get_system_config_value(conn, SYNC_INSTALL_ID_KEY)
+
+
 def get_active_user_identity(conn) -> Optional[Dict[str, str]]:
     if conn is None:
         return None
@@ -148,26 +156,13 @@ def set_menu_state_revision(conn, value: int) -> None:
     _set_system_config_value(conn, MENU_STATE_REVISION_KEY, str(stored))
 
 
-def get_menu_strict_mode_enabled(conn) -> bool:
-    raw = _get_system_config_value(conn, MENU_STRICT_MODE_ENABLED_KEY)
-    if raw is None:
-        return False
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def set_menu_strict_mode_enabled(conn, value: bool) -> None:
-    _set_system_config_value(conn, MENU_STRICT_MODE_ENABLED_KEY, "1" if value else "0")
-
-
 def extract_menu_scope_state(data: Any) -> Dict[str, Any]:
-    """Parse menu_revision / strict_mode_enabled from a server pull response payload."""
+    """Parse menu_revision from a server pull response payload."""
     if not isinstance(data, dict):
         return {}
     scope: Dict[str, Any] = {}
     if "menu_revision" in data and data["menu_revision"] is not None:
         scope["menu_revision"] = data["menu_revision"]
-    if "strict_mode_enabled" in data and data["strict_mode_enabled"] is not None:
-        scope["strict_mode_enabled"] = data["strict_mode_enabled"]
     return scope
 
 
@@ -178,8 +173,6 @@ def apply_menu_scope_state(conn, scope: Dict[str, Any]) -> None:
     revision = scope.get("menu_revision")
     if revision is not None:
         set_menu_state_revision(conn, int(revision))
-    if "strict_mode_enabled" in scope and scope["strict_mode_enabled"] is not None:
-        set_menu_strict_mode_enabled(conn, bool(scope["strict_mode_enabled"]))
 
 
 def get_customer_state_revision(conn) -> Optional[int]:
@@ -200,26 +193,13 @@ def set_customer_state_revision(conn, value: int) -> None:
     _set_system_config_value(conn, CUSTOMER_STATE_REVISION_KEY, str(stored))
 
 
-def get_customer_strict_mode_enabled(conn) -> bool:
-    raw = _get_system_config_value(conn, CUSTOMER_STRICT_MODE_ENABLED_KEY)
-    if raw is None:
-        return False
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def set_customer_strict_mode_enabled(conn, value: bool) -> None:
-    _set_system_config_value(conn, CUSTOMER_STRICT_MODE_ENABLED_KEY, "1" if value else "0")
-
-
 def extract_customer_scope_state(data: Any) -> Dict[str, Any]:
-    """Parse customer_revision / strict_mode_enabled from a server pull response payload."""
+    """Parse customer_revision from a server pull response payload."""
     if not isinstance(data, dict):
         return {}
     scope: Dict[str, Any] = {}
     if "customer_revision" in data and data["customer_revision"] is not None:
         scope["customer_revision"] = data["customer_revision"]
-    if "strict_mode_enabled" in data and data["strict_mode_enabled"] is not None:
-        scope["strict_mode_enabled"] = data["strict_mode_enabled"]
     return scope
 
 
@@ -230,8 +210,6 @@ def apply_customer_scope_state(conn, scope: Dict[str, Any]) -> None:
     revision = scope.get("customer_revision")
     if revision is not None:
         set_customer_state_revision(conn, int(revision))
-    if "strict_mode_enabled" in scope and scope["strict_mode_enabled"] is not None:
-        set_customer_strict_mode_enabled(conn, bool(scope["strict_mode_enabled"]))
 
 
 def should_apply_pulled_customer_revision(*, has_more: bool, stats: Dict[str, Any]) -> bool:

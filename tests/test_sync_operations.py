@@ -7,6 +7,50 @@ from src.core.services.sync_service import SyncStatus
 
 
 class SyncOperationsTests(unittest.TestCase):
+    def test_global_menu_pull_runs_before_order_ingest(self) -> None:
+        conn = Mock()
+        order = []
+
+        def order_sync(_conn):
+            order.append("orders")
+            return iter(
+                [SyncStatus("done", "Sync Complete", progress=1.0, stats={"fetched": 0})]
+            )
+
+        active = Mock(active=True)
+        with patch(
+            "src.core.global_menu_schema.resolve_global_menu_capability",
+            return_value=active,
+        ), patch(
+            "src.core.global_menu_sync.pull_global_menu_state",
+            side_effect=lambda _conn, **_kwargs: order.append("global") or {"status": "applied"},
+        ), patch(
+            "src.api.routers.operations.sync_database", side_effect=order_sync
+        ), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            return_value={"attempted": False},
+        ):
+            statuses = list(operations.iter_sync_statuses(conn))
+
+        self.assertEqual(order, ["global", "orders"])
+        self.assertEqual(statuses[-1].type, "done")
+
+    def test_failed_mandatory_global_pull_prevents_order_ingest(self) -> None:
+        conn = Mock()
+        active = Mock(active=True)
+        with patch(
+            "src.core.global_menu_schema.resolve_global_menu_capability",
+            return_value=active,
+        ), patch(
+            "src.core.global_menu_sync.pull_global_menu_state",
+            return_value={"status": "error", "error": "bad redirect"},
+        ), patch("src.api.routers.operations.sync_database") as order_sync:
+            statuses = list(operations.iter_sync_statuses(conn))
+
+        order_sync.assert_not_called()
+        self.assertEqual(statuses[-1].type, "error")
+        self.assertEqual(statuses[-1].code, "global_menu_sync_failed")
+
     def test_iter_sync_statuses_waits_for_cloud_pull_before_done(self) -> None:
         conn = Mock()
         cloud_summary = {
@@ -34,7 +78,7 @@ class SyncOperationsTests(unittest.TestCase):
         self.assertEqual([status.type for status in statuses], ["info", "info", "done"])
         self.assertEqual(statuses[-1].message, "No new orders to sync · Cloud pull finished")
         self.assertEqual(statuses[-1].stats["cloud_pull"], cloud_summary)
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False)
+        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False, already_locked=False)
 
     def test_iter_sync_statuses_does_not_run_cloud_pull_after_error(self) -> None:
         conn = Mock()
@@ -86,7 +130,7 @@ class SyncOperationsTests(unittest.TestCase):
 
         bootstrap_pull.assert_called_once()
         order_sync.assert_called_once_with(conn)
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=True)
+        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=True, already_locked=False)
         self.assertEqual(statuses[0].message, "Menu catalog empty — pulling from cloud before order sync...")
         self.assertIn("3 items", statuses[1].message)
         self.assertEqual(statuses[-1].type, "done")
@@ -114,7 +158,7 @@ class SyncOperationsTests(unittest.TestCase):
             statuses = list(operations.iter_sync_statuses(conn))
 
         bootstrap_pull.assert_not_called()
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False)
+        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False, already_locked=False)
         self.assertEqual(statuses[0].message, "Order sync complete. Pulling cloud data...")
         conn.close()
 
@@ -145,6 +189,33 @@ class SyncOperationsTests(unittest.TestCase):
         self.assertIn("Menu pull failed", statuses[-1].message)
         self.assertTrue(statuses[-1].stats.get("menu_pull_failed"))
         self.assertEqual(statuses[-1].stats["menu_pull_errors"][0]["stream"], "menu_merges")
+
+    def test_iter_sync_statuses_preserves_global_cloud_failure_code(self) -> None:
+        conn = Mock()
+        sync_statuses = iter(
+            [SyncStatus("done", "Sync Complete", progress=1.0, stats={"fetched": 1})]
+        )
+        cloud_summary = {
+            "attempted": True,
+            "menu_merges": {"error": "invalid_api_key: Invalid API key"},
+            "menu_bootstrap": None,
+            "menu_assignments_bootstrap": None,
+            "menu_mapping_verifications": None,
+            "customer_merges": None,
+        }
+
+        with patch("src.api.routers.operations.sync_database", return_value=sync_statuses), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            return_value=cloud_summary,
+        ), patch(
+            "src.api.routers.operations._menu_items_empty",
+            return_value=False,
+        ):
+            terminal = list(operations.iter_sync_statuses(conn))[-1]
+
+        self.assertEqual(terminal.type, "error")
+        self.assertEqual(terminal.code, "invalid_api_key")
+        self.assertEqual(terminal.stats["failure_code"], "invalid_api_key")
 
     def test_iter_sync_statuses_marks_customer_pull_failure_as_terminal_error(self) -> None:
         conn = Mock()
@@ -203,6 +274,78 @@ class SyncOperationsTests(unittest.TestCase):
         self.assertFalse(statuses[-1].stats.get("customer_pull_failed"))
         self.assertEqual(
             statuses[-1].stats["customer_pull_warnings"][0]["stream"], "customer_merges"
+        )
+
+    def test_iter_sync_statuses_surfaces_nonfatal_forecast_warning(self) -> None:
+        conn = Mock()
+        sync_statuses = iter(
+            [SyncStatus("done", "Sync Complete", progress=1.0, stats={"fetched": 1})]
+        )
+        cloud_summary = {
+            "attempted": True,
+            "menu_merges": None,
+            "menu_bootstrap": None,
+            "menu_assignments_bootstrap": None,
+            "menu_mapping_verifications": None,
+            "customer_merges": {"error": None, "unresolved_pending": 2},
+            "forecasts": {"status": "error", "error": "missing parent run"},
+        }
+
+        with patch("src.api.routers.operations.sync_database", return_value=sync_statuses), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            return_value=cloud_summary,
+        ), patch(
+            "src.api.routers.operations._menu_items_empty",
+            return_value=False,
+        ):
+            terminal = list(operations.iter_sync_statuses(conn))[-1]
+
+        self.assertEqual(terminal.type, "done")
+        self.assertIn("2 customer merge event(s)", terminal.message)
+        self.assertIn("Warning: missing parent run", terminal.message)
+        self.assertEqual(
+            terminal.stats["forecast_pull_warnings"],
+            [{"stream": "forecasts", "warning": "missing parent run"}],
+        )
+
+    def test_iter_sync_statuses_surfaces_nonfatal_global_history_warning(self) -> None:
+        conn = Mock()
+        sync_statuses = iter(
+            [SyncStatus("done", "Sync Complete", progress=1.0, stats={"fetched": 1})]
+        )
+        cloud_summary = {
+            "attempted": True,
+            "menu_merges": None,
+            "menu_bootstrap": None,
+            "menu_assignments_bootstrap": None,
+            "menu_mapping_verifications": None,
+            "customer_merges": None,
+            "global_menu_history": {
+                "status": "error",
+                "error": "malformed unified history page",
+            },
+        }
+
+        with patch("src.api.routers.operations.sync_database", return_value=sync_statuses), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            return_value=cloud_summary,
+        ), patch(
+            "src.api.routers.operations._menu_items_empty",
+            return_value=False,
+        ):
+            terminal = list(operations.iter_sync_statuses(conn))[-1]
+
+        self.assertEqual(terminal.type, "done")
+        self.assertIn("Warning: malformed unified history page", terminal.message)
+        self.assertFalse(terminal.stats.get("menu_pull_failed"))
+        self.assertEqual(
+            terminal.stats["global_menu_history_warnings"],
+            [
+                {
+                    "stream": "global_menu_history",
+                    "warning": "malformed unified history page",
+                }
+            ],
         )
 
 

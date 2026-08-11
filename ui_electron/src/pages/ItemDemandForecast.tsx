@@ -47,7 +47,7 @@ const formatDate = (isoStr: string) => {
     return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 };
 
-export default function ItemDemandForecast({ trainingActive = false }: { trainingActive?: boolean }) {
+export default function ItemDemandForecast() {
     const [data, setData] = useState<ItemForecastResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -56,8 +56,8 @@ export default function ItemDemandForecast({ trainingActive = false }: { trainin
     const [popup, setPopup] = useState<PopupMessage | null>(null);
 
     useEffect(() => {
-        if (!trainingActive) loadData();
-    }, [trainingActive]);
+        loadData();
+    }, []);
 
     const loadData = async () => {
         setLoading(true);
@@ -69,10 +69,6 @@ export default function ItemDemandForecast({ trainingActive = false }: { trainin
                 setSelectedItemId(res.data.items[0].item_id);
             }
         } catch (e: any) {
-            if (e?.response?.status === 503) {
-                // Training in progress — don't show error, parent overlay handles it
-                return;
-            }
             console.error('Failed to fetch item forecast:', e);
             const detail = e.response?.data?.detail || e.message || 'Failed to load item forecast';
             setError(detail);
@@ -193,35 +189,7 @@ export default function ItemDemandForecast({ trainingActive = false }: { trainin
                     gap: '12px',
                     flexWrap: 'wrap',
                 }}>
-                    <span>{data.message || 'Item demand forecast cache is empty. Use Pull from Cloud or Full Retrain to populate.'}</span>
-                    <button
-                        onClick={async () => {
-                            try {
-                                const res = await endpoints.forecast.pullFromCloud('items');
-                                const msg = res.data as { item_inserted?: number };
-                                setPopup({ type: 'success', message: `Done. Items: ${msg.item_inserted ?? 0}` });
-                                loadData();
-                            } catch (e: any) {
-                                setPopup({ type: 'error', message: e.response?.data?.detail || "Pull failed" });
-                            }
-                        }}
-                        style={{ padding: '8px 14px', background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                        Pull from Cloud
-                    </button>
-                    <button
-                        onClick={async () => {
-                            try {
-                                await endpoints.forecast.fullRetrain('items');
-                                setPopup({ type: 'info', message: 'Item demand retrain started. This might take a few minutes.' });
-                            } catch (e: any) {
-                                setPopup({ type: 'error', message: e.response?.data?.detail || "Retrain failed" });
-                            }
-                        }}
-                        style={{ padding: '8px 14px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                        Full Retrain
-                    </button>
+                    <span>{data.message || 'Item forecast cache is empty. Run Sync DB to fetch from the central server.'}</span>
                 </div>
             )}
             <Card

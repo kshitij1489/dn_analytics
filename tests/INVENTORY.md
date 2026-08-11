@@ -6,7 +6,7 @@ Quick map of unit tests under `tests/`. Run the suite with:
 .venv/bin/python -m pytest tests/ -v
 ```
 
-**Last audited:** 2026-07-06 — 19 files, 104 tests, all passing.
+**Last full audit:** 2026-07-06. **Last updated:** 2026-07-10 (itemcode projection suites added) — 35 files, 304 tests, all passing. Per-file sections below cover the audited core; files added after 2026-07-06 (customer strict-mode, forecast sync, edit APIs, scope-state pulls) are counted in the totals but only itemcode files have sections so far.
 
 ---
 
@@ -17,6 +17,7 @@ Quick map of unit tests under `tests/`. Run the suite with:
 | Menu merge & assignments | 6 | 44 | `utils/menu_utils.py`, `src/core/menu_*_sync*.py`, `src/core/menu_assignment_*` |
 | Customer merge & analytics | 7 | 38 | `src/core/customer_*`, `src/core/queries/customer_*` |
 | Ingestion & clustering | 3 | 7 | `services/`, `utils/clean_order_item.py`, `scripts/seed_from_backups.py` |
+| Itemcode projection | 3 | 44 | `src/core/itemcode_mapping.py`, `services/clustering_service.py`, lifecycle rebuild hooks |
 | Sync orchestration | 3 | 8 | `src/core/services/`, `src/core/client_learning_shipper.py` |
 | Menu queries & enforcement | 2 | 3 | `src/core/queries/menu_queries.py`, `utils/menu_item_variant_enforcement.py` |
 
@@ -32,17 +33,17 @@ Quick map of unit tests under `tests/`. Run the suite with:
 - **Covers:** Local merge/undo, variant resolution, preview-merge (same-item variant), suggestion retargeting, forecast-cache clearing.
 - **Overlap:** Complements `test_menu_merge_sync.py` (sync events) and `test_menu_assignment_apply.py` (multi-install LWW). Does **not** duplicate pull/push or conflict-matrix tests.
 
-#### `test_menu_merge_sync.py` (15 tests)
-- **Modules:** `src/core/menu_merge_sync.py`, `src/core/menu_merge_shipper.py`, `src/core/menu_sync_quarantine.py`, `src/core/sync_cursor_migration.py`
-- **Classes:** `MenuMergeSyncTests`, `MenuMergeShipperTests`
-- **Covers:** Local merge/undo outbox, remote pull apply/undo, remap on merge stream, quarantine drain, cursor reset, sync-conflicts UI data, shipper upload batches.
-- **Overlap:** `test_retry_drains_quarantine_on_next_pull` and `test_upload_pending_mixed_accepted_rejected_batch` mirror patterns in customer/verification shipper tests but target the **menu merge** stream only.
+#### `test_menu_merge_sync.py` (10 tests)
+- **Modules:** `src/core/menu_merge_sync.py`, `src/core/menu_sync_quarantine.py`, `src/core/sync_cursor_migration.py`
+- **Class:** `MenuMergeSyncTests`
+- **Covers:** Remote pull apply/undo, remap on merge stream, quarantine drain, cursor reset, sync-conflicts UI data. (Legacy outbox/shipper tests removed with the strict-only cutover.)
+- **Overlap:** `test_retry_drains_quarantine_on_next_pull` mirrors the verification-stream quarantine test but targets the **menu merge** stream only.
 
 #### `test_menu_assignment_apply.py` (9 tests)
 - **Modules:** `src/core/menu_assignment_apply.py`, `src/core/menu_mapping_verification_sync_events.py`
 - **Class:** `MenuAssignmentApplyTests`
 - **Helpers exported:** `make_install_db`, `FakeEventServer`, `pull_install` (reused by `test_menu_assignment_bootstrap.py`)
-- **Covers:** Contract fixture parity (`contracts/menu_merge_event_fixtures.json`, `contracts/menu_mapping_verification_event_fixtures.json`), LWW conflict matrix, echo/ack, stale events, v1 legacy wire derivation, `is_verified` convergence.
+- **Covers:** Contract fixture parity (`contracts/fixtures/1/menu_merge_event_fixtures.json`, `…/menu_mapping_verification_event_fixtures.json`), LWW conflict matrix, echo/ack, stale events, v1 legacy wire derivation, `is_verified` convergence.
 - **Overlap:** Uses `menu_utils` for local ops; tests assignment-layer convergence, not HTTP pull (see `test_menu_merge_sync.py`).
 
 #### `test_menu_assignment_bootstrap.py` (5 tests)
@@ -56,10 +57,10 @@ Quick map of unit tests under `tests/`. Run the suite with:
 - **Class:** `MenuBootstrapPullTests`
 - **Covers:** Seed + relink order items, seed-only mode (no assignment overwrite), legacy snapshot variant-metadata inference.
 
-#### `test_menu_mapping_verification_sync.py` (9 tests)
-- **Modules:** `src/core/menu_mapping_verification_sync.py`, `src/core/menu_mapping_verification_shipper.py`, `src/core/menu_mapping_verification_sync_events.py`
+#### `test_menu_mapping_verification_sync.py` (7 tests)
+- **Modules:** `src/core/menu_mapping_verification_sync.py`, `src/core/menu_mapping_verification_sync_events.py`
 - **Class:** `MenuMappingVerificationSyncTests`
-- **Covers:** Record/pull verified-by-order-item-id, deferred flush, idempotent pull, quarantine poison events, shipper upload, bulk partial apply, verification stream sequence guard.
+- **Covers:** Record/pull verified-by-order-item-id, deferred flush, idempotent pull, quarantine poison events, bulk partial apply, verification stream sequence guard. (Legacy shipper-upload tests removed with the strict-only cutover.)
 
 ---
 
@@ -77,9 +78,9 @@ Quick map of unit tests under `tests/`. Run the suite with:
 - **Covers:** Name similarity edge cases, quantity-weighted basket overlap.
 
 #### `test_customer_merge_sync.py` (4 tests)
-- **Modules:** `src/core/customer_merge_sync_events.py`, `src/core/customer_merge_shipper.py`, `src/core/queries/customer_merge_queries.py`
+- **Modules:** `src/core/customer_merge_sync_events.py`, `src/core/queries/customer_merge_queries.py`
 - **Class:** `CustomerMergeSyncTests`
-- **Covers:** Outbox on merge/undo, shipper upload, server-rejected quarantine.
+- **Covers:** `build_*` event payload builders on merge/undo — metadata/locators/attribution, undone-event linkage via legacy outbox row and via `suggestion_context.remote_event_id`. (Legacy shipper-upload and outbox-writer tests removed with the strict-only cutover.)
 
 #### `test_customer_merge_pull.py` (4 tests)
 - **Modules:** `src/core/customer_merge_sync.py`, `src/core/customer_merge_sync_events.py`
@@ -98,6 +99,25 @@ Quick map of unit tests under `tests/`. Run the suite with:
 
 ---
 
+### Itemcode projection
+
+#### `test_itemcode_mapping.py` (24 tests)
+- **Module:** `src/core/itemcode_mapping.py`
+- **Classes:** `TestNormalizeItemcode`, `TestObserve`, `TestRebuild`, `TestSchemaAndCascade`
+- **Covers:** Normalization (null/blank/numeric/whitespace, case preserved), observation semantics (evidence increment, per-restaurant independence, many codes → one parent, deterministic sorted conflict JSON, candidate union), full rebuild (idempotent, stale removal, trusts assignments over order rows, distinct-itemid evidence, scoped rebuild, merge-shaped conflict resolution), schema idempotence + FK cascades. Helpers never commit.
+
+#### `test_itemcode_clustering.py` (11 tests)
+- **Modules:** `services/clustering_service.py` (`OrderItemCluster.add` itemcode routing), `src/core/itemcode_mapping.py`
+- **Classes:** `TestExistingItemidPriority`, `TestItemcodeHit`, `TestFallbackPaths`, `TestTransactionality`
+- **Covers:** itemid-first priority (disagreement marks conflict, never remaps), `itemcode-hit` routing (shared parent + distinct variants, two codes → one parent, C1 verification inheritance), fallback parity for conflicted/blank codes, fuzzy stays suggestion while projection learns, addons produce no itemcode rows, rollback removes all partial itemcode effects.
+
+#### `test_itemcode_lifecycle.py` (9 tests)
+- **Modules:** `utils/menu_utils.py`, `src/core/menu_merge_sync.py`, `src/core/menu_assignment_bootstrap.py`, `src/core/services/sync_service.py` (rebuild hooks)
+- **Class:** `ItemcodeLifecycleTests`
+- **Covers:** Projection rebuild convergence across local merge, variant merge, resolution, undo, assignment-batch epilogue; merge resolves split conflicts; undo restores aliases from assignments; strict-mode capture/rollback leaks nothing; best-effort rebuild survives partial schema.
+
+---
+
 ### Ingestion, clustering & durable seed
 
 #### `test_clean_order_item.py` (4 tests)
@@ -105,10 +125,10 @@ Quick map of unit tests under `tests/`. Run the suite with:
 - **Class:** `CleanOrderItemTests`
 - **Covers:** Waffle-cone name normalization and cluster reuse (domain-specific regression fixtures).
 
-#### `test_seed_from_backups.py` (2 tests)
+#### `test_seed_from_backups.py` (5 tests)
 - **Module:** `scripts/seed_from_backups.py`
 - **Class:** `SeedFromBackupsExportTests` *(name predates `perform_seeding` test; covers export + seed)*
-- **Covers:** `export_to_backups` variant metadata persistence; `perform_seeding` skips stale `id_maps` entries with no `cluster_state` key (catalog-only default).
+- **Covers:** `export_to_backups` variant metadata persistence; explicit restore directory handling; missing backup behavior; full restore itemcode rebuild; no-arg CLI refuses implicit restore.
 
 #### `test_menu_item_variant_enforcement.py` (2 tests)
 - **Module:** `utils/menu_item_variant_enforcement.py`
@@ -124,10 +144,10 @@ Quick map of unit tests under `tests/`. Run the suite with:
 - **Class:** `SyncOperationsTests`
 - **Covers:** `iter_sync_statuses` waits for best-effort cloud pull before `done`; skips cloud pull after sync error.
 
-#### `test_cloud_pull_lock_and_nudge.py` (5 tests)
-- **Modules:** `src/core/services/cloud_pull_orchestrator.py`, `src/core/menu_merge_push_nudge.py`
-- **Classes:** `CloudPullLockTests`, `MenuMergePushNudgeTests`
-- **Covers:** Non-blocking pull lock, lock release, async push nudge on local merge.
+#### `test_cloud_pull_lock_and_nudge.py` (9 tests)
+- **Modules:** `src/core/services/cloud_pull_orchestrator.py`
+- **Class:** `CloudPullLockTests`
+- **Covers:** Non-blocking pull lock, lock release, reentrancy (already_locked) for menu/customer state pulls, orchestrator lock passing.
 
 #### `test_client_learning_shipper.py` (1 test)
 - **Module:** `src/core/client_learning_shipper.py`
@@ -149,7 +169,6 @@ Quick map of unit tests under `tests/`. Run the suite with:
 
 | Pattern | Files | Note |
 |---------|-------|------|
-| `test_upload_pending_mixed_accepted_rejected_batch` | `test_menu_merge_sync`, `test_menu_mapping_verification_sync`, `test_customer_merge_sync` | Same HTTP batch-response shape; **different shippers** — keep all three. |
 | `test_retry_drains_quarantine_on_next_pull` | `test_menu_merge_sync`, `test_menu_mapping_verification_sync` | Same quarantine helper; **different sync streams** — keep both. |
 | Local merge behavior | `test_menu_utils`, `test_menu_merge_sync` | Utils = business logic + caches; merge_sync = outbox/event recording. |
 | Similarity | `test_customer_similarity_scoring`, `test_customer_merge_rules` | Pure functions vs query/policy integration. |
@@ -166,7 +185,7 @@ Quick map of unit tests under `tests/`. Run the suite with:
 | `src/core/services/sync_service.py` (`sync_database`) | Only `iter_sync_statuses` wrapper tested; not full order-ingest path. |
 | Deleted scripts (`export_cluster_review.py`, `export_combo_cluster_review.py`, `resolve_unclustered.py`) | Never had tests under `tests/`; no cleanup needed. |
 | `ui_electron/` | No frontend unit tests in this repo. |
-| Forecasting / AI mode | No tests in `tests/` (see `docs/FORECASTING_AND_SYNC.md`, `src/ai_mode/`). |
+| Forecasting / AI mode | No tests in `tests/` (see `docs/CENTRAL_FORECASTING_NIGHTLY_PLAN.md`, `src/ai_mode/`). |
 
 ---
 

@@ -1,4 +1,5 @@
 
+import argparse
 import sys
 import os
 import json
@@ -6,15 +7,17 @@ import json
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
-from src.core.db.connection import get_db_connection
+from src.core.db.connection import get_profile_connection
+from src.core.profiles import get_profile
 from src.core.queries import customer_queries
 
-def test_customer_profile():
-    print("Testing Customer Profile Backend...")
-    
-    conn, msg = get_db_connection()
-    if conn is None:
-        print(f"DB Connection Failed: {msg}")
+def test_customer_profile(restaurant_id: str):
+    print(f"Testing Customer Profile Backend for {restaurant_id}...")
+
+    try:
+        conn, msg = get_profile_connection(get_profile(restaurant_id))
+    except Exception as exc:
+        print(f"Profile connection failed: {exc}")
         return
     print(f"DB Connection: {msg}")
 
@@ -48,4 +51,6 @@ def test_customer_profile():
     conn.close()
 
 if __name__ == "__main__":
-    test_customer_profile()
+    parser = argparse.ArgumentParser(description="Smoke-check customer profile queries for one restaurant")
+    parser.add_argument("--restaurant-id", required=True, help="Bound restaurant profile to read")
+    test_customer_profile(parser.parse_args().restaurant_id)

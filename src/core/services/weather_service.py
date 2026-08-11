@@ -5,8 +5,7 @@ import json
 import os
 import shutil
 from datetime import date, datetime, timedelta
-from src.core.db.connection import get_db_connection
-from src.core.utils.path_helper import get_resource_path, get_data_path
+from src.core.db.connection import get_profile_connection
 
 # Open-Meteo Endpoints
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -23,8 +22,21 @@ CACHE_DURATION_HOURS = 8  # Minimum hours between API syncs
 ARCHIVE_REFRESH_DAYS = 7  # Always refresh this many days of historical data to update forecast->actual values
 
 class WeatherService:
-    def __init__(self):
-         pass
+    def __init__(self, profile):
+         self.profile = profile
+
+    def _connection(self):
+        return get_profile_connection(self.profile)
+
+    def _csv_path(self):
+        """Per-profile export path. `weather_daily` is profile-local, so its
+        derived CSV must be too — a shared file let one store overwrite
+        another store's export."""
+        from src.core.profiles import profile_data_dir
+
+        return os.path.join(
+            str(profile_data_dir(self.profile.restaurant_id)), "weather_history.csv"
+        )
 
     def get_lat_lon(self, city: str):
         if city.lower() == "gurugram" or city.lower() == "gurgaon":
@@ -39,7 +51,7 @@ class WeatherService:
         3. Fetches Forecast Snapshots (Retrospective & Live) for EVERY row.
         4. Exports new CSV.
         """
-        conn, _ = get_db_connection()
+        conn, _ = self._connection()
         if not conn:
             return False, "Database connection failed"
 
@@ -88,7 +100,7 @@ class WeatherService:
            - If today's row doesn't exist, it's created with forecast values as placeholders.
         4. Export updated data to weather_history.csv.
         """
-        conn, _ = get_db_connection()
+        conn, _ = self._connection()
         if not conn:
             return False, "Database connection failed"
 
@@ -169,9 +181,8 @@ class WeatherService:
         print("Clearing existing weather data...")
         conn.execute("DELETE FROM weather_daily")
         
-        # Use absolute path handling for frozen app
-        csv_path = get_data_path(os.path.join("data", "weather_history.csv"))
-        
+        csv_path = self._csv_path()
+
         if os.path.exists(csv_path):
             os.remove(csv_path)
 
@@ -324,11 +335,8 @@ class WeatherService:
             params=(city,)
         )
         
-        # Use absolute path handling
-        output_dir = get_data_path("data")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            
-        output_path = os.path.join(output_dir, "weather_history.csv")
+        output_path = self._csv_path()
         df.to_csv(output_path, index=False)
-        print(f"Weather data exported to {output_path}")
+        print(
+            f"Weather data exported for {self.profile.restaurant_id} to {output_path}"
+        )

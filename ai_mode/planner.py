@@ -4,19 +4,17 @@ AI Mode: action planner — turns classifier output into an ordered list of acti
 
 from typing import Dict, Any, List
 
-from ai_mode.actions import intent_to_actions, ALL_ACTIONS
+from ai_mode.actions import intent_to_actions
 
 
 def plan_actions(classification: Dict[str, Any]) -> List[str]:
     """
-    Return an ordered list of action identifiers from the classifier output.
-    Uses "actions" from the LLM if present and valid; otherwise derives from "intent".
+    Return an ordered list of action identifiers derived from the classifier "intent".
+
+    Note: INTENT_CLASSIFICATION_PROMPT only returns {"intent", "reason"}, so there is
+    no LLM-supplied "actions" list to honor. Multi-step sequences are produced by
+    intent_to_actions. If the classifier is ever extended to emit an explicit
+    "actions" list, validate it against ALL_ACTIONS here before returning it.
     """
-    raw_actions = classification.get("actions")
-    if isinstance(raw_actions, list) and len(raw_actions) > 0:
-        # Validate and filter to known actions only
-        valid = [a for a in raw_actions if a in ALL_ACTIONS]
-        if valid:
-            return valid
     intent = classification.get("intent", "GENERAL_CHAT")
     return intent_to_actions(intent)

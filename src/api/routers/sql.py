@@ -1,21 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import pandas as pd
-from src.core.db.connection import get_db_connection
+from src.api.dependencies import get_db
 from src.core.queries import table_queries
 from src.api.models import QueryRequest
 from typing import List, Dict, Any, Optional
 
 router = APIRouter()
-
-def get_db():
-    conn, err = get_db_connection()
-    if conn is None:
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {err}")
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 def df_to_json(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return df.where(pd.notnull(df), None).to_dict(orient='records')

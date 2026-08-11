@@ -8,7 +8,7 @@ Desktop analytics app for order ingestion, menu clustering, forecasting, and clo
 - **`ui_electron/`**: Electron + React frontend.
 - **`services/`**: Data ingestion, order loading, and clustering helpers.
 - **`database/`**: SQLite schema and migration assets.
-- **`data/`**: Durable menu/reseed artifacts and local data files.
+- **`data/`**: Dev/disaster-recovery JSON exports and local data files — not runtime stores.
 - **`utils/`**: Shared menu, clustering, and sync utilities.
 - **`scripts/`**: Start, build, sync, verification, and release scripts.
 
@@ -22,10 +22,10 @@ Desktop analytics app for order ingestion, menu clustering, forecasting, and clo
 make start
 
 # 2. Verify SQLite connection and schema
-make verify
+make verify RESTAURANT_ID=<restaurant-id>
 
 # 3. Sync new orders incrementally
-make sync
+make sync RESTAURANT_ID=<restaurant-id>
 ```
 
 ### Manual Setup
@@ -35,7 +35,7 @@ make sync
    cd ui_electron && npm install
    ```
 2. **Environment**:
-   Optional: set `DB_URL` to an alternate SQLite path. By default the app uses `analytics.db`.
+   Each restaurant profile gets its own SQLite file; `analytics-control.db` holds the profile registry and app-global config.
 3. **Run App**:
    ```bash
    make start
@@ -44,8 +44,8 @@ make sync
 ## 🛠 Project Architecture
 
 ### "Brain vs. Muscle"
-- **Brain (`data/` durable menu artifacts)**: Persistent mapping/reseed state. Preserve across rebuilds.
-- **Muscle (`analytics.db` SQLite)**: Transient local database. Can be wiped (`make clean`) and rebuilt (`make start` / `make verify`) from schema plus durable artifacts.
+- **Brain (central server state)**: The Dachnona server is the durable source for menu assignments, verification flags, merge history, and forecasts; local SQLite is this install's cache. JSON files under `data/` are explicit dev/disaster-recovery exports — preserve them, but they are not runtime truth.
+- **Muscle (one SQLite profile per restaurant)**: Transient local databases. Use the app's selected-profile reset flow to rebuild one restaurant safely.
 
 ### Key Directories
 - **`src/`**: Backend, API routers, database access, and sync logic.
@@ -59,17 +59,20 @@ make sync
 **Start here:** [docs/INDEX.md](docs/INDEX.md) (task routing hub) · [AGENTS.md](AGENTS.md) (AI agent instructions) · [CLAUDE.md](CLAUDE.md) (Claude pointer)
 
 - **System Context**: [docs/SYSTEM_CONTEXT.md](docs/SYSTEM_CONTEXT.md)
-- **AI session guide**: [docs/AI_SESSION_GUIDE.md](docs/AI_SESSION_GUIDE.md)
+- **File inventory (where is X?)**: [docs/FILE_INVENTORY.md](docs/FILE_INVENTORY.md)
+- **Order ingest pipeline**: [docs/ORDER_INGEST_PIPELINE.md](docs/ORDER_INGEST_PIPELINE.md)
+- **Item clustering**: [docs/item_clustering.md](docs/item_clustering.md)
+- **AI session conventions + All Stores**: [docs/SESSION_AND_ALL_STORES.md](docs/SESSION_AND_ALL_STORES.md)
 - **Database Schema**: Full schema in `database/schema_sqlite.sql`
 - **Build & Share**: [docs/BUILD_INSTRUCTIONS.md](docs/BUILD_INSTRUCTIONS.md)
-- **Forecasting & cloud sync**: [docs/FORECASTING_AND_SYNC.md](docs/FORECASTING_AND_SYNC.md)
-- **Troubleshooting (macOS app)**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- **Forecasting (central nightly + desktop pull-only)**: [docs/CENTRAL_FORECASTING_NIGHTLY_PLAN.md](docs/CENTRAL_FORECASTING_NIGHTLY_PLAN.md)
+- **Cloud sync API (incl. telemetry/bootstrap ingest)**: [contracts/central_server_analytics_app_api_contract.md](contracts/central_server_analytics_app_api_contract.md)
 
 ## 🔧 Troubleshooting
 - **App Not Loading**: Run `make backend` and `make frontend` separately to isolate backend vs Electron issues.
-- **Database Reset**: Run `make clean && make verify` to wipe and recreate the local SQLite DB.
-- **New Orders**: Run `make sync` to fetch incremental orders.
-- **macOS "Damaged" or "Unidentified Developer"**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+- **Database Reset**: Use the in-app reset for the explicitly selected restaurant. `make clean` only removes the legacy `analytics.db` development file and requires a later explicit re-bind.
+- **New Orders**: Run `make sync RESTAURANT_ID=<restaurant-id>` to fetch incremental orders for one profile.
+- **macOS "Damaged" or "Unidentified Developer"**: See [docs/BUILD_INSTRUCTIONS.md](docs/BUILD_INSTRUCTIONS.md) §5.
 
 ## ✨ Functionalities
 

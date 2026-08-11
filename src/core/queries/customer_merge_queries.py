@@ -4,8 +4,6 @@ from typing import List, Optional
 from src.core.customer_merge_sync_events import (
     build_merge_applied_event_payload,
     build_merge_undone_event_payload,
-    record_merge_applied_event,
-    record_merge_undone_event,
 )
 from src.core.customer_mutation_commit import (
     MUTATION_TYPE_CUSTOMER_MERGE_APPLIED,
@@ -13,7 +11,6 @@ from src.core.customer_mutation_commit import (
     build_plan,
     commit_mutation,
     commit_result_to_customer_response,
-    strict_mode_active,
     strict_mode_edit_blocked_response,
 )
 from src.core.queries.customer_merge_helpers import (
@@ -140,38 +137,25 @@ def merge_customers(
         recompute_customer_aggregates(conn, source_customer_id)
         recompute_customer_aggregates(conn, target_customer_id)
 
-        if strict_mode_active(conn):
-            event = build_merge_applied_event_payload(conn, int(merge_id))
-            if not event:
-                conn.rollback()
-                return {"status": "error", "message": "Failed to build merge event"}
-            plan = build_plan(
-                mutation_type=MUTATION_TYPE_CUSTOMER_MERGE_APPLIED,
-                event=event,
-            )
-            return _commit_strict_plan(
-                conn,
-                plan,
-                success_message=f"Merged customer {source_customer_id} into {target_customer_id}.",
-                success_extra={
-                    "source_customer_id": str(source_customer_id),
-                    "target_customer_id": str(target_customer_id),
-                    "orders_moved": len(moved_order_ids),
-                    "target_is_verified": bool(target_is_verified_after_merge),
-                },
-            )
-
-        record_merge_applied_event(conn, int(merge_id))
-        conn.commit()
-        return {
-            "status": "success",
-            "message": f"Merged customer {source_customer_id} into {target_customer_id}.",
-            "merge_id": int(merge_id),
-            "source_customer_id": str(source_customer_id),
-            "target_customer_id": str(target_customer_id),
-            "orders_moved": len(moved_order_ids),
-            "target_is_verified": bool(target_is_verified_after_merge),
-        }
+        event = build_merge_applied_event_payload(conn, int(merge_id))
+        if not event:
+            conn.rollback()
+            return {"status": "error", "message": "Failed to build merge event"}
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_CUSTOMER_MERGE_APPLIED,
+            event=event,
+        )
+        return _commit_strict_plan(
+            conn,
+            plan,
+            success_message=f"Merged customer {source_customer_id} into {target_customer_id}.",
+            success_extra={
+                "source_customer_id": str(source_customer_id),
+                "target_customer_id": str(target_customer_id),
+                "orders_moved": len(moved_order_ids),
+                "target_is_verified": bool(target_is_verified_after_merge),
+            },
+        )
     except Exception as exc:
         conn.rollback()
         return {"status": "error", "message": str(exc)}
@@ -243,36 +227,24 @@ def undo_customer_merge(conn, merge_id: int):
         recompute_customer_aggregates(conn, str(row["source_customer_id"]))
         recompute_customer_aggregates(conn, str(row["target_customer_id"]))
 
-        if strict_mode_active(conn):
-            event = build_merge_undone_event_payload(conn, int(merge_id))
-            if not event:
-                conn.rollback()
-                return {"status": "error", "message": "Failed to build undo event"}
-            plan = build_plan(
-                mutation_type=MUTATION_TYPE_CUSTOMER_MERGE_UNDONE,
-                event=event,
-            )
-            return _commit_strict_plan(
-                conn,
-                plan,
-                success_message=f"Undo complete for merge {merge_id}.",
-                success_extra={
-                    "source_customer_id": str(row["source_customer_id"]),
-                    "target_customer_id": str(row["target_customer_id"]),
-                    "orders_moved": len(moved_order_ids),
-                },
-            )
-
-        record_merge_undone_event(conn, int(merge_id))
-        conn.commit()
-        return {
-            "status": "success",
-            "message": f"Undo complete for merge {merge_id}.",
-            "merge_id": int(merge_id),
-            "source_customer_id": str(row["source_customer_id"]),
-            "target_customer_id": str(row["target_customer_id"]),
-            "orders_moved": len(moved_order_ids),
-        }
+        event = build_merge_undone_event_payload(conn, int(merge_id))
+        if not event:
+            conn.rollback()
+            return {"status": "error", "message": "Failed to build undo event"}
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_CUSTOMER_MERGE_UNDONE,
+            event=event,
+        )
+        return _commit_strict_plan(
+            conn,
+            plan,
+            success_message=f"Undo complete for merge {merge_id}.",
+            success_extra={
+                "source_customer_id": str(row["source_customer_id"]),
+                "target_customer_id": str(row["target_customer_id"]),
+                "orders_moved": len(moved_order_ids),
+            },
+        )
     except Exception as exc:
         conn.rollback()
         return {"status": "error", "message": str(exc)}

@@ -5,6 +5,7 @@ from datetime import date as DateType, timedelta
 import pandas as pd
 
 from src.core.queries.customer_metric_affinity import analyze_customer_affinity
+from src.core.queries.customer_metric_sources import resolve_orders_source
 from src.core.queries.customer_metric_calculators import (
     calculate_customer_retention_rate,
     calculate_customer_return_rate,
@@ -16,7 +17,6 @@ from src.core.queries.customer_metric_helpers import (
     build_customer_retention_rate_analysis,
     build_monthly_customer_metric_rows,
     build_repeat_order_rate_analysis,
-    fetch_customer_metric_orders,
     month_bounds,
     normalize_order_sources,
     resolve_lookback_window,
@@ -25,8 +25,9 @@ from src.core.queries.customer_metric_helpers import (
 from src.core.utils.business_date import get_current_business_date
 
 
-def fetch_customer_loyalty(conn):
-    rows = build_monthly_customer_metric_rows(fetch_customer_metric_orders(conn))
+def fetch_customer_loyalty(conn, *, orders_source=None):
+    source = resolve_orders_source(conn, orders_source)
+    rows = build_monthly_customer_metric_rows(source.fetch())
     return pd.DataFrame(rows)
 
 
@@ -45,6 +46,7 @@ def fetch_customer_return_rate_analysis(
     lookback_days: int | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     _require_min_orders_at_least("Customer return rate", min_orders_per_customer)
     filters = _build_customer_metric_filters(
@@ -57,7 +59,9 @@ def fetch_customer_return_rate_analysis(
         order_sources=order_sources,
         include_lookback=True,
     )
-    return build_customer_return_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+    return build_customer_return_rate_analysis(
+        _fetch_metric_orders(conn, filters, orders_source), filters
+    )
 
 
 def fetch_customer_retention_rate_analysis(
@@ -70,6 +74,7 @@ def fetch_customer_retention_rate_analysis(
     lookback_days: int | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     filters = _build_customer_metric_filters(
         evaluation_start_date=evaluation_start_date,
@@ -81,7 +86,9 @@ def fetch_customer_retention_rate_analysis(
         order_sources=order_sources,
         include_lookback=True,
     )
-    return build_customer_retention_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+    return build_customer_retention_rate_analysis(
+        _fetch_metric_orders(conn, filters, orders_source), filters
+    )
 
 
 def fetch_repeat_order_rate_analysis(
@@ -91,6 +98,7 @@ def fetch_repeat_order_rate_analysis(
     evaluation_end_date: str | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     _require_min_orders_at_least("Repeat order rate", min_orders_per_customer)
     filters = _build_customer_metric_filters(
@@ -100,7 +108,9 @@ def fetch_repeat_order_rate_analysis(
         order_sources=order_sources,
         include_lookback=False,
     )
-    return build_repeat_order_rate_analysis(_fetch_metric_orders(conn, filters), filters)
+    return build_repeat_order_rate_analysis(
+        _fetch_metric_orders(conn, filters, orders_source), filters
+    )
 
 
 def fetch_customer_affinity_analysis(
@@ -109,6 +119,7 @@ def fetch_customer_affinity_analysis(
     evaluation_start_date: str | None = None,
     evaluation_end_date: str | None = None,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     """
     Zomato-style affinity: among verified customers with ≥1 order in the evaluation window,
@@ -124,8 +135,7 @@ def fetch_customer_affinity_analysis(
     resolved_sources = list(normalize_order_sources(filters.order_sources) or [])
     order_source_label = "All" if not resolved_sources else ", ".join(resolved_sources)
 
-    orders = fetch_customer_metric_orders(
-        conn,
+    orders = resolve_orders_source(conn, orders_source).fetch(
         start_date=None,
         end_date=filters.evaluation_end_date,
         order_sources=filters.order_sources,
@@ -173,7 +183,7 @@ def _build_customer_metric_filters(
     )
 
 
-def _fetch_metric_orders(conn, filters: CustomerMetricFilters):
+def _fetch_metric_orders(conn, filters: CustomerMetricFilters, orders_source=None):
     resolved_lookback_start_date, resolved_lookback_end_date = resolve_lookback_window(filters)
     has_unbounded_lookback = bool(resolved_lookback_end_date and not resolved_lookback_start_date)
     fetch_start_candidates = [
@@ -182,8 +192,7 @@ def _fetch_metric_orders(conn, filters: CustomerMetricFilters):
     fetch_end_date_candidates = [
         date_str for date_str in (filters.evaluation_end_date, filters.lookback_end_date) if date_str
     ]
-    return fetch_customer_metric_orders(
-        conn,
+    return resolve_orders_source(conn, orders_source).fetch(
         start_date=None if has_unbounded_lookback else min(fetch_start_candidates) if fetch_start_candidates else None,
         end_date=max(fetch_end_date_candidates) if fetch_end_date_candidates else None,
         order_sources=filters.order_sources,
@@ -349,6 +358,7 @@ def fetch_customer_affinity_trend(
     *,
     months: int | None = None,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     num_months = _normalize_trend_months(months)
     business_date_iso = get_current_business_date()
@@ -356,8 +366,7 @@ def fetch_customer_affinity_trend(
     if not specs:
         return _empty_trend_response(business_date_iso, num_months, _trend_order_source_label(order_sources))
 
-    orders = fetch_customer_metric_orders(
-        conn,
+    orders = resolve_orders_source(conn, orders_source).fetch(
         start_date=None,
         end_date=business_date_iso,
         order_sources=order_sources,
@@ -407,6 +416,7 @@ def fetch_customer_return_rate_trend(
     months: int | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     _require_min_orders_at_least("Customer return rate trend", min_orders_per_customer)
     num_months = _normalize_trend_months(months)
@@ -416,8 +426,7 @@ def fetch_customer_return_rate_trend(
     if not specs:
         return _empty_trend_response(business_date_iso, num_months, label)
 
-    orders = fetch_customer_metric_orders(
-        conn,
+    orders = resolve_orders_source(conn, orders_source).fetch(
         start_date=None,
         end_date=business_date_iso,
         order_sources=order_sources,
@@ -466,6 +475,7 @@ def fetch_customer_retention_rate_trend(
     months: int | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     if min_orders_per_customer < 1:
         raise ValueError("min_orders_per_customer must be at least 1.")
@@ -476,8 +486,7 @@ def fetch_customer_retention_rate_trend(
     if not specs:
         return _empty_trend_response(business_date_iso, num_months, label)
 
-    orders = fetch_customer_metric_orders(
-        conn,
+    orders = resolve_orders_source(conn, orders_source).fetch(
         start_date=None,
         end_date=business_date_iso,
         order_sources=order_sources,
@@ -526,6 +535,7 @@ def fetch_customer_repeat_order_rate_trend(
     months: int | None = None,
     min_orders_per_customer: int = 2,
     order_sources: tuple[str, ...] | None = None,
+    orders_source=None,
 ):
     _require_min_orders_at_least("Repeat order rate trend", min_orders_per_customer)
     num_months = _normalize_trend_months(months)
@@ -535,8 +545,7 @@ def fetch_customer_repeat_order_rate_trend(
     if not specs:
         return _empty_trend_response(business_date_iso, num_months, label)
 
-    orders = fetch_customer_metric_orders(
-        conn,
+    orders = resolve_orders_source(conn, orders_source).fetch(
         start_date=None,
         end_date=business_date_iso,
         order_sources=order_sources,

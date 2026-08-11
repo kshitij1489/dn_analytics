@@ -350,14 +350,15 @@ def _apply_remote_event(conn, event: Dict[str, Any], remote_cursor: Optional[str
 
 
 def _fetch_remote_events(
+    conn,
     endpoint: str,
     auth: Optional[str],
     cursor: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if auth:
-        headers["Authorization"] = f"Bearer {auth}"
+    from src.core.central_api import response_error_text, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="sync", credential=auth)
 
     params: Dict[str, str] = {}
     if cursor:
@@ -370,7 +371,11 @@ def _fetch_remote_events(
 
         response = requests.get(endpoint, headers=headers, params=params or None, timeout=60)
         if response.status_code >= 400:
-            return {"events": [], "next_cursor": cursor, "error": f"HTTP {response.status_code}"}
+            return {
+                "events": [],
+                "next_cursor": cursor,
+                "error": response_error_text(response, conn=conn),
+            }
         data = response.json()
     except Exception as exc:
         return {"events": [], "next_cursor": cursor, "error": str(exc)}
@@ -438,7 +443,7 @@ def pull_and_apply_menu_mapping_verification_events(
     retry_stats = retry_quarantined_menu_mapping_verification_events(conn)
 
     cursor_before = cursor if cursor is not None else get_menu_mapping_verification_pull_cursor(conn)
-    fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
+    fetch_result = _fetch_remote_events(conn, endpoint, auth=auth, cursor=cursor_before, limit=limit)
     if fetch_result.get("error"):
         return {
             "events_fetched": 0,

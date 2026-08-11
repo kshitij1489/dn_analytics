@@ -3,7 +3,6 @@ from datetime import date as DateType
 import pandas as pd
 from src.core.queries.customer_metric_helpers import (
     build_customer_quick_view_metrics,
-    fetch_customer_metric_orders,
     month_bounds,
 )
 from src.core.utils.business_date import (
@@ -65,15 +64,21 @@ def fetch_kpis(conn):
     return data
 
 
-def fetch_customer_quick_view(conn):
-    """Fetch customer quick-view KPIs for the Customers workspace."""
-    base_kpis = fetch_kpis(conn) or {}
+def fetch_customer_quick_view(conn, *, orders_source=None, base_kpis=None):
+    """Fetch customer quick-view KPIs for the Customers workspace.
+
+    All Stores passes a combined orders source and pre-summed base KPIs so the
+    rates are recomputed from combined atoms instead of averaged per store.
+    """
+    from src.core.queries.customer_metric_sources import resolve_orders_source
+
+    base_kpis = base_kpis if base_kpis is not None else (fetch_kpis(conn) or {})
 
     current_business_date = get_current_business_date()
     current_month_start = DateType.fromisoformat(current_business_date).replace(day=1)
     _, current_month_end_date = month_bounds(current_month_start)
     metric_data = build_customer_quick_view_metrics(
-        fetch_customer_metric_orders(conn, end_date=current_month_end_date),
+        resolve_orders_source(conn, orders_source).fetch(end_date=current_month_end_date),
         current_business_date=current_business_date,
     )
 
@@ -135,8 +140,12 @@ def fetch_category_trend(conn):
     """)
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
-def fetch_top_items_data(conn, start_date=None, end_date=None):
-    """Fetch Top 10 Items by Quantity with Revenue Share. Optional date range = business days (5:00 AM–4:59:59 AM IST)."""
+def fetch_top_items_data(conn, start_date=None, end_date=None, limit=10):
+    """Fetch Top Items by Quantity with Revenue Share. Optional date range = business days (5:00 AM–4:59:59 AM IST).
+
+    `limit=None` returns every active item; All Stores passes it so a global
+    top-10 is chosen after the stores are combined, not from ten per-store lists.
+    """
     date_filter = ""
     params = []
     if start_date and end_date:
@@ -192,14 +201,16 @@ def fetch_top_items_data(conn, start_date=None, end_date=None):
             FROM item_qty_combined
             GROUP BY menu_item_id
         )
-        SELECT mi.name, COALESCE(isold.total_sold, 0) as total_sold, it.rev as item_revenue
+        SELECT mi.name, mi.type as item_type, COALESCE(isold.total_sold, 0) as total_sold,
+               it.rev as item_revenue
         FROM menu_items mi
         LEFT JOIN item_totals it ON mi.menu_item_id = it.menu_item_id
         LEFT JOIN item_sold isold ON mi.menu_item_id = isold.menu_item_id
         WHERE mi.is_active = 1
         ORDER BY total_sold DESC
-        LIMIT 10
     """
+    if limit is not None:
+        query += f"\n        LIMIT {int(limit)}"
     cursor = conn.execute(query, params) if params else conn.execute(query)
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     return df, total_revenue
@@ -251,10 +262,13 @@ def fetch_revenue_by_category_data(conn, start_date=None, end_date=None):
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     return df, total_revenue
 
-def fetch_hourly_revenue_data(conn, days=None, start_date=None, end_date=None):
-    """Fetch Hourly Revenue distribution, optionally for a date range (business days 5am–4:59am)."""
-    # Use weekday of BUSINESS date (DATE(created_on, '-5 hours')) so 5am–4:59am day is consistent
-    # SQLite strftime('%w', date) = 0 Sun, 1 Mon, ..., 6 Sat
+def fetch_hourly_revenue_atoms(conn, days=None, start_date=None, end_date=None):
+    """Hourly revenue plus the business dates it spans.
+
+    `avg_revenue` is revenue divided by the number of business days with orders.
+    Combining stores needs both atoms: summed revenue and the *union* of business
+    dates, because two stores rarely trade on exactly the same days.
+    """
     day_filter = ""
     if days and len(days) < 7:
         day_str = ",".join([str(d) for d in days])
@@ -266,35 +280,71 @@ def fetch_hourly_revenue_data(conn, days=None, start_date=None, end_date=None):
         start_dt, _ = get_business_date_range(start_date)
         _, end_dt = get_business_date_range(end_date)
         date_filter = " AND created_on >= ? AND created_on <= ?"
-        params = [start_dt, end_dt, start_dt, end_dt]  # once per CTE
+        params = [start_dt, end_dt]
 
-    query = f"""
-        WITH total_days AS (
-            SELECT COUNT(DISTINCT {BUSINESS_DATE_SQL}) as day_count
-            FROM orders
-            WHERE order_status = 'Success'
-            {day_filter}
-            {date_filter}
-        ),
-        hourly_stats AS (
-            SELECT 
-                CAST(strftime('%H', created_on) AS INTEGER) as hour_num,
-                SUM(total) as revenue
-            FROM orders
-            WHERE order_status = 'Success'
-            {day_filter}
-            {date_filter}
-            GROUP BY hour_num
-        )
-        SELECT 
-            h.hour_num, 
-            h.revenue,
-            h.revenue / NULLIF(d.day_count, 0) as avg_revenue
-        FROM hourly_stats h, total_days d
-        ORDER BY CASE WHEN h.hour_num >= 5 THEN h.hour_num ELSE h.hour_num + 24 END
+    hourly_query = f"""
+        SELECT
+            CAST(strftime('%H', created_on) AS INTEGER) as hour_num,
+            SUM(total) as revenue
+        FROM orders
+        WHERE order_status = 'Success'
+        {day_filter}
+        {date_filter}
+        GROUP BY hour_num
     """
-    cursor = conn.execute(query, params) if params else conn.execute(query)
-    return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+    dates_query = f"""
+        SELECT DISTINCT {BUSINESS_DATE_SQL} as business_date
+        FROM orders
+        WHERE order_status = 'Success'
+        {day_filter}
+        {date_filter}
+    """
+    hourly_rows = (conn.execute(hourly_query, params) if params else conn.execute(hourly_query)).fetchall()
+    date_rows = (conn.execute(dates_query, params) if params else conn.execute(dates_query)).fetchall()
+    return {
+        "hours": [
+            {"hour_num": row["hour_num"], "revenue": float(row["revenue"] or 0)}
+            for row in hourly_rows
+        ],
+        "business_dates": [row["business_date"] for row in date_rows if row["business_date"]],
+    }
+
+
+def hour_display_order(hour_num) -> int:
+    """Business-day hour ordering: 5am first, wrapping past midnight."""
+    hour = int(hour_num or 0)
+    return hour if hour >= 5 else hour + 24
+
+
+def build_hourly_revenue_rows(atoms_list):
+    """Combine one or more stores' hourly atoms into the endpoint's rows."""
+    revenue_by_hour = {}
+    business_dates = set()
+    for atoms in atoms_list:
+        for row in atoms.get("hours", []):
+            hour = int(row["hour_num"])
+            revenue_by_hour[hour] = revenue_by_hour.get(hour, 0.0) + float(row["revenue"] or 0)
+        business_dates.update(atoms.get("business_dates", []))
+
+    day_count = len(business_dates)
+    rows = [
+        {
+            "hour_num": hour,
+            "revenue": revenue,
+            "avg_revenue": (revenue / day_count) if day_count else None,
+        }
+        for hour, revenue in revenue_by_hour.items()
+    ]
+    rows.sort(key=lambda row: hour_display_order(row["hour_num"]))
+    return pd.DataFrame(rows, columns=["hour_num", "revenue", "avg_revenue"])
+
+
+def fetch_hourly_revenue_data(conn, days=None, start_date=None, end_date=None):
+    """Fetch Hourly Revenue distribution, optionally for a date range (business days 5am–4:59am)."""
+    return build_hourly_revenue_rows(
+        [fetch_hourly_revenue_atoms(conn, days=days, start_date=start_date, end_date=end_date)]
+    )
+
 
 def fetch_order_source_data(conn, start_date=None, end_date=None):
     """Fetch Order Source metrics. Optional date range = business days (5:00 AM–4:59:59 AM IST)."""
@@ -338,11 +388,20 @@ def fetch_hourly_revenue_by_date(conn, date_str: str):
 def fetch_avg_revenue_by_day(conn, start_date=None, end_date=None):
     """Fetch Average Revenue by Day of Week using Pandas"""
     # Reuse fetch_daily_sales which returns a DF
-    df = fetch_daily_sales(conn)
-    
-    if df.empty:
+    return build_avg_revenue_by_day(fetch_daily_sales(conn), start_date, end_date)
+
+
+def build_avg_revenue_by_day(df, start_date=None, end_date=None):
+    """Average daily revenue per weekday from combined daily-sales rows.
+
+    All Stores sums each date across stores first and zero-fills afterwards, so
+    a date missing in one store contributes zero instead of dropping the other
+    store's revenue (plan §7.1).
+    """
+    if df is None or df.empty:
         return pd.DataFrame(columns=['dow', 'day_name', 'value'])
 
+    df = df.copy()
     df['order_date'] = pd.to_datetime(df['order_date'])
     df = df.set_index('order_date').sort_index()
 

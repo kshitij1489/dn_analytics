@@ -22,6 +22,7 @@ from src.core.queries.customer_query_utils import (
     normalize_text,
 )
 from src.core.sync_cursor_migration import ensure_sync_cursor_schema
+from src.core.sync_identity import get_device_identity
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,15 @@ def _resolve_customer_id(conn, descriptor: Dict[str, Any]) -> Optional[int]:
         if resolved is not None:
             return resolved
 
+    # Anonymous customers (anon: identity keys, no phone/address) are defined
+    # by the orders they own; order refs replicate identically on every install,
+    # so a unanimous local owner of the referenced orders is an exact match.
+    order_refs = locators.get("order_refs")
+    if isinstance(order_refs, list) and order_refs:
+        resolved = _resolve_unique_order_ref_owner(conn, order_refs)
+        if resolved is not None:
+            return resolved
+
     name_norm = locators.get("name_normalized") or normalize_text(snapshot.get("name"))
     address_norm = locators.get("address_normalized") or normalize_text(snapshot.get("address"))
     if name_norm and address_norm:
@@ -290,6 +300,202 @@ def _resolve_customer_id(conn, descriptor: Dict[str, Any]) -> Optional[int]:
             [candidate for candidate in candidates if candidate.get("name_norm") == name_norm]
         )
 
+    return None
+
+
+def _resolve_unique_order_ref_owner(conn, portable_refs: Any) -> Optional[int]:
+    """
+    Resolve portable order refs to local orders and return their owner iff
+    every matched order belongs to a single local customer. Any disagreement
+    (or no matches) returns None — order ownership must be unanimous to count
+    as an identity signal.
+    """
+    if not isinstance(portable_refs, list):
+        return None
+    owner_ids: set = set()
+    for ref in portable_refs:
+        if not isinstance(ref, dict):
+            continue
+        row = None
+        stream_id = ref.get("stream_id")
+        event_id = str(ref.get("event_id") or "").strip()
+        if stream_id is not None and event_id:
+            row = conn.execute(
+                "SELECT customer_id FROM orders WHERE stream_id = ? AND event_id = ? LIMIT 2",
+                (stream_id, event_id),
+            ).fetchall()
+        if not row:
+            petpooja_order_id = str(ref.get("petpooja_order_id") or "").strip()
+            if petpooja_order_id:
+                row = conn.execute(
+                    "SELECT customer_id FROM orders WHERE petpooja_order_id = ? LIMIT 2",
+                    (petpooja_order_id,),
+                ).fetchall()
+        if not row:
+            continue
+        if len(row) > 1:
+            return None
+        owner_ids.add(int(row[0]["customer_id"]))
+        if len(owner_ids) > 1:
+            return None
+    if len(owner_ids) == 1:
+        return owner_ids.pop()
+    return None
+
+
+def _self_origin_local_refs(conn, event: Dict[str, Any]) -> Dict[str, Optional[int]]:
+    """
+    Return the event's local_refs customer ids when this install originated the
+    event (attribution install_id matches ours). The origin install recorded
+    its own exact local ids at capture time, so they outrank portable-locator
+    heuristics — but only here; on any other install they are meaningless.
+    """
+    empty: Dict[str, Optional[int]] = {"source_customer_id": None, "target_customer_id": None}
+    attribution = event.get("attribution")
+    if not isinstance(attribution, dict):
+        return empty
+    device = attribution.get("device")
+    if not isinstance(device, dict):
+        return empty
+    event_install_id = str(device.get("install_id") or "").strip()
+    if not event_install_id:
+        return empty
+    local_install_id = str(get_device_identity(conn).get("install_id") or "").strip()
+    if not local_install_id or event_install_id != local_install_id:
+        return empty
+    local_refs = event.get("local_refs")
+    if not isinstance(local_refs, dict):
+        return empty
+
+    def _as_int(value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "source_customer_id": _as_int(local_refs.get("source_customer_id")),
+        "target_customer_id": _as_int(local_refs.get("target_customer_id")),
+    }
+
+
+def _moved_orders_owner(conn, event: Dict[str, Any]) -> Optional[int]:
+    moved = event.get("moved_orders")
+    if not isinstance(moved, dict):
+        return None
+    return _resolve_unique_order_ref_owner(conn, moved.get("portable_refs"))
+
+
+def _corroborated_self_origin_hints(conn, event: Dict[str, Any]) -> Dict[str, Optional[int]]:
+    """
+    Self-origin local ids are only trusted when independent portable evidence
+    from the same event corroborates them: the moved orders' unanimous local
+    owner must be one of the hinted customers. A snapshot-name match alone is
+    not enough — after a reseed that renumbered ids under the same install_id,
+    same-name anonymous customers would still pass a name check. No matching
+    local orders means no evidence, so the hints are discarded and the event
+    falls back to portable resolution (and quarantine/retry if that fails).
+
+    Both hinted customers are acceptable owners: pre-apply state puts the
+    moved orders with the source; finding them with the target means the same
+    merge was already effected locally (a duplicate commit retry of the same
+    pair), which the dedupe checks downstream then record as duplicate. For
+    undo events the same two states apply (merge applied locally or not).
+    An owner outside the hinted pair means local ownership diverged from the
+    origin snapshot (reseed, order-reassignment drift) — fail closed.
+    """
+    hints = _self_origin_local_refs(conn, event)
+    if hints["source_customer_id"] is None and hints["target_customer_id"] is None:
+        return hints
+    owner = _moved_orders_owner(conn, event)
+    acceptable = {hint for hint in hints.values() if hint is not None}
+    if owner is None or owner not in acceptable:
+        return {"source_customer_id": None, "target_customer_id": None}
+    return hints
+
+
+def _validated_local_customer_id(conn, customer_id: Optional[int], descriptor: Any) -> Optional[int]:
+    """
+    Accept a self-origin local ref only if the row still exists and its
+    normalized name matches the event snapshot — cheap sanity layer on top of
+    the order-ownership corroboration in _corroborated_self_origin_hints.
+    """
+    if customer_id is None:
+        return None
+    row = conn.execute(
+        "SELECT name FROM customers WHERE customer_id = ? LIMIT 1",
+        (int(customer_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = descriptor.get("snapshot") if isinstance(descriptor, dict) else None
+    snapshot_name_norm = normalize_text(snapshot.get("name")) if isinstance(snapshot, dict) else None
+    row_name_norm = normalize_text(row["name"])
+    if snapshot_name_norm and row_name_norm and snapshot_name_norm != row_name_norm:
+        return None
+    return int(customer_id)
+
+
+def _descriptor_has_strong_locators(descriptor: Any) -> bool:
+    """
+    True when the descriptor carries any locator stronger than a bare name.
+    A strong locator that failed to match means the referenced data has not
+    reached this install yet (order/customer sync lag) — the event must
+    quarantine and retry rather than fall through to name-based guessing.
+    """
+    if not isinstance(descriptor, dict):
+        return False
+    locators = descriptor.get("portable_locators")
+    if not isinstance(locators, dict):
+        locators = {}
+    snapshot = descriptor.get("snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    if (
+        locators.get("customer_identity_key")
+        or locators.get("phone_hash")
+        or locators.get("name_address_hash")
+    ):
+        return True
+    order_refs = locators.get("order_refs")
+    if isinstance(order_refs, list) and order_refs:
+        return True
+    address_book_hashes = locators.get("address_book_hashes")
+    if isinstance(address_book_hashes, list) and any(address_book_hashes):
+        return True
+    if locators.get("address_normalized") or normalize_text(snapshot.get("address")):
+        return True
+    return False
+
+
+def _resolve_target_by_elimination(conn, descriptor: Any, source_customer_id: int) -> Optional[int]:
+    """
+    Last-resort target resolution for legacy name-only payloads: when the
+    target's name matches exactly two active local customers and one of them
+    is the already-resolved source, the merge can only mean the other. Callers
+    must gate this on _descriptor_has_strong_locators being False; three or
+    more candidates stay unresolved (fail closed).
+    """
+    if not isinstance(descriptor, dict):
+        return None
+    locators = descriptor.get("portable_locators")
+    if not isinstance(locators, dict):
+        locators = {}
+    snapshot = descriptor.get("snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    name_norm = locators.get("name_normalized") or normalize_text(snapshot.get("name"))
+    if not name_norm or len(name_norm) < 3:
+        return None
+    candidates = [
+        candidate
+        for candidate in _fetch_customer_locator_candidates(conn)
+        if candidate.get("name_norm") == name_norm and not candidate["is_merged_source"]
+    ]
+    candidate_ids = {int(candidate["customer_id"]) for candidate in candidates}
+    if len(candidate_ids) == 2 and int(source_customer_id) in candidate_ids:
+        candidate_ids.discard(int(source_customer_id))
+        return candidate_ids.pop()
     return None
 
 
@@ -575,8 +781,32 @@ def _apply_remote_merge_event(conn, event: Dict[str, Any], remote_cursor: Option
         )
         return {"status": "duplicate", "local_merge_id": local_sync_merge_id}
 
-    source_customer_id = _resolve_customer_id(conn, event.get("source_customer", {}))
-    target_customer_id = _resolve_customer_id(conn, event.get("target_customer", {}))
+    local_hints = _corroborated_self_origin_hints(conn, event)
+    source_descriptor = event.get("source_customer", {})
+    target_descriptor = event.get("target_customer", {})
+
+    source_customer_id = _validated_local_customer_id(
+        conn, local_hints.get("source_customer_id"), source_descriptor
+    )
+    if source_customer_id is None:
+        source_customer_id = _resolve_customer_id(conn, source_descriptor)
+    if source_customer_id is None:
+        # Legacy events lack descriptor order_refs, but the moved-orders list
+        # is the source's exact pre-merge order set — same identity signal.
+        source_customer_id = _moved_orders_owner(conn, event)
+
+    target_customer_id = _validated_local_customer_id(
+        conn, local_hints.get("target_customer_id"), target_descriptor
+    )
+    if target_customer_id is None:
+        target_customer_id = _resolve_customer_id(conn, target_descriptor)
+    if (
+        target_customer_id is None
+        and source_customer_id is not None
+        and not _descriptor_has_strong_locators(target_descriptor)
+    ):
+        target_customer_id = _resolve_target_by_elimination(conn, target_descriptor, source_customer_id)
+
     if source_customer_id is None:
         raise UnresolvedMergeEventError(f"Could not resolve source customer for remote event {remote_event_id}")
     if target_customer_id is None:
@@ -792,8 +1022,19 @@ def _apply_remote_undo_event(conn, event: Dict[str, Any], remote_cursor: Optiona
 
     local_merge_id = _lookup_remote_local_merge_id(conn, reverted_remote_event_id)
     if local_merge_id is None:
-        source_customer_id = _resolve_customer_id(conn, event.get("source_customer", {}))
-        target_customer_id = _resolve_customer_id(conn, event.get("target_customer", {}))
+        local_hints = _corroborated_self_origin_hints(conn, event)
+        source_descriptor = event.get("source_customer", {})
+        target_descriptor = event.get("target_customer", {})
+        source_customer_id = _validated_local_customer_id(
+            conn, local_hints.get("source_customer_id"), source_descriptor
+        )
+        if source_customer_id is None:
+            source_customer_id = _resolve_customer_id(conn, source_descriptor)
+        target_customer_id = _validated_local_customer_id(
+            conn, local_hints.get("target_customer_id"), target_descriptor
+        )
+        if target_customer_id is None:
+            target_customer_id = _resolve_customer_id(conn, target_descriptor)
         if source_customer_id is not None and target_customer_id is not None:
             local_merge_id = _find_latest_merge_id(conn, source_customer_id, target_customer_id)
 
@@ -842,14 +1083,15 @@ def apply_remote_customer_undo_event(conn, event: Dict[str, Any], remote_cursor:
 
 
 def _fetch_remote_events(
+    conn,
     endpoint: str,
     auth: Optional[str],
     cursor: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if auth:
-        headers["Authorization"] = f"Bearer {auth}"
+    from src.core.central_api import response_error_text, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="sync", credential=auth)
 
     params: Dict[str, str] = {}
     if cursor:
@@ -862,7 +1104,11 @@ def _fetch_remote_events(
 
         response = requests.get(endpoint, headers=headers, params=params or None, timeout=60)
         if response.status_code >= 400:
-            return {"events": [], "next_cursor": cursor, "error": f"HTTP {response.status_code}"}
+            return {
+                "events": [],
+                "next_cursor": cursor,
+                "error": response_error_text(response, conn=conn),
+            }
         data = response.json()
     except Exception as exc:
         return {"events": [], "next_cursor": cursor, "error": str(exc)}
@@ -924,7 +1170,7 @@ def pull_and_apply_customer_merge_events(
     ensure_customer_merge_pull_tables(conn)
 
     cursor_before = cursor if cursor is not None else get_customer_merge_pull_cursor(conn)
-    fetch_result = _fetch_remote_events(endpoint, auth=auth, cursor=cursor_before, limit=limit)
+    fetch_result = _fetch_remote_events(conn, endpoint, auth=auth, cursor=cursor_before, limit=limit)
     if fetch_result.get("error"):
         return {
             "events_fetched": 0,
@@ -1021,6 +1267,25 @@ def pull_and_apply_customer_merge_events(
         conn.rollback()
         stats["error"] = str(exc)
         return stats
+
+    # State-scoped GC (MENU_SYNC_ARCHITECTURE.md §2.4.1): every completed pull
+    # ends husk-free. Best-effort — a sweep failure must not fail the pull.
+    try:
+        from services.load_orders import sweep_orphan_customers
+
+        sweep_cursor = conn.cursor()
+        try:
+            swept = sweep_orphan_customers(sweep_cursor)
+        finally:
+            sweep_cursor.close()
+        conn.commit()
+        stats["customer_husks_swept"] = len(swept)
+        if swept:
+            logger.info("Customer husk sweep removed %d customer(s)", len(swept))
+    except Exception:
+        conn.rollback()
+        logger.exception("Customer husk sweep failed")
+        stats["customer_husks_swept"] = 0
 
     stats["unresolved_pending"] = count_unresolved_customer_merge_events(conn)
     return stats

@@ -4,6 +4,7 @@ Phase 3: multi-step execution with context. Phase 4: summary and report.
 """
 
 import json
+import time
 from typing import Dict, Any, Tuple, List
 
 import pandas as pd
@@ -14,8 +15,10 @@ from ai_mode.context import add_part
 from ai_mode.cache import get_or_call, get_or_call_diversity, normalize_prompt
 from ai_mode.llm.chart import generate_chart_config
 from ai_mode.llm.client import get_ai_client, get_ai_model
+from ai_mode.llm.completion import chat_completion
 from ai_mode.llm.explanation import generate_explanation
-from ai_mode.llm.sql_gen import generate_sql
+from ai_mode.llm.sql_gen import generate_sql, ensure_read_only_sql, read_sql_readonly
+from ai_mode.telemetry import record_llm_call
 from ai_mode.prompts.prompt_ai_mode import (
     SUMMARY_GENERATION_PROMPT,
     REPORT_GENERATION_PROMPT,
@@ -80,29 +83,26 @@ def _build_valid_values_str(conn) -> str:
 def _suggest_no_data_hint_impl(
     conn, user_prompt: str, sql_query: str, valid_values_str: str
 ) -> str:
-    """Call LLM to suggest hint. Uses temperature=0 for determinism. Same valid_values_str used for key and LLM."""
+    """Call LLM to suggest hint. Uses temperature=0 for determinism. Same valid_values_str used for key and LLM.
+    Raises on LLM error (so failures are not cached)."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    try:
-        user_content = f"""User asked: {user_prompt}
+    user_content = f"""User asked: {user_prompt}
 
 SQL that returned no data: {sql_query}
 
 Valid values from our system: {valid_values_str}"""
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": NO_DATA_HINT_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0,
-            max_tokens=150,
-        )
-        suggestion = (response.choices[0].message.content or "").strip()
-        return " " + suggestion if suggestion else valid_values_str
-    except Exception as e:
-        print(f"⚠️ No-data hint suggestion failed, using raw hints: {e}")
-        return valid_values_str
+    response = chat_completion(
+        client, "suggest_no_data_hint", model,
+        messages=[
+            {"role": "system", "content": NO_DATA_HINT_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0,
+        max_tokens=150,
+    )
+    suggestion = (response.choices[0].message.content or "").strip()
+    return " " + suggestion if suggestion else valid_values_str
 
 
 def _suggest_no_data_hint(conn, user_prompt: str, sql_query: str) -> str:
@@ -117,22 +117,27 @@ def _suggest_no_data_hint(conn, user_prompt: str, sql_query: str) -> str:
     if not client:
         return valid_values_str
     normalized_prompt = normalize_prompt(user_prompt)
-    return get_or_call(
-        "suggest_no_data_hint",
-        (model, normalized_prompt, sql_query, valid_values_str),
-        lambda: _suggest_no_data_hint_impl(conn, user_prompt, sql_query, valid_values_str),
-    )
+    try:
+        return get_or_call(
+            "suggest_no_data_hint",
+            (model, normalized_prompt, sql_query, valid_values_str),
+            lambda: _suggest_no_data_hint_impl(conn, user_prompt, sql_query, valid_values_str),
+        )
+    except Exception as e:
+        print(f"⚠️ No-data hint suggestion failed, using raw hints: {e}")
+        return valid_values_str
 
 
 def run_run_sql(prompt: str, context: Dict[str, Any], conn) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Execute RUN_SQL: generate SQL, run it, explain. Returns (part, updated_context). May return clarification part on error, empty result, or when we cannot answer."""
     try:
         sql_query = generate_sql(conn, prompt)
+        ensure_read_only_sql(sql_query)
     except ValueError as e:
         part = _clarification_part(str(e))
         return part, add_part(context, "text", part["content"])
     try:
-        df = pd.read_sql_query(sql_query, conn)
+        df = read_sql_readonly(conn, sql_query)
     except Exception as e:
         try:
             from src.core.error_log import log_error
@@ -238,8 +243,8 @@ def _run_general_chat_impl(conn, prompt: str) -> str:
     model = get_ai_model(conn)
     if not client:
         return "AI not configured. Please add an API Key in Configuration."
-    response = client.chat.completions.create(
-        model=model,
+    response = chat_completion(
+        client, "run_general_chat", model,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content or ""
@@ -277,8 +282,9 @@ def _get_data_for_summary(prompt: str, context: Dict[str, Any], conn) -> Tuple[L
     if table_data and isinstance(table_data, list) and len(table_data) > 0:
         return table_data, context.get("last_sql") or ""
     sql_query = generate_sql(conn, prompt)
+    ensure_read_only_sql(sql_query)
     try:
-        df = pd.read_sql_query(sql_query, conn)
+        df = read_sql_readonly(conn, sql_query)
         return df_to_json(df), sql_query
     except Exception:
         return [], sql_query
@@ -315,8 +321,8 @@ Data (JSON rows):
 {data_preview}
 
 {SUMMARY_GENERATION_PROMPT}"""
-    response = client.chat.completions.create(
-        model=model,
+    response = chat_completion(
+        client, "generate_summary", model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.5,
     )
@@ -386,8 +392,8 @@ Context / data already available:
 {parts_desc}
 
 {REPORT_GENERATION_PROMPT}"""
-    response = client.chat.completions.create(
-        model=model,
+    response = chat_completion(
+        client, "generate_report", model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.5,
     )
@@ -400,6 +406,21 @@ Context / data already available:
 
 
 # --- Streaming versions for SSE ---
+
+
+def _record_stream_usage(step: str, model: str, started: float, usage) -> None:
+    """Record telemetry for a streaming LLM call. usage comes from the final chunk
+    (stream_options include_usage); may be None if the provider omitted it."""
+    try:
+        record_llm_call(
+            step,
+            model,
+            int((time.perf_counter() - started) * 1000),
+            getattr(usage, "prompt_tokens", 0) if usage else 0,
+            getattr(usage, "completion_tokens", 0) if usage else 0,
+        )
+    except Exception:
+        pass
 
 
 async def run_generate_summary_streaming(prompt: str, context: Dict[str, Any], conn):
@@ -435,19 +456,26 @@ Data (JSON rows):
 
 {SUMMARY_GENERATION_PROMPT}"""
 
-    # Stream the response
+    # Stream the response (include_usage: final chunk carries token counts for telemetry)
+    started = time.perf_counter()
+    usage = None
     try:
         stream = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": user_prompt}],
             temperature=0.4,
-            stream=True
+            stream=True,
+            stream_options={"include_usage": True},
         )
         for chunk in stream:
-            if chunk.choices[0].delta.content:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
     except Exception as e:
         yield f"Error generating summary: {e}"
+    finally:
+        _record_stream_usage("generate_summary_streaming", model, started, usage)
 
 
 
@@ -487,17 +515,24 @@ Context / data available:
 
 {REPORT_GENERATION_PROMPT}"""
 
-    # Stream the response
+    # Stream the response (include_usage: final chunk carries token counts for telemetry)
+    started = time.perf_counter()
+    usage = None
     try:
         stream = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": user_prompt}],
             temperature=0.5,
-            stream=True
+            stream=True,
+            stream_options={"include_usage": True},
         )
         for chunk in stream:
-            if chunk.choices[0].delta.content:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
     except Exception as e:
         yield f"Error generating report: {e}"
+    finally:
+        _record_stream_usage("generate_report_streaming", model, started, usage)
 

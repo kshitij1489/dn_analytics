@@ -6,8 +6,10 @@ alwaysApply: true
 # Documentation Routing
 
 - Read `AGENTS.md` and `docs/INDEX.md` before opening large plans.
-- Session conventions: `docs/AI_SESSION_GUIDE.md`.
+- Session conventions: `docs/SESSION_AND_ALL_STORES.md` Part A (Part B is the All Stores federation reference).
 - Load `docs/SYSTEM_CONTEXT.md` for architecture and durable-data invariants.
 - Use the task routing table in `docs/INDEX.md` to choose one task-specific doc or section.
 - Do not load the whole `docs/` folder or paste full implementation plans into chat.
-- For menu sync, `docs/MENU_SYNC_ARCHITECTURE.md` is the as-built reference for LWW/assignment behavior + runbook; API wire format lives in `docs/DACHNONA_CLOUD_SYNC_API_CONTRACT.md` section 17.
+- For menu sync, `docs/MENU_SYNC_ARCHITECTURE.md` is the as-built reference for LWW/assignment behavior + runbook; API wire format lives in `contracts/central_server_analytics_app_api_contract.md` section 17. Any change under `contracts/` must also update the twin at `db.dachnona/contracts/desktop_analytics_app/` — see `contracts/README.md` (twin-sync rule + server/desktop checklist).
+- For order loading/replay/addons/stat bugs, read `docs/ORDER_INGEST_PIPELINE.md` before editing `services/load_orders.py`.
+- To locate a module by concern, use `docs/FILE_INVENTORY.md`.

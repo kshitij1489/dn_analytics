@@ -1,5 +1,6 @@
-"""Verify reorder-rate query output against the local analytics.db."""
+"""Verify reorder-rate query output against one restaurant profile database."""
 
+import argparse
 import os
 import sys
 
@@ -7,12 +8,17 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.core.db.connection import get_db_connection
+from src.core.db.connection import get_profile_connection
+from src.core.profiles import get_profile
 from src.core.queries.customer_queries import fetch_reorder_rate_trend
 
 
 def main() -> None:
-    conn, _ = get_db_connection()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--restaurant-id", required=True, help="Bound restaurant profile to read")
+    args = parser.parse_args()
+
+    conn, _ = get_profile_connection(get_profile(args.restaurant_id))
     try:
         print("Testing fetch_reorder_rate_trend(granularity='day')...")
         data_day = fetch_reorder_rate_trend(conn, granularity="day")

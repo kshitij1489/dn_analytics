@@ -20,19 +20,6 @@ EVENT_TYPE_APPLIED = "menu_merge.applied"
 EVENT_TYPE_UNDONE = "menu_merge.undone"
 
 
-def _table_exists(conn, table_name: str) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE type = 'table' AND name = ?
-        LIMIT 1
-        """,
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
 def ensure_menu_merge_sync_tables(conn) -> None:
     conn.execute(
         """
@@ -91,12 +78,6 @@ def ensure_menu_merge_sync_tables(conn) -> None:
     )
     ensure_menu_sync_quarantine_table(conn)
     ensure_assignment_sync_schema(conn)
-
-
-def has_menu_merge_sync_table(conn) -> bool:
-    if conn is None:
-        return False
-    return _table_exists(conn, "menu_merge_sync_events")
 
 
 def _make_event_id() -> str:
@@ -184,37 +165,6 @@ def _lookup_event_id(conn, merge_id: int, event_type: str) -> Optional[str]:
         (merge_id, event_type),
     ).fetchone()
     return str(row["event_id"]) if row else None
-
-
-def _insert_event(conn, merge_id: Optional[int], event_type: str, occurred_at: str, payload: Dict[str, Any]) -> str:
-    ensure_menu_merge_sync_tables(conn)
-
-    if merge_id is not None:
-        existing_event_id = _lookup_event_id(conn, merge_id, event_type)
-        if existing_event_id:
-            return existing_event_id
-
-    event_id = str(payload["remote_event_id"])
-    conn.execute(
-        """
-        INSERT INTO menu_merge_sync_events (
-            event_id,
-            merge_id,
-            event_type,
-            payload,
-            occurred_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            event_id,
-            merge_id,
-            event_type,
-            json.dumps(payload, sort_keys=True, default=str),
-            occurred_at,
-        ),
-    )
-    return event_id
 
 
 def _dedupe_variant_mappings(conn, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -454,72 +404,10 @@ def _build_event_payload(conn, history_row: Dict[str, Any], event_type: str, rev
     return payload
 
 
-def record_menu_merge_applied_event(conn, merge_id: int) -> Optional[str]:
-    ensure_menu_merge_sync_tables(conn)
-
-    history_row = _lookup_merge_row(conn, merge_id)
-    if not history_row:
-        return None
-
-    payload = _build_event_payload(conn, history_row, EVENT_TYPE_APPLIED)
-    payload["occurred_at"] = history_row.get("merged_at")
-    return _insert_event(
-        conn,
-        merge_id=merge_id,
-        event_type=EVENT_TYPE_APPLIED,
-        occurred_at=str(history_row.get("merged_at") or ""),
-        payload=payload,
-    )
-
-
-def record_menu_merge_undone_event(conn, history_row: Dict[str, Any], occurred_at: str) -> Optional[str]:
-    ensure_menu_merge_sync_tables(conn)
-
-    merge_id = int(history_row["merge_id"])
-    applied_event_id = _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED)
-    if not applied_event_id:
-        applied_event_id = record_menu_merge_applied_event(conn, merge_id)
-    if not applied_event_id:
-        return None
-
-    payload = _build_event_payload(
-        conn,
-        history_row,
-        EVENT_TYPE_UNDONE,
-        reverts_remote_event_id=applied_event_id,
-    )
-    payload["occurred_at"] = occurred_at
-    payload["undo_metadata"] = {
-        "original_merged_at": history_row.get("merged_at"),
-    }
-    return _insert_event(
-        conn,
-        merge_id=merge_id,
-        event_type=EVENT_TYPE_UNDONE,
-        occurred_at=occurred_at,
-        payload=payload,
-    )
-
-
-def backfill_menu_merge_sync_events(conn) -> Dict[str, int]:
-    ensure_menu_merge_sync_tables(conn)
-
-    counts = {"applied": 0}
-    # Only locally-authored history rows belong in the outbox. Rows written by
-    # the remote applier carry origin='remote' (older local rows predate the
-    # column and are NULL); re-emitting them would republish a peer's decision
-    # under a new event id / server_seq and duplicate or reorder it.
-    rows = conn.execute(
-        """
-        SELECT merge_id FROM merge_history
-        WHERE COALESCE(origin, 'local') != 'remote'
-        ORDER BY merge_id ASC
-        """
-    ).fetchall()
-    for row in rows:
-        merge_id = int(row["merge_id"])
-        if _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED) is not None:
-            continue
-        if record_menu_merge_applied_event(conn, merge_id):
-            counts["applied"] += 1
-    return counts
+# The legacy outbox writers (record_menu_merge_applied_event,
+# record_menu_merge_undone_event, backfill_menu_merge_sync_events) and their
+# batch shipper are gone — the server is strict-only and events travel through
+# the mutation-commit path. The menu_merge_sync_events TABLE remains: legacy
+# rows still answer "was this pre-strict merge authored here?"
+# (_merge_has_local_event) and undo's remote-event-id fallback
+# (lookup_applied_remote_event_id).

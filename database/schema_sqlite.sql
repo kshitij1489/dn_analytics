@@ -175,7 +175,12 @@ CREATE TABLE IF NOT EXISTS menu_item_variants (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     assignment_seq INTEGER,           -- highest cloud server_seq applied to this row
-    pending_local INTEGER DEFAULT 0   -- locally rewritten, awaiting server echo ack
+    verification_seq INTEGER,         -- highest verification-stream seq applied to is_verified
+    pending_local INTEGER DEFAULT 0,  -- locally rewritten, awaiting server echo ack
+    -- A shared-rule tombstone must hide the mapping without losing the
+    -- restaurant's availability choice if the central rule is later restored.
+    shared_pos_rule_tombstoned INTEGER NOT NULL DEFAULT 0,
+    shared_pos_prior_is_active INTEGER
 );
 
 -- ============================================================================
@@ -351,6 +356,40 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
 );
 
 -- ============================================================================
+-- 13b. ITEMCODE MAPPINGS (derived local projection, never exported)
+-- ============================================================================
+-- Maps a POS (Petpooja) itemcode to its owning analytics parent per restaurant.
+-- Rebuildable from order_items + menu_item_variants; not a source of truth.
+CREATE TABLE IF NOT EXISTS itemcode_mappings (
+    restaurant_id INTEGER NOT NULL
+        REFERENCES restaurants(restaurant_id) ON DELETE CASCADE,
+    itemcode TEXT NOT NULL,
+    menu_item_id TEXT
+        REFERENCES menu_items(menu_item_id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'conflict')),
+    source TEXT NOT NULL DEFAULT 'first_seen'
+        CHECK (source IN ('first_seen', 'rebuild')),
+    evidence_count INTEGER NOT NULL DEFAULT 1
+        CHECK (evidence_count >= 0),
+    conflict_menu_item_ids TEXT,
+    -- Auto-route gate (plan Phase 9.2): 1 only when rebuild confirmed the
+    -- parent's ownership is server-backed; first_seen rows stay 0.
+    route_eligible INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (restaurant_id, itemcode),
+    CHECK (
+        (status = 'active' AND menu_item_id IS NOT NULL AND conflict_menu_item_ids IS NULL)
+        OR
+        (status = 'conflict' AND menu_item_id IS NULL AND conflict_menu_item_ids IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_itemcode_mappings_menu_item
+ON itemcode_mappings(menu_item_id);
+
+-- ============================================================================
 -- 14. MERGE HISTORY
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS merge_history (
@@ -418,8 +457,46 @@ CREATE TABLE IF NOT EXISTS ai_logs (
     corrected_query TEXT, -- after spelling + optional follow-up rewrite (= user_query)
     action_sequence TEXT, -- JSON array e.g. ["RUN_SQL"]
     explanation TEXT, -- natural-language explanation(s) from pipeline
+    -- §4 telemetry: cost / cache-effectiveness per query (aggregated from ai_call_trace)
+    model TEXT, -- LLM model used for this query (e.g. gpt-4o)
+    total_prompt_tokens INTEGER, -- sum of prompt tokens across all LLM calls this query
+    total_completion_tokens INTEGER, -- sum of completion tokens across all LLM calls this query
+    llm_calls INTEGER, -- number of LLM round-trips (cache misses) this query
+    cache_hits INTEGER, -- number of steps served from the LLM cache this query
     uploaded_at TEXT -- when sent to client-learning cloud (NULL = not yet)
 );
+
+-- §4 telemetry: per-step trace for one query (persisted from the ephemeral debug log,
+-- keyed by query_id so concurrent requests do not clobber each other). Answers
+-- per-step latency / cost / cache vs llm. Shipped with the learning payload.
+CREATE TABLE IF NOT EXISTS ai_call_trace (
+    trace_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_id TEXT REFERENCES ai_logs(query_id) ON DELETE CASCADE,
+    step TEXT, -- pipeline step / cache call_id (e.g. generate_sql, classify_intent)
+    source TEXT, -- 'llm' or 'cache'
+    model TEXT, -- model used for an llm step (NULL for cache hits)
+    latency_ms INTEGER, -- wall-clock latency of this step
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_call_trace_query ON ai_call_trace(query_id);
+
+-- §3.7: per-step debug log for the AI Mode Debug panel (user question, cache hit/miss,
+-- LLM/cache response preview per step), persisted per query_id. Replaces the old
+-- cross-request in-memory globals so concurrent requests can't clobber each other and
+-- past queries can be inspected. Not shipped to cloud (may contain raw prompt/data text).
+CREATE TABLE IF NOT EXISTS ai_debug_log (
+    debug_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_id TEXT REFERENCES ai_logs(query_id) ON DELETE CASCADE,
+    seq INTEGER, -- step order within the query
+    step TEXT, -- pipeline step (e.g. classify_intent, generate_sql)
+    source TEXT, -- 'user' | 'llm' | 'cache' | 'orchestrator'
+    input_preview TEXT, -- truncated input (e.g. prompt)
+    output_preview TEXT, -- truncated response
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_debug_log_query ON ai_debug_log(query_id);
 
 CREATE TABLE IF NOT EXISTS ai_feedback (
     feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -596,6 +673,240 @@ CREATE INDEX IF NOT EXISTS idx_menu_merge_remote_events_reverts
 ON menu_merge_remote_events(reverts_remote_event_id);
 CREATE INDEX IF NOT EXISTS idx_menu_merge_remote_events_local_merge_id
 ON menu_merge_remote_events(local_merge_id);
+
+-- ============================================================================
+-- 17b. GLOBAL MENU PROJECTION (dormant until server advertises global_menu_v1)
+-- Canonical global identity remains central-server truth. These tables are an
+-- additive per-restaurant cache; existing local menu foreign keys stay intact.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS global_menu_state (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    mode TEXT NOT NULL DEFAULT 'legacy_restaurant_v1'
+        CHECK (mode IN ('legacy_restaurant_v1', 'global_menu_v1')),
+    menu_group_id TEXT,
+    capability_schema_version INTEGER NOT NULL DEFAULT 1
+        CHECK (capability_schema_version > 0),
+    catalog_revision INTEGER NOT NULL DEFAULT 0 CHECK (catalog_revision >= 0),
+    mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK (mutation_revision >= 0),
+    snapshot_cursor TEXT,
+    event_cursor TEXT,
+    assignment_cursor TEXT,
+    history_cursor TEXT,
+    bootstrap_status TEXT NOT NULL DEFAULT 'not_started'
+        CHECK (bootstrap_status IN ('not_started', 'in_progress', 'complete', 'error')),
+    coverage_linked INTEGER NOT NULL DEFAULT 0 CHECK (coverage_linked >= 0),
+    coverage_total INTEGER NOT NULL DEFAULT 0 CHECK (coverage_total >= 0),
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (menu_group_id IS NULL OR TRIM(menu_group_id) <> ''),
+    CHECK (coverage_linked <= coverage_total)
+);
+
+INSERT OR IGNORE INTO global_menu_state (singleton_id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS global_menu_items (
+    global_menu_item_id TEXT PRIMARY KEY CHECK (TRIM(global_menu_item_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    canonical_name TEXT NOT NULL CHECK (TRIM(canonical_name) <> ''),
+    canonical_type TEXT NOT NULL DEFAULT '',
+    is_verified INTEGER NOT NULL DEFAULT 0 CHECK (is_verified IN (0, 1)),
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_state IN ('active', 'redirected', 'tombstoned')),
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    created_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS global_variants (
+    global_variant_id TEXT PRIMARY KEY CHECK (TRIM(global_variant_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    canonical_name TEXT NOT NULL CHECK (TRIM(canonical_name) <> ''),
+    description TEXT,
+    unit TEXT,
+    value DECIMAL(10,2),
+    is_verified INTEGER NOT NULL DEFAULT 0 CHECK (is_verified IN (0, 1)),
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_state IN ('active', 'redirected', 'tombstoned')),
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    created_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS menu_item_global_links (
+    local_menu_item_id TEXT PRIMARY KEY
+        REFERENCES menu_items(menu_item_id) ON DELETE CASCADE,
+    global_menu_item_id TEXT NOT NULL
+        REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
+    provenance TEXT NOT NULL DEFAULT 'server-link'
+        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'global-alias', 'projection')),
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    is_projection_owner INTEGER NOT NULL DEFAULT 0 CHECK (is_projection_owner IN (0, 1)),
+    linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS variant_global_links (
+    local_variant_id TEXT PRIMARY KEY
+        REFERENCES variants(variant_id) ON DELETE CASCADE,
+    global_variant_id TEXT NOT NULL
+        REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
+    provenance TEXT NOT NULL DEFAULT 'server-link'
+        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'global-alias', 'projection')),
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    is_projection_owner INTEGER NOT NULL DEFAULT 0 CHECK (is_projection_owner IN (0, 1)),
+    linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS global_menu_redirects (
+    redirect_id TEXT PRIMARY KEY CHECK (TRIM(redirect_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('item', 'variant')),
+    source_global_menu_item_id TEXT
+        REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
+    target_global_menu_item_id TEXT
+        REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
+    source_global_variant_id TEXT
+        REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
+    target_global_variant_id TEXT
+        REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    created_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (entity_type = 'item'
+            AND source_global_menu_item_id IS NOT NULL
+            AND target_global_menu_item_id IS NOT NULL
+            AND source_global_variant_id IS NULL
+            AND target_global_variant_id IS NULL)
+        OR
+        (entity_type = 'variant'
+            AND source_global_variant_id IS NOT NULL
+            AND target_global_variant_id IS NOT NULL
+            AND source_global_menu_item_id IS NULL
+            AND target_global_menu_item_id IS NULL)
+    ),
+    CHECK (source_global_menu_item_id IS NULL OR source_global_menu_item_id <> target_global_menu_item_id),
+    CHECK (source_global_variant_id IS NULL OR source_global_variant_id <> target_global_variant_id),
+    UNIQUE (menu_group_id, source_global_menu_item_id),
+    UNIQUE (menu_group_id, source_global_variant_id)
+);
+
+CREATE TABLE IF NOT EXISTS global_menu_mapping_rules (
+    rule_id TEXT PRIMARY KEY CHECK (TRIM(rule_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    locator_scope TEXT NOT NULL CHECK (locator_scope IN ('restaurant', 'group')),
+    restaurant_id TEXT,
+    locator_kind TEXT NOT NULL
+        CHECK (locator_kind IN ('pos-item', 'pos-addon', 'itemcode', 'alias')),
+    locator_value TEXT NOT NULL CHECK (TRIM(locator_value) <> ''),
+    normalized_locator TEXT NOT NULL CHECK (TRIM(normalized_locator) <> ''),
+    target_global_menu_item_id TEXT NOT NULL
+        REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
+    target_global_variant_id TEXT
+        REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
+    price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0),
+    provenance TEXT NOT NULL,
+    is_verified INTEGER NOT NULL DEFAULT 1 CHECK (is_verified IN (0, 1)),
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_state IN ('active', 'tombstoned')),
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
+    created_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (locator_scope = 'restaurant' AND restaurant_id IS NOT NULL AND TRIM(restaurant_id) <> '')
+        OR (locator_scope = 'group' AND restaurant_id IS NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS global_menu_sync_quarantine (
+    quarantine_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payload_key TEXT NOT NULL UNIQUE CHECK (TRIM(payload_key) <> ''),
+    menu_group_id TEXT,
+    stream TEXT NOT NULL CHECK (TRIM(stream) <> ''),
+    page_cursor TEXT,
+    server_revision INTEGER,
+    payload TEXT NOT NULL,
+    error_code TEXT NOT NULL CHECK (TRIM(error_code) <> ''),
+    error_message TEXT NOT NULL CHECK (TRIM(error_message) <> ''),
+    fail_count INTEGER NOT NULL DEFAULT 1 CHECK (fail_count > 0),
+    first_failed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_failed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT,
+    CHECK (menu_group_id IS NULL OR TRIM(menu_group_id) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS global_menu_events (
+    event_id TEXT PRIMARY KEY CHECK (TRIM(event_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    mutation_id TEXT NOT NULL CHECK (TRIM(mutation_id) <> ''),
+    event_type TEXT NOT NULL CHECK (TRIM(event_type) <> ''),
+    catalog_revision INTEGER NOT NULL CHECK (catalog_revision >= 0),
+    payload TEXT NOT NULL,
+    origin_restaurant_id TEXT,
+    occurred_at TEXT,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (menu_group_id, catalog_revision)
+);
+
+CREATE TABLE IF NOT EXISTS global_menu_history (
+    history_id TEXT PRIMARY KEY CHECK (TRIM(history_id) <> ''),
+    menu_group_id TEXT NOT NULL CHECK (TRIM(menu_group_id) <> ''),
+    source_event_id TEXT NOT NULL CHECK (TRIM(source_event_id) <> ''),
+    source_kind TEXT NOT NULL
+        CHECK (source_kind IN ('legacy_restaurant_event', 'global_menu_event')),
+    event_type TEXT NOT NULL CHECK (TRIM(event_type) <> ''),
+    origin_restaurant_id TEXT,
+    actor TEXT,
+    attribution TEXT,
+    occurred_at TEXT NOT NULL CHECK (TRIM(occurred_at) <> ''),
+    server_ingested_at TEXT NOT NULL CHECK (TRIM(server_ingested_at) <> ''),
+    source TEXT,
+    target TEXT,
+    mutation_id TEXT,
+    is_undoable INTEGER NOT NULL DEFAULT 0 CHECK (is_undoable IN (0, 1)),
+    detail TEXT NOT NULL DEFAULT '{}',
+    cached_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (origin_restaurant_id IS NULL OR TRIM(origin_restaurant_id) <> ''),
+    CHECK (mutation_id IS NULL OR TRIM(mutation_id) <> ''),
+    CHECK (is_undoable = 0 OR mutation_id IS NOT NULL),
+    CHECK (
+        source_kind <> 'legacy_restaurant_event'
+        OR (mutation_id IS NULL AND is_undoable = 0)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_global_menu_items_group
+ON global_menu_items(menu_group_id, lifecycle_state);
+CREATE INDEX IF NOT EXISTS idx_global_variants_group
+ON global_variants(menu_group_id, lifecycle_state);
+CREATE INDEX IF NOT EXISTS idx_menu_item_global_links_global
+ON menu_item_global_links(global_menu_item_id, local_menu_item_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_item_global_links_owner
+ON menu_item_global_links(global_menu_item_id) WHERE is_projection_owner = 1;
+CREATE INDEX IF NOT EXISTS idx_variant_global_links_global
+ON variant_global_links(global_variant_id, local_variant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_variant_global_links_owner
+ON variant_global_links(global_variant_id) WHERE is_projection_owner = 1;
+CREATE INDEX IF NOT EXISTS idx_global_menu_redirects_target_item
+ON global_menu_redirects(target_global_menu_item_id);
+CREATE INDEX IF NOT EXISTS idx_global_menu_redirects_target_variant
+ON global_menu_redirects(target_global_variant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_global_menu_rules_restaurant_locator
+ON global_menu_mapping_rules(
+    menu_group_id, restaurant_id, locator_kind, normalized_locator
+) WHERE locator_scope = 'restaurant' AND lifecycle_state = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_global_menu_rules_group_locator
+ON global_menu_mapping_rules(menu_group_id, locator_kind, normalized_locator)
+WHERE locator_scope = 'group' AND lifecycle_state = 'active';
+CREATE INDEX IF NOT EXISTS idx_global_menu_rules_target_item
+ON global_menu_mapping_rules(target_global_menu_item_id);
+CREATE INDEX IF NOT EXISTS idx_global_menu_quarantine_open
+ON global_menu_sync_quarantine(resolved_at, stream, last_failed_at);
+CREATE INDEX IF NOT EXISTS idx_global_menu_events_mutation
+ON global_menu_events(menu_group_id, mutation_id, catalog_revision);
+CREATE INDEX IF NOT EXISTS idx_global_menu_history_order
+ON global_menu_history(
+    menu_group_id, occurred_at DESC, source_kind ASC, source_event_id DESC
+);
 -- ============================================================================
 -- 18. SYSTEM CONFIGURATION
 -- ============================================================================
@@ -615,6 +926,17 @@ CREATE TABLE IF NOT EXISTS app_users (
     is_active BOOLEAN DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- 18b. RESTAURANT PROFILE IDENTITY
+-- One analytics database belongs to exactly one physical restaurant.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS restaurant_profile_identity (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    restaurant_id TEXT NOT NULL UNIQUE,
+    bound_at TEXT NOT NULL,
+    profile_schema_version INTEGER NOT NULL
 );
 
 -- ============================================================================
@@ -780,3 +1102,87 @@ CREATE TABLE IF NOT EXISTS volume_backtest_cache (
     UNIQUE(forecast_date, item_id, model_trained_through)
 );
 CREATE INDEX IF NOT EXISTS idx_volume_backtest_cache_dates ON volume_backtest_cache(forecast_date, model_trained_through);
+
+-- ============================================================================
+-- 27. CENTRAL FORECAST CACHE (server-authored pull-only; Phase 5)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS central_forecast_runs (
+    run_id TEXT PRIMARY KEY,
+    server_seq INTEGER NOT NULL,
+    scope_key TEXT NOT NULL DEFAULT 'default',
+    generated_on DATE NOT NULL,
+    status TEXT NOT NULL,
+    completed_at TEXT,
+    families TEXT NOT NULL,
+    training_window_start DATE,
+    training_window_end DATE,
+    metrics TEXT,
+    pulled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(server_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_central_forecast_runs_generated
+    ON central_forecast_runs(scope_key, generated_on DESC);
+
+CREATE TABLE IF NOT EXISTS central_forecast_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_seq INTEGER NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    scope_key TEXT NOT NULL DEFAULT 'default',
+    family TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    forecast_date DATE NOT NULL,
+    model_name TEXT,
+    entity_id TEXT,
+    entity_name TEXT,
+    unit TEXT,
+    payload TEXT NOT NULL,
+    pulled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES central_forecast_runs(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_central_forecast_rows_lookup
+    ON central_forecast_rows(scope_key, family, kind, forecast_date);
+CREATE INDEX IF NOT EXISTS idx_central_forecast_rows_run
+    ON central_forecast_rows(run_id, family, kind);
+CREATE INDEX IF NOT EXISTS idx_central_forecast_rows_entity
+    ON central_forecast_rows(scope_key, family, entity_id, forecast_date);
+
+CREATE TABLE IF NOT EXISTS central_forecast_weather (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_seq INTEGER NOT NULL UNIQUE,
+    weather_date DATE NOT NULL,
+    payload TEXT NOT NULL,
+    pulled_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_central_forecast_weather_date
+    ON central_forecast_weather(weather_date);
+
+-- ============================================================
+-- Silent-reuse mapping guard (LOCAL DIAGNOSTIC ONLY)
+-- Not exported to backups, not shipped to cloud sync. Tracks the product
+-- "cores" seen per PetPooja id and flags when a new core lands on an id whose
+-- verified mapping would otherwise silently absorb it. See
+-- src/core/mapping_anomalies.py and utils/mapping_core.py.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mapping_id_cores (
+    order_item_id TEXT NOT NULL,
+    core_key TEXT NOT NULL,
+    is_addon INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (order_item_id, core_key)
+);
+CREATE TABLE IF NOT EXISTS mapping_anomalies (
+    anomaly_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_item_id TEXT NOT NULL,
+    core_key TEXT NOT NULL,
+    baseline_core_key TEXT,
+    name_raw TEXT NOT NULL,
+    mapped_menu_item_id TEXT,
+    mapped_name TEXT,
+    is_addon INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'open',
+    detected_via TEXT NOT NULL DEFAULT 'ingest',
+    seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT,
+    UNIQUE (order_item_id, core_key)
+);
+CREATE INDEX IF NOT EXISTS idx_mapping_anomalies_open ON mapping_anomalies(status, seen_at);

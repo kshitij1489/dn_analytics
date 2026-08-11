@@ -38,18 +38,6 @@ CLIENT_LEARNING_MENU_BOOTSTRAP_PULL_URL = os.environ.get(
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-bootstrap/latest",
 ).strip()
 
-# Customer merge collaboration: POST merge/undo events
-CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL = os.environ.get(
-    "CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/customer-merges/ingest",
-).strip()
-
-# Menu merge collaboration: POST merge/undo events
-CLIENT_LEARNING_MENU_MERGE_INGEST_URL = os.environ.get(
-    "CLIENT_LEARNING_MENU_MERGE_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-merges/ingest",
-).strip()
-
 # Customer merge collaboration: GET merge/undo events for remote replay
 CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL = os.environ.get(
     "CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL",
@@ -63,34 +51,26 @@ CLIENT_LEARNING_MENU_MERGE_PULL_URL = os.environ.get(
 ).strip()
 
 # Menu mapping verification (per order_item_id is_verified)
-CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL = os.environ.get(
-    "CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-mapping-verifications/ingest",
-).strip()
-
 CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL = os.environ.get(
     "CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL",
     f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/menu-mapping-verifications",
 ).strip()
 
-# Forecast ingest: POST revenue + item forecasts + backtest caches
-CLIENT_LEARNING_FORECAST_INGEST_URL = os.environ.get(
-    "CLIENT_LEARNING_FORECAST_INGEST_URL",
-    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/forecasts/ingest",
-).strip()
-
 # Forecast bootstrap: GET precomputed forecast cache (optional, for new .dmg installs)
+# No placeholder default: an unconfigured install must return None from
+# get_forecast_bootstrap_endpoint so the "Configure Cloud URL" empty state shows
+# instead of attempting a pull against a dead URL.
 CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL = os.environ.get(
-    "CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL",
-    f"{_PLACEHOLDER_BASE}/desktop-analytics-sync/forecasts/bootstrap",
+    "CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL", ""
+).strip()
+
+# Forecast delta: GET server-authored forecast rows (Phase 5 pull-only)
+# No placeholder default (same reason as bootstrap above).
+CLIENT_LEARNING_FORECAST_DELTA_URL = os.environ.get(
+    "CLIENT_LEARNING_FORECAST_DELTA_URL", ""
 ).strip()
 
 
-
-
-def _is_placeholder(url: str) -> bool:
-    """True if URL is the placeholder (no real server)."""
-    return "placeholder-client-learning.example.com" in (url or "")
 
 
 def should_upload_errors() -> bool:
@@ -113,16 +93,6 @@ def should_pull_menu_bootstrap() -> bool:
     return bool(CLIENT_LEARNING_MENU_BOOTSTRAP_PULL_URL)
 
 
-def should_upload_customer_merges() -> bool:
-    """True if customer merge upload is configured (non-empty URL)."""
-    return bool(CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL)
-
-
-def should_upload_menu_merges() -> bool:
-    """True if menu merge upload is configured (non-empty URL)."""
-    return bool(CLIENT_LEARNING_MENU_MERGE_INGEST_URL)
-
-
 def should_pull_customer_merges() -> bool:
     """True if customer merge pull is configured (non-empty URL)."""
     return bool(CLIENT_LEARNING_CUSTOMER_MERGE_PULL_URL)
@@ -133,19 +103,5 @@ def should_pull_menu_merges() -> bool:
     return bool(CLIENT_LEARNING_MENU_MERGE_PULL_URL)
 
 
-def should_upload_menu_mapping_verifications() -> bool:
-    return bool(CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL)
-
-
 def should_pull_menu_mapping_verifications() -> bool:
     return bool(CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_PULL_URL)
-
-
-def should_upload_forecasts() -> bool:
-    """True if forecast ingest is configured (non-empty URL)."""
-    return bool(CLIENT_LEARNING_FORECAST_INGEST_URL)
-
-
-def should_fetch_forecast_bootstrap() -> bool:
-    """True if forecast bootstrap URL is configured (for new .dmg seed)."""
-    return bool(CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL)

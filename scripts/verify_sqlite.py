@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 
@@ -5,19 +6,20 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 try:
-    from src.core.db.connection import get_db_connection
-    from src.core.db.reset import reset_database
+    from src.core.db.connection import get_profile_connection
+    from src.core.profiles import get_profile
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)
 
-def test_connection():
-    print("Testing SQLite Connection...")
-    conn, msg = get_db_connection()
-    if not conn:
-        print(f"❌ Connection Failed: {msg}")
+def test_connection(restaurant_id: str):
+    print(f"Testing SQLite Connection for restaurant {restaurant_id}...")
+    try:
+        conn, msg = get_profile_connection(get_profile(restaurant_id))
+    except Exception as exc:
+        print(f"❌ Connection Failed: {exc}")
         return False
-        
+
     print(f"✅ Connection Successful: {msg}")
     
     # Test Schema Presence
@@ -32,12 +34,8 @@ def test_connection():
         
         if missing:
             print(f"⚠️ Missing expected tables: {missing}")
-            print("Attempting reset...")
-            success, r_msg = reset_database()
-            if success:
-                print(f"✅ {r_msg}")
-            else:
-                print(f"❌ Reset Failed: {r_msg}")
+            print("Run the application/profile initialization flow to apply the schema.")
+            return False
         else:
             print("✅ Core tables found.")
             
@@ -50,4 +48,6 @@ def test_connection():
     return True
 
 if __name__ == "__main__":
-    test_connection()
+    parser = argparse.ArgumentParser(description="Verify one restaurant profile database")
+    parser.add_argument("--restaurant-id", required=True, help="Bound restaurant profile to verify")
+    sys.exit(0 if test_connection(parser.parse_args().restaurant_id) else 1)

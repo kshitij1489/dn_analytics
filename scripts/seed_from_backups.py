@@ -1,233 +1,225 @@
+"""Explicit JSON export/restore CLI for menu catalog disaster recovery.
 
+Runtime app paths must not read or write these JSON files. This script is a
+manual support tool for dev/export snapshots and tier-3 recovery.
+
+Typical live DB location:
+    ~/Library/Application Support/dn-analytics/analytics.db
+
+Point the script at a non-default DB with:
+    DB_URL="/path/to/analytics.db" python3 scripts/seed_from_backups.py ...
+or:
+    python3 scripts/seed_from_backups.py --db "/path/to/analytics.db" ...
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
 import os
 import sys
-import uuid
-import sqlite3
 from pathlib import Path
+from typing import Optional, Union
 
-# Add project root to sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add project root to sys.path when run directly.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.core.db.connection import get_db_connection
-from src.core.utils.path_helper import get_resource_path
-from utils.menu_item_variant_enforcement import backfill_menu_items_missing_variant_mappings
-from utils.variant_metadata import infer_variant_metadata
+from src.core.menu_catalog_seed import build_cluster_state, build_id_maps, seed_catalog
 
-def perform_seeding(conn, seed_mappings=False):
-    """Restore menu data from JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json).
+DEFAULT_BACKUP_DIR = Path.home() / "dn-analytics-backups"
+ID_MAPS_FILENAME = "id_maps_backup.json"
+CLUSTER_STATE_FILENAME = "cluster_state_backup.json"
+
+
+def _archive_paths(archive_dir: Path) -> tuple[Path, Path]:
+    return archive_dir / ID_MAPS_FILENAME, archive_dir / CLUSTER_STATE_FILENAME
+
+
+def _load_backup_payload(archive_dir: Path) -> tuple[dict, dict]:
+    id_maps_path, cluster_state_path = _archive_paths(archive_dir)
+    if not id_maps_path.exists() or not cluster_state_path.exists():
+        raise FileNotFoundError(
+            f"Backup files not found in {archive_dir}. Expected "
+            f"{ID_MAPS_FILENAME} and {CLUSTER_STATE_FILENAME}."
+        )
+
+    with id_maps_path.open("r") as f:
+        id_maps = json.load(f)
+    with cluster_state_path.open("r") as f:
+        cluster_state = json.load(f)
+    return id_maps, cluster_state
+
+
+def _print_seed_summary(counts: dict) -> None:
+    print(
+        f"Successfully seeded: {counts['items_seeded']} items, "
+        f"{counts['variants_seeded']} variants, {counts['mappings_seeded']} mappings, "
+        f"{counts['stub_count']} default variant stub(s); skipped "
+        f"{counts['skipped_unmapped']} stale id_maps item(s) with no cluster_state key"
+    )
+
+
+def _rebuild_itemcodes_after_restore(conn) -> None:
+    from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
+
+    result = rebuild_itemcode_mappings_best_effort(conn)
+    conn.commit()
+    if result is None:
+        print("Itemcode projection rebuild skipped; it can be rebuilt at next sync.")
+    else:
+        print(f"Itemcode projection rebuilt: {result.summary()}")
+
+
+def perform_seeding(
+    conn,
+    seed_mappings: bool = False,
+    archive_dir: Optional[Union[os.PathLike, str]] = None,
+    rebuild_itemcodes: Optional[bool] = None,
+) -> bool:
+    """Restore menu data from explicit JSON backups.
 
     Defaults to catalog-only (menu_items, variants; no menu_item_variants
-    upserts). The central server is the ground truth for per-order-item
-    assignments — fresh installs get those from the server's watermarked
-    snapshot (menu_assignment_bootstrap.py, MENU_SYNC_ARCHITECTURE.md §5), and
-    routine cloud pulls from this same local backup are catalog-only too, so a
-    frozen local snapshot can never race or roll back assignments owned by the
-    assignment sync stream (sync conflict plan C4.1).
-
-    seed_mappings=True additionally seeds menu_item_variants from the local
-    backup. This is a contingency path only: the CLI entrypoint below (for
-    recovering an install, or the fleet, if the central server's data is
-    lost) and the explicit `seed_and_relink_orders` bootstrap restore mode.
+    upserts). seed_mappings=True is a contingency restore path for assignments
+    and should be used only from an explicit support flow.
     """
-    # Paths
-    archive_dir = Path(get_resource_path("data"))
-    cluster_state_path = archive_dir / "cluster_state_backup.json"
-    id_maps_path = archive_dir / "id_maps_backup.json"
-    
-    if not cluster_state_path.exists() or not id_maps_path.exists():
-        print(f"Error: Backup files not found in {archive_dir}")
-        return False
+    backup_dir = Path(archive_dir).expanduser() if archive_dir else DEFAULT_BACKUP_DIR
+    should_rebuild_itemcodes = seed_mappings if rebuild_itemcodes is None else rebuild_itemcodes
 
-    # Load JSON files
-    with open(id_maps_path, 'r') as f:
-        id_maps = json.load(f)
-    
-    with open(cluster_state_path, 'r') as f:
-        cluster_state = json.load(f)
-
-    cursor = conn.cursor()
-    
     try:
-        # 1. Insert Menu Items
-        print("Seeding Menu Items...")
-        menu_items_count = 0
-        skipped_unmapped_count = 0
-        type_id_to_str = id_maps.get("type_id_to_str", {})
-        item_type_by_menu_id = {}
-        for key in cluster_state.keys():
-            parts = key.split(":")
-            if parts[0] not in item_type_by_menu_id:
-                type_id = parts[1] if len(parts) > 1 else None
-                item_type_by_menu_id[parts[0]] = type_id_to_str.get(type_id, "Dessert")
-
-        for menu_item_id, clean_name in id_maps.get("menu_id_to_str", {}).items():
-            item_type = item_type_by_menu_id.get(menu_item_id)
-            if item_type is None:
-                # Every real menu item carries at least a stub mapping (variant
-                # enforcement), so an id_maps entry with no cluster_state key is a
-                # stale/legacy id — seeding it would fabricate a wrongly typed item.
-                skipped_unmapped_count += 1
-                continue
-
-            cursor.execute("""
-                INSERT INTO menu_items (menu_item_id, name, type, is_verified)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT (menu_item_id) DO UPDATE SET 
-                    name = excluded.name,
-                    type = excluded.type,
-                    is_verified = 1
-            """, (menu_item_id, clean_name, item_type))
-            menu_items_count += 1
-        
-        # 2. Insert Variants
-        print("Seeding Variants...")
-        variant_meta = id_maps.get("variant_id_to_meta", {})
-
-        variants_count = 0
-        for variant_id, variant_name in id_maps.get("variant_id_to_str", {}).items():
-            metadata = infer_variant_metadata(variant_name, variant_meta.get(variant_id))
-            
-            cursor.execute("""
-                INSERT INTO variants (variant_id, variant_name, unit, value, is_verified)
-                VALUES (?, ?, ?, ?, 1)
-                ON CONFLICT (variant_id) DO UPDATE SET 
-                    variant_name = excluded.variant_name,
-                    unit = excluded.unit,
-                    value = excluded.value,
-                    is_verified = 1
-            """, (variant_id, variant_name, metadata["unit"], metadata["value"]))
-            variants_count += 1
-            
-        # 3. Insert Mappings (menu_item_variants)
-        mappings_count = 0
-        if seed_mappings:
-            print("Seeding Mappings...")
-            for key, orders in cluster_state.items():
-                menu_item_id = key.split(":")[0]
-                for order_item_id, items in orders.items():
-                    seen_variants = set()
-                    for _, variant_id in items:
-                        if variant_id not in seen_variants:
-                            cursor.execute("""
-                                INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
-                                VALUES (?, ?, ?, 1)
-                                ON CONFLICT (order_item_id) DO UPDATE SET
-                                    menu_item_id = excluded.menu_item_id,
-                                    variant_id = excluded.variant_id,
-                                    is_verified = 1
-                            """, (str(order_item_id), menu_item_id, variant_id))
-                            seen_variants.add(variant_id)
-                            mappings_count += 1
-        else:
-            print("Skipping mapping seed (catalog-only mode)...")
-        
-        stub_count = backfill_menu_items_missing_variant_mappings(conn, cursor=cursor)
-        conn.commit()
-        print(
-            f"Successfully seeded: {menu_items_count} items, {variants_count} variants, "
-            f"{mappings_count} mappings, {stub_count} default variant stub(s); "
-            f"skipped {skipped_unmapped_count} stale id_maps item(s) with no cluster_state key"
+        id_maps, cluster_state = _load_backup_payload(backup_dir)
+        counts = seed_catalog(
+            conn,
+            id_maps,
+            cluster_state,
+            seed_mappings=seed_mappings,
         )
+        _print_seed_summary(counts)
+        if should_rebuild_itemcodes:
+            _rebuild_itemcodes_after_restore(conn)
         return True
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"Error during seeding: {e}")
+    except Exception as exc:
+        print(f"Error during seeding: {exc}")
         return False
-    finally:
-        cursor.close()
 
 
-def export_to_backups(conn):
-    """Dump database state to JSON backups in data/ (cluster_state_backup.json, id_maps_backup.json)."""
-    archive_dir = Path(get_resource_path("data"))
+def export_to_backups(conn, out_dir: Optional[Union[os.PathLike, str]] = None) -> bool:
+    """Dump database state to explicit JSON backups."""
+    archive_dir = Path(out_dir).expanduser() if out_dir else DEFAULT_BACKUP_DIR
     archive_dir.mkdir(parents=True, exist_ok=True)
-    
-    cluster_state_path = archive_dir / "cluster_state_backup.json"
-    id_maps_path = archive_dir / "id_maps_backup.json"
-    
-    cursor = conn.cursor()
-    
+    id_maps_path, cluster_state_path = _archive_paths(archive_dir)
+
     try:
-        # 1. Generate id_maps
         print("Exporting ID Maps...")
-        id_maps = {
-            "menu_id_to_str": {},
-            "variant_id_to_str": {},
-            "variant_id_to_meta": {},
-            "type_id_to_str": {}
-        }
-        
-        # Menu Items
-        cursor.execute("SELECT menu_item_id, name, type FROM menu_items")
-        type_to_id = {}
-        for mid, name, mtype in cursor.fetchall():
-            id_maps["menu_id_to_str"][str(mid)] = name
-            if mtype not in type_to_id:
-                # We need deterministic type IDs if we want consistency, 
-                # but for seeding back, simple mapping is enough.
-                # However, cluster_state uses type IDs. 
-                # Let's try to find existing ones or generate.
-                from utils.id_generator import generate_deterministic_id
-                tid = generate_deterministic_id(mtype)
-                type_to_id[mtype] = tid
-                id_maps["type_id_to_str"][tid] = mtype
-                
-        # Variants
-        cursor.execute("SELECT variant_id, variant_name, unit, value FROM variants")
-        for vid, vname, unit, value in cursor.fetchall():
-            id_maps["variant_id_to_str"][str(vid)] = vname
-            metadata = infer_variant_metadata(vname, {"unit": unit, "value": value})
-            if metadata["unit"] is not None or metadata["value"] is not None:
-                id_maps["variant_id_to_meta"][str(vid)] = metadata
+        id_maps = build_id_maps(conn)
 
-        # 2. Generate cluster_state
         print("Exporting Cluster State...")
-        cluster_state = {}
-        cursor.execute("""
-            SELECT mv.menu_item_id, mi.type, mv.order_item_id, mv.variant_id
-            FROM menu_item_variants mv
-            JOIN menu_items mi ON mv.menu_item_id = mi.menu_item_id
-        """)
-        for mid, mtype, oid, vid in cursor.fetchall():
-            tid = type_to_id.get(mtype, "unknown")
-            key = f"{mid}:{tid}"
-            if key not in cluster_state:
-                cluster_state[key] = {}
-            if str(oid) not in cluster_state[key]:
-                cluster_state[key][str(oid)] = []
-            
-            # The original format was list of [original_name, variant_id]
-            # We don't have original_name easily here unless we join with order_items,
-            # but for restoration, variant_id is the key part.
-            cluster_state[key][str(oid)].append([str(oid), str(vid)])
+        cluster_state = build_cluster_state(conn)
 
-        # Save files
-        with open(id_maps_path, 'w') as f:
+        with id_maps_path.open("w") as f:
             json.dump(id_maps, f, indent=2)
-        with open(cluster_state_path, 'w') as f:
+        with cluster_state_path.open("w") as f:
             json.dump(cluster_state, f, indent=2)
-            
+
         print(f"Successfully exported backups to {archive_dir}")
         return True
-
-    except Exception as e:
-        print(f"Error during export: {e}")
+    except Exception as exc:
+        print(f"Error during export: {exc}")
         return False
+
+
+def _confirm_restore(archive_dir: Path, *, catalog_only: bool, assume_yes: bool) -> bool:
+    mode = "catalog only" if catalog_only else "catalog + assignment mappings"
+    print(f"About to restore {mode} from: {archive_dir}")
+    print("This writes to the configured SQLite database.")
+    if assume_yes:
+        return True
+    try:
+        response = input("Type RESTORE to continue: ").strip()
+    except EOFError:
+        return False
+    return response == "RESTORE"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Export or restore menu catalog JSON backups explicitly.",
+    )
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--export", action="store_true", help="Export DB catalog state to JSON.")
+    action.add_argument("--restore", action="store_true", help="Restore DB catalog state from JSON.")
+    parser.add_argument(
+        "--out",
+        default=str(DEFAULT_BACKUP_DIR),
+        help=f"Export directory. Defaults to {DEFAULT_BACKUP_DIR}.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="restore_from",
+        help="Restore directory containing id_maps_backup.json and cluster_state_backup.json.",
+    )
+    parser.add_argument(
+        "--catalog-only",
+        action="store_true",
+        help="For --restore, seed only menu_items and variants; skip assignment mappings.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="For --restore, skip the interactive confirmation prompt.",
+    )
+    parser.add_argument(
+        "--db",
+        help=(
+            "SQLite database path. Defaults to DB_URL, then the repo-root "
+            "analytics.db used by get_db_connection."
+        ),
+    )
+    return parser
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.restore and not args.restore_from:
+        parser.error("--restore requires --from DIR")
+    if args.catalog_only and not args.restore:
+        parser.error("--catalog-only is only valid with --restore")
+    if args.yes and not args.restore:
+        parser.error("--yes is only valid with --restore")
+
+    conn, msg = get_db_connection(args.db)
+    if not conn:
+        print(f"Connection failed: {msg}")
+        return 1
+
+    try:
+        print(f"Connected: {msg}")
+        if args.export:
+            return 0 if export_to_backups(conn, args.out) else 1
+
+        restore_dir = Path(args.restore_from).expanduser()
+        if not _confirm_restore(
+            restore_dir,
+            catalog_only=args.catalog_only,
+            assume_yes=args.yes,
+        ):
+            print("Restore cancelled.")
+            return 1
+        return (
+            0
+            if perform_seeding(
+                conn,
+                seed_mappings=not args.catalog_only,
+                archive_dir=restore_dir,
+                rebuild_itemcodes=not args.catalog_only,
+            )
+            else 1
+        )
     finally:
-        cursor.close()
+        conn.close()
+
 
 if __name__ == "__main__":
-    # If run directly, offer to seed or export
-    conn, msg = get_db_connection()
-    if conn:
-        print(f"Connected: {msg}")
-        if len(sys.argv) > 1 and sys.argv[1] == "--export":
-            export_to_backups(conn)
-        else:
-            # CLI use is the contingency-restore path: seed assignments too.
-            perform_seeding(conn, seed_mappings=True)
-        conn.close()
-    else:
-        print(f"Connection failed: {msg}")
+    raise SystemExit(main())

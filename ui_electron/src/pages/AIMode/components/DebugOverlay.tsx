@@ -1,11 +1,31 @@
-import type { DebugLogEntry } from '../../../api';
+import type { DebugLogEntry, CallTraceEntry, CacheCounter } from '../../../api';
 
 interface DebugOverlayProps {
     entries: DebugLogEntry[];
+    trace?: CallTraceEntry[];
+    counters?: CacheCounter[];
     onClose: () => void;
 }
 
-export function DebugOverlay({ entries, onClose }: DebugOverlayProps) {
+const sectionTitle: React.CSSProperties = {
+    color: '#808080',
+    margin: '18px 0 8px',
+    borderTop: '1px solid #333',
+    paddingTop: '12px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    fontSize: '0.75rem'
+};
+
+const th: React.CSSProperties = { textAlign: 'left', color: '#808080', fontWeight: 'normal', padding: '2px 10px 6px 0' };
+const td: React.CSSProperties = { padding: '2px 10px 2px 0', color: '#a9b7c6', whiteSpace: 'nowrap' };
+
+export function DebugOverlay({ entries, trace = [], counters = [], onClose }: DebugOverlayProps) {
+    const totalHits = counters.reduce((s, c) => s + c.hits, 0);
+    const totalMisses = counters.reduce((s, c) => s + c.misses, 0);
+    const overall = totalHits + totalMisses;
+    const hitRate = overall > 0 ? ((totalHits / overall) * 100).toFixed(1) : '—';
+
     return (
         <div
             style={{
@@ -36,7 +56,7 @@ export function DebugOverlay({ entries, onClose }: DebugOverlayProps) {
                     gap: '8px'
                 }}
             >
-                <h2 style={{ margin: 0, fontSize: '1.2rem' }}>🐞 AI Debug Logs</h2>
+                <h2 style={{ margin: 0, fontSize: '1.2rem' }}>🐞 AI Debug & Telemetry</h2>
                 <button
                     type="button"
                     onClick={onClose}
@@ -57,6 +77,7 @@ export function DebugOverlay({ entries, onClose }: DebugOverlayProps) {
                     fontSize: '0.85rem'
                 }}
             >
+                {/* Per-step log (cache hit/miss + previews) */}
                 {entries.length === 0 ? (
                     <>
                         <p style={{ color: '#808080' }}>// Debug logs for the last chat request</p>
@@ -112,6 +133,77 @@ export function DebugOverlay({ entries, onClose }: DebugOverlayProps) {
                             )}
                         </div>
                     ))
+                )}
+
+                {/* §4 telemetry: per-step trace (latency + tokens) for this query */}
+                <div style={sectionTitle}>Per-step trace (latency / tokens)</div>
+                {trace.length === 0 ? (
+                    <p style={{ color: '#6a8759', margin: 0 }}>No persisted trace for the latest query.</p>
+                ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                            <thead>
+                                <tr>
+                                    <th style={th}>step</th>
+                                    <th style={th}>source</th>
+                                    <th style={th}>model</th>
+                                    <th style={{ ...th, textAlign: 'right' }}>latency</th>
+                                    <th style={{ ...th, textAlign: 'right' }}>prompt tok</th>
+                                    <th style={{ ...th, textAlign: 'right' }}>compl tok</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {trace.map((t, i) => (
+                                    <tr key={i}>
+                                        <td style={{ ...td, color: '#9cdcfe' }}>{t.step}</td>
+                                        <td style={{ ...td, color: t.source === 'cache' ? '#4ec9b0' : '#dcdcaa' }}>{t.source}</td>
+                                        <td style={td}>{t.model ?? '—'}</td>
+                                        <td style={{ ...td, textAlign: 'right' }}>{t.latency_ms == null ? '—' : `${t.latency_ms} ms`}</td>
+                                        <td style={{ ...td, textAlign: 'right' }}>{t.prompt_tokens || 0}</td>
+                                        <td style={{ ...td, textAlign: 'right' }}>{t.completion_tokens || 0}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* §4 telemetry: global cache effectiveness */}
+                <div style={sectionTitle}>Cache hit-rate (all-time)</div>
+                {counters.length === 0 ? (
+                    <p style={{ color: '#6a8759', margin: 0 }}>No cache activity recorded yet.</p>
+                ) : (
+                    <>
+                        <p style={{ margin: '0 0 8px', color: '#4ec9b0' }}>
+                            Overall: {totalHits} hits / {totalMisses} misses — {hitRate}% hit rate
+                        </p>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                                <thead>
+                                    <tr>
+                                        <th style={th}>call_id</th>
+                                        <th style={{ ...th, textAlign: 'right' }}>hits</th>
+                                        <th style={{ ...th, textAlign: 'right' }}>misses</th>
+                                        <th style={{ ...th, textAlign: 'right' }}>hit rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {counters.map((c, i) => {
+                                        const tot = c.hits + c.misses;
+                                        const rate = tot > 0 ? `${((c.hits / tot) * 100).toFixed(0)}%` : '—';
+                                        return (
+                                            <tr key={i}>
+                                                <td style={{ ...td, color: '#9cdcfe' }}>{c.call_id}</td>
+                                                <td style={{ ...td, textAlign: 'right' }}>{c.hits}</td>
+                                                <td style={{ ...td, textAlign: 'right' }}>{c.misses}</td>
+                                                <td style={{ ...td, textAlign: 'right' }}>{rate}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
                 )}
             </div>
         </div>

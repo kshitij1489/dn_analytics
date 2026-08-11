@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from src.core.client_learning_shipper import run_all
+from tests.profile_test_helpers import bind_test_profile
 
 
 class ClientLearningShipperTests(unittest.TestCase):
@@ -26,7 +27,12 @@ class ClientLearningShipperTests(unittest.TestCase):
                 corrected_query TEXT,
                 action_sequence TEXT,
                 explanation TEXT,
-                uploaded_at TEXT
+                uploaded_at TEXT,
+                model TEXT,
+                total_prompt_tokens INTEGER,
+                total_completion_tokens INTEGER,
+                llm_calls INTEGER,
+                cache_hits INTEGER
             );
 
             CREATE TABLE ai_feedback (
@@ -98,8 +104,51 @@ class ClientLearningShipperTests(unittest.TestCase):
             CREATE TABLE merge_history (
                 merge_id INTEGER PRIMARY KEY AUTOINCREMENT
             );
+
+            CREATE TABLE menu_items (
+                menu_item_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE variants (
+                variant_id TEXT PRIMARY KEY,
+                variant_name TEXT NOT NULL,
+                unit TEXT,
+                value REAL,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE menu_item_variants (
+                order_item_id TEXT PRIMARY KEY,
+                menu_item_id TEXT NOT NULL,
+                variant_id TEXT,
+                is_verified BOOLEAN DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1
+            );
+
+            CREATE TABLE orders (
+                order_id TEXT PRIMARY KEY,
+                created_on TEXT
+            );
+
+            CREATE TABLE order_items (
+                order_item_id TEXT PRIMARY KEY,
+                order_id TEXT,
+                petpooja_itemid TEXT,
+                unit_price NUMERIC
+            );
+
+            CREATE TABLE order_item_addons (
+                order_item_addon_id INTEGER PRIMARY KEY,
+                order_item_id TEXT,
+                petpooja_addonid TEXT,
+                price NUMERIC
+            );
             """
         )
+        bind_test_profile(self.conn)
         self.conn.executemany(
             """
             INSERT INTO customers (
@@ -238,6 +287,24 @@ class ClientLearningShipperTests(unittest.TestCase):
                 None,
             ),
         )
+        self.conn.execute(
+            """
+            INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+            VALUES ('item_a', 'Family Tub', 'Ice Cream', 1)
+            """
+        )
+        self.conn.execute(
+            """
+            INSERT INTO variants (variant_id, variant_name, unit, value, is_verified)
+            VALUES ('variant_a', 'FAMILY_TUB_500GMS', 'GMS', 500, 1)
+            """
+        )
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
+            VALUES ('101', 'item_a', 'variant_a', 1)
+            """
+        )
         self.conn.commit()
 
     def tearDown(self) -> None:
@@ -245,7 +312,15 @@ class ClientLearningShipperTests(unittest.TestCase):
 
     @patch("requests.post")
     def test_run_all_preserves_named_rows_for_following_shippers(self, mock_post: Mock) -> None:
+        # customer-merge/menu-merge/menu-mapping-verification legacy shippers
+        # are no longer wired into run_all (server is always strict now; see
+        # src/core/client_learning_shipper.py). This still exercises kwargs
+        # isolation across the shippers that remain (errors, learning,
+        # menu_bootstrap all fire in one run_all call).
         mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.json.return_value = {
+            "shared_pos_catalog_updated": True
+        }
 
         with tempfile.TemporaryDirectory() as log_dir:
             result = run_all(
@@ -255,21 +330,10 @@ class ClientLearningShipperTests(unittest.TestCase):
                 auth="secret-token",
             )
 
+        self.assertIsNone(result["errors"]["error"])
         self.assertIsNone(result["learning"]["error"])
         self.assertEqual(result["learning"]["ai_logs_sent"], 1)
-        self.assertIsNone(result["customer_merges"]["error"])
-        self.assertEqual(result["customer_merges"]["backfilled_applied"], 1)
-        self.assertEqual(result["customer_merges"]["events_sent"], 1)
-
-        history_row = self.conn.execute(
-            "SELECT merge_id FROM customer_merge_history LIMIT 1"
-        ).fetchone()
-        self.assertEqual(history_row["merge_id"], 1)
-
-        sync_row = self.conn.execute(
-            "SELECT uploaded_at FROM customer_merge_sync_events WHERE merge_id = 1"
-        ).fetchone()
-        self.assertIsNotNone(sync_row["uploaded_at"])
+        self.assertIsNone(result["menu_bootstrap"]["error"])
 
 
 if __name__ == "__main__":

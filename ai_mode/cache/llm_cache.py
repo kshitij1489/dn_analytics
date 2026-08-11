@@ -19,8 +19,11 @@ from datetime import datetime
 from typing import Any, Callable, List, Optional, Tuple
 
 from ai_mode.cache.cache_config import CACHE_DB_PATH, DIVERSITY_CACHE_SIZE, MAX_ENTRIES
+from ai_mode.telemetry import record_cache_hit
 
 _TABLE = "llm_cache"
+# §4 telemetry: global cache hit/miss counters per call_id (cache effectiveness over time)
+_COUNTERS = "llm_cache_counters"
 
 
 
@@ -59,6 +62,65 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"CREATE INDEX IF NOT EXISTS idx_{_TABLE}_is_incorrect ON {_TABLE} (is_incorrect) WHERE is_incorrect = 1"
     )
+    _ensure_counters_table(conn)
+
+
+def _ensure_counters_table(conn: sqlite3.Connection) -> None:
+    """Create the per-call_id hit/miss counters table if missing (§4 cache effectiveness)."""
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_COUNTERS} (
+            call_id TEXT PRIMARY KEY,
+            hits INTEGER NOT NULL DEFAULT 0,
+            misses INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+
+def _bump_counter(conn: sqlite3.Connection, call_id: str, hit: bool) -> None:
+    """Increment the hit or miss counter for call_id on an already-open connection."""
+    if hit:
+        conn.execute(
+            f"INSERT INTO {_COUNTERS} (call_id, hits, misses) VALUES (?, 1, 0) "
+            f"ON CONFLICT(call_id) DO UPDATE SET hits = hits + 1",
+            (call_id,),
+        )
+    else:
+        conn.execute(
+            f"INSERT INTO {_COUNTERS} (call_id, hits, misses) VALUES (?, 0, 1) "
+            f"ON CONFLICT(call_id) DO UPDATE SET misses = misses + 1",
+            (call_id,),
+        )
+
+
+def bump_cache_counter(call_id: str, hit: bool) -> None:
+    """Increment the global hit/miss counter for call_id (own connection). Errors are swallowed."""
+    try:
+        with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
+            _ensure_counters_table(conn)
+            _bump_counter(conn, call_id, hit)
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ LLM cache counter error: {e}")
+
+
+def get_cache_counters() -> List[dict]:
+    """Return [{call_id, hits, misses}] for cache-effectiveness reporting (busiest first)."""
+    try:
+        with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
+            _ensure_counters_table(conn)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT call_id, hits, misses FROM {_COUNTERS} ORDER BY (hits + misses) DESC"
+            ).fetchall()
+            return [
+                {"call_id": r["call_id"], "hits": r["hits"], "misses": r["misses"]}
+                for r in rows
+            ]
+    except Exception as e:
+        print(f"⚠️ LLM cache get_cache_counters error: {e}")
+        return []
 
 
 def build_key(call_id: str, key_parts: Tuple[Any, ...]) -> str:
@@ -71,16 +133,19 @@ def build_key(call_id: str, key_parts: Tuple[Any, ...]) -> str:
 
 
 def _get(conn: sqlite3.Connection, key_hash: str) -> Optional[Any]:
-    """Return cached value (deserialized) or None. Updates last_used_at on hit."""
+    """Return cached value (deserialized) or None. Updates last_used_at on hit.
+    Entries flagged is_incorrect by human feedback are treated as a miss (row kept for learning)."""
     now = datetime.utcnow().isoformat() + "Z"
     conn.execute(
         f"UPDATE {_TABLE} SET last_used_at = ? WHERE key_hash = ?",
         (now, key_hash),
     )
     row = conn.execute(
-        f"SELECT value FROM {_TABLE} WHERE key_hash = ?", (key_hash,)
+        f"SELECT value, is_incorrect FROM {_TABLE} WHERE key_hash = ?", (key_hash,)
     ).fetchone()
     if row is None:
+        return None
+    if row[1]:
         return None
     try:
         return json.loads(row[0])
@@ -98,8 +163,9 @@ def _set(
         f"SELECT 1 FROM {_TABLE} WHERE key_hash = ?", (key_hash,)
     ).fetchone()
     if existing:
+        # Fresh value replaces the old one; clear any human is_incorrect flag on the stale value
         conn.execute(
-            f"UPDATE {_TABLE} SET value = ?, last_used_at = ? WHERE key_hash = ?",
+            f"UPDATE {_TABLE} SET value = ?, last_used_at = ?, is_incorrect = 0 WHERE key_hash = ?",
             (value_str, now, key_hash),
         )
         return
@@ -166,46 +232,33 @@ def get_or_call_diversity(
     (exact string match), append it. Return the new response or the randomly picked one.
     fn() must return a single string (the LLM response content).
     """
-    try:
-        cached = get(call_id, key_parts)
-        if cached is None:
-            result = fn()
-            try:
-                from ai_mode.debug_log import append_entry, preview_value
-                append_entry(call_id, "llm", preview_value(result))
-            except Exception:
-                pass
-            set(call_id, key_parts, [result])
-            return result
+    cached = get(call_id, key_parts)  # get() swallows cache-layer errors and returns None
+    if cached is not None:
         if not isinstance(cached, list):
             cached = [cached] if isinstance(cached, str) else []
         if len(cached) >= DIVERSITY_CACHE_SIZE:
             chosen = random.choice(cached)
+            record_cache_hit(call_id)
+            bump_cache_counter(call_id, hit=True)
             try:
                 from ai_mode.debug_log import append_entry, preview_value
                 append_entry(call_id, "cache", preview_value(chosen))
             except Exception:
                 pass
             return chosen
-        result = fn()
-        try:
-            from ai_mode.debug_log import append_entry, preview_value
-            append_entry(call_id, "llm", preview_value(result))
-        except Exception:
-            pass
-        if result not in cached:
-            cached = list(cached) + [result]
-            set(call_id, key_parts, cached)
-        return result
-    except Exception as e:
-        print(f"⚠️ LLM diversity cache error, calling LLM: {e}")
-        result = fn()
-        try:
-            from ai_mode.debug_log import append_entry, preview_value
-            append_entry(call_id, "llm", preview_value(result))
-        except Exception:
-            pass
-        return result
+    # fn() errors propagate uncached so a transient LLM failure is never stored.
+    # The LLM round-trip is recorded into telemetry by chat_completion (source=llm).
+    bump_cache_counter(call_id, hit=False)
+    result = fn()
+    try:
+        from ai_mode.debug_log import append_entry, preview_value
+        append_entry(call_id, "llm", preview_value(result))
+    except Exception:
+        pass
+    existing = cached if isinstance(cached, list) else []
+    if result not in existing:
+        set(call_id, key_parts, existing + [result])
+    return result
 
 
 def get_or_call(
@@ -219,42 +272,44 @@ def get_or_call(
 
     key_parts must be JSON-serializable (e.g. (model, normalized_prompt)).
     If the cache DB is unavailable or errors, fn() is called and the result
-    is not stored.
+    is not stored. fn() errors propagate uncached so a transient LLM failure
+    is never stored as the answer for this key.
     """
+    key_hash = build_key(call_id, key_parts)
     try:
         with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
             _ensure_table(conn)
-            key_hash = build_key(call_id, key_parts)
             cached = _get(conn, key_hash)
             if cached is not None:
-                conn.commit()
-                try:
-                    from ai_mode.debug_log import append_entry, preview_value
-                    append_entry(call_id, "cache", preview_value(cached))
-                except Exception:
-                    pass
-                return cached
-        # Connection closed here; if we miss, we call fn() outside the lock/connection
-        result = fn()
-        try:
-            from ai_mode.debug_log import append_entry, preview_value
-            append_entry(call_id, "llm", preview_value(result))
-        except Exception:
-            pass
-        # Re-open to set
+                _bump_counter(conn, call_id, hit=True)
+            conn.commit()
+        if cached is not None:
+            record_cache_hit(call_id)
+            try:
+                from ai_mode.debug_log import append_entry, preview_value
+                append_entry(call_id, "cache", preview_value(cached))
+            except Exception:
+                pass
+            return cached
+    except Exception as e:
+        print(f"⚠️ LLM cache get error, calling LLM: {e}")
+    # Cache miss (or cache failure): call fn() outside the lock/connection.
+    # The LLM round-trip is recorded into telemetry by chat_completion (source=llm).
+    result = fn()
+    try:
+        from ai_mode.debug_log import append_entry, preview_value
+        append_entry(call_id, "llm", preview_value(result))
+    except Exception:
+        pass
+    try:
         with sqlite3.connect(CACHE_DB_PATH, timeout=10.0) as conn:
+            _ensure_table(conn)
+            _bump_counter(conn, call_id, hit=False)
             _set(conn, key_hash, call_id, result)
             conn.commit()
-        return result
     except Exception as e:
-        print(f"⚠️ LLM cache error, calling LLM: {e}")
-        result = fn()
-        try:
-            from ai_mode.debug_log import append_entry, preview_value
-            append_entry(call_id, "llm", preview_value(result))
-        except Exception:
-            pass
-        return result
+        print(f"⚠️ LLM cache set error: {e}")
+    return result
 
 
 def list_entries(limit: int = 500) -> List[dict]:

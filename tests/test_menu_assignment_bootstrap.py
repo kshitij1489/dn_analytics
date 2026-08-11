@@ -3,11 +3,12 @@ Phase C4: fresh-install fast path (snapshot → cursor at watermark → tail) an
 bootstrap demotion (seed-only default, snapshot_role + hash-skip on the shipper).
 """
 
-import json
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
+from tests.profile_test_helpers import bind_test_profile
 
 from src.core.menu_assignment_bootstrap import (
     MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY,
@@ -15,6 +16,7 @@ from src.core.menu_assignment_bootstrap import (
 )
 from src.core.menu_bootstrap_sync import (
     DEFAULT_MENU_BOOTSTRAP_APPLY_MODE,
+    apply_menu_bootstrap_snapshot,
     get_menu_bootstrap_apply_mode,
 )
 from src.core.menu_mapping_verification_sync import (
@@ -25,7 +27,9 @@ from tests.test_menu_assignment_apply import (
     FakeEventServer,
     make_install_db,
     pull_install,
+    route_commits_through_server,
 )
+from utils.id_generator import generate_deterministic_id
 from utils import menu_utils
 
 
@@ -70,7 +74,7 @@ def _fake_snapshot_fetch(
 ):
     ordered = sorted(rows, key=lambda row: row["order_item_id"])
 
-    def _fetch(endpoint, auth, after, limit):
+    def _fetch(conn, endpoint, auth, after, limit):
         remaining = [row for row in ordered if not after or row["order_item_id"] > after]
         page = remaining[:page_size]
         return {
@@ -88,7 +92,6 @@ def _fake_snapshot_fetch(
 class MenuAssignmentBootstrapTests(unittest.TestCase):
     def setUp(self) -> None:
         for target in (
-            patch("utils.menu_utils.export_to_backups", return_value=True),
             patch("utils.menu_utils._clear_impacted_models", return_value=None),
         ):
             target.start()
@@ -98,6 +101,9 @@ class MenuAssignmentBootstrapTests(unittest.TestCase):
         replayed = make_install_db()
         self.addCleanup(replayed.close)
         server = FakeEventServer()
+        router = route_commits_through_server(server)
+        router.start()
+        self.addCleanup(router.stop)
 
         result = menu_utils.merge_menu_items(replayed, "item_a", "item_b")
         self.assertEqual(result["status"], "success")
@@ -109,7 +115,8 @@ class MenuAssignmentBootstrapTests(unittest.TestCase):
             target_variant_id="variant_x",
         )
         self.assertEqual(result["status"], "success", result.get("message"))
-        server.ingest_outbox(replayed)
+        # The strict commits above already fed `server` and self-applied; pulling
+        # our own echo is a dedupe no-op that leaves the replay state settled.
         pull_install(replayed, server)
 
         snapshot_rows = _snapshot_rows_from_install(replayed)
@@ -204,46 +211,384 @@ class MenuAssignmentBootstrapTests(unittest.TestCase):
         )
         self.assertEqual(get_menu_bootstrap_apply_mode(conn), "seed_and_relink_orders")
 
+    def test_bootstrap_pull_updates_existing_catalog_without_shipper(self) -> None:
+        conn = make_install_db()
+        self.addCleanup(conn.close)
+
+        beverage_type_id = generate_deterministic_id("Beverage")
+        id_maps = {
+            "menu_id_to_str": {
+                "item_b": "Server Cold Brew",
+            },
+            "variant_id_to_str": {
+                "variant_x": "SERVER_SIZE",
+            },
+            "variant_id_to_meta": {
+                "variant_x": {"unit": "ML", "value": 300},
+            },
+            "type_id_to_str": {
+                beverage_type_id: "Beverage",
+            },
+        }
+        cluster_state = {
+            f"item_b:{beverage_type_id}": {
+                "2": [["2", "variant_x"]],
+            },
+        }
+
+        with patch("src.core.menu_bootstrap_shipper.upload_pending") as upload_pending:
+            result = apply_menu_bootstrap_snapshot(conn, id_maps, cluster_state)
+
+        self.assertIsNone(result["error"])
+        upload_pending.assert_not_called()
+        item = conn.execute(
+            "SELECT name, type FROM menu_items WHERE menu_item_id = 'item_b'"
+        ).fetchone()
+        self.assertEqual(dict(item), {"name": "Server Cold Brew", "type": "Beverage"})
+        variant = conn.execute(
+            "SELECT variant_name, unit, value FROM variants WHERE variant_id = 'variant_x'"
+        ).fetchone()
+        self.assertEqual(variant["variant_name"], "SERVER_SIZE")
+        self.assertEqual(variant["unit"], "ML")
+        self.assertEqual(variant["value"], 300)
+
 
 class MenuBootstrapShipperTests(unittest.TestCase):
-    def _write_backups(self, data_dir: Path, id_maps: dict) -> None:
-        (data_dir / "id_maps_backup.json").write_text(json.dumps(id_maps))
-        (data_dir / "cluster_state_backup.json").write_text(json.dumps({"a:1": {}}))
+    def _make_catalog_db(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE menu_items (
+                menu_item_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE variants (
+                variant_id TEXT PRIMARY KEY,
+                variant_name TEXT NOT NULL,
+                unit TEXT,
+                value REAL,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE menu_item_variants (
+                order_item_id TEXT PRIMARY KEY,
+                menu_item_id TEXT NOT NULL,
+                variant_id TEXT NOT NULL,
+                price DECIMAL(10,2) DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE orders (
+                order_id INTEGER PRIMARY KEY,
+                created_on TEXT NOT NULL
+            );
+
+            CREATE TABLE order_items (
+                order_item_id INTEGER PRIMARY KEY,
+                order_id INTEGER NOT NULL,
+                petpooja_itemid TEXT,
+                unit_price DECIMAL(10,2)
+            );
+
+            CREATE TABLE order_item_addons (
+                order_item_addon_id INTEGER PRIMARY KEY,
+                order_item_id INTEGER NOT NULL,
+                petpooja_addonid TEXT,
+                price DECIMAL(10,2)
+            );
+
+            CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        bind_test_profile(conn)
+        conn.execute(
+            """
+            INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+            VALUES ('item_a', 'a', 'Dessert', 1)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO variants (variant_id, variant_name, is_verified)
+            VALUES ('variant_a', '1_PIECE', 1)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO variants (variant_id, variant_name, is_verified)
+            VALUES (?, 'UNKNOWN', 1)
+            """,
+            (generate_deterministic_id("UNKNOWN"),),
+        )
+        conn.execute(
+            """
+            INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified)
+            VALUES ('101', 'item_a', 'variant_a', 1)
+            """
+        )
+        conn.execute("INSERT INTO orders VALUES (1, '2026-08-11 10:00:00')")
+        conn.execute(
+            "INSERT INTO order_items VALUES (1, 1, '101', 120.00)"
+        )
+        conn.commit()
+        return conn
+
+    def test_builds_deterministic_item_addon_and_no_variant_observation(self) -> None:
+        from src.core.menu_catalog_seed import build_shared_pos_catalog
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute(
+            "UPDATE variants SET unit = 'piece', value = 1 WHERE variant_id = 'variant_a'"
+        )
+        conn.execute(
+            "INSERT INTO menu_items VALUES ('item_b', '  Kulfi   Addon ', 'Addon', 1)"
+        )
+        conn.executemany(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_active, is_verified
+            ) VALUES (?, 'item_b', ?, ?, 1)
+            """,
+            [
+                ("addon-2", generate_deterministic_id("UNKNOWN"), 1),
+                ("102", generate_deterministic_id("UNKNOWN"), 1),
+                ("103", "variant_a", 0),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO order_items VALUES (?, 1, ?, ?)",
+            [(2, "102", "90"), (3, "103", "999")],
+        )
+        conn.execute(
+            "INSERT INTO order_item_addons VALUES (1, 1, 'addon-2', '35.5')"
+        )
+
+        self.assertEqual(
+            build_shared_pos_catalog(conn),
+            [
+                {
+                    "locator_type": "pos_addon",
+                    "locator_value": "addon-2",
+                    "menu_item_id": "item_b",
+                    "variant_id": None,
+                    "item_name": "Kulfi Addon",
+                    "item_type": "Addon",
+                    "variant_name": None,
+                    "variant_unit": None,
+                    "variant_value": None,
+                    "price": "35.50",
+                },
+                {
+                    "locator_type": "pos_item",
+                    "locator_value": "101",
+                    "menu_item_id": "item_a",
+                    "variant_id": "variant_a",
+                    "item_name": "a",
+                    "item_type": "Dessert",
+                    "variant_name": "1_PIECE",
+                    "variant_unit": "piece",
+                    "variant_value": "1.00",
+                    "price": "120.00",
+                },
+                {
+                    "locator_type": "pos_item",
+                    "locator_value": "102",
+                    "menu_item_id": "item_b",
+                    "variant_id": None,
+                    "item_name": "Kulfi Addon",
+                    "item_type": "Addon",
+                    "variant_name": None,
+                    "variant_unit": None,
+                    "variant_value": None,
+                    "price": "90.00",
+                },
+            ],
+        )
+
+    def test_uses_most_recent_raw_price_for_a_locator(self) -> None:
+        from src.core.menu_catalog_seed import build_shared_pos_catalog
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute("INSERT INTO orders VALUES (2, '2026-08-11 11:00:00')")
+        conn.execute("INSERT INTO order_items VALUES (2, 2, '101', '135.75')")
+
+        catalog = build_shared_pos_catalog(conn)
+
+        self.assertEqual(catalog[0]["price"], "135.75")
+
+    def test_rejects_locator_kind_collision(self) -> None:
+        from src.core.menu_catalog_seed import build_shared_pos_catalog
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute("INSERT INTO order_item_addons VALUES (1, 1, '101', 25)")
+
+        with self.assertRaisesRegex(ValueError, "both"):
+            build_shared_pos_catalog(conn)
+
+    def test_rejects_invalid_price_and_variant_decimals(self) -> None:
+        from src.core.menu_catalog_seed import build_shared_pos_catalog
+
+        for invalid_price in ("-1", "NaN", "Infinity", "12.345", "bad"):
+            with self.subTest(price=invalid_price):
+                conn = self._make_catalog_db()
+                conn.execute(
+                    "UPDATE order_items SET unit_price = ? WHERE petpooja_itemid = '101'",
+                    (invalid_price,),
+                )
+                with self.assertRaisesRegex(ValueError, "Invalid price"):
+                    build_shared_pos_catalog(conn)
+                conn.close()
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute("UPDATE variants SET value = '-0.01' WHERE variant_id = 'variant_a'")
+        with self.assertRaisesRegex(ValueError, "Invalid variant_value"):
+            build_shared_pos_catalog(conn)
+
+    def test_bootstrap_observation_hash_is_canonical(self) -> None:
+        from src.core.menu_bootstrap_shipper import _hash_bootstrap_observation
+
+        row = {
+            "locator_type": "pos_item",
+            "locator_value": "101",
+            "price": "120.00",
+        }
+        reverse_row = dict(reversed(list(row.items())))
+        self.assertEqual(
+            _hash_bootstrap_observation({"b": 2, "a": 1}, [row]),
+            _hash_bootstrap_observation({"a": 1, "b": 2}, [reverse_row]),
+        )
+
+    def test_unconfirmed_observation_is_retried_without_persisting_hash(self) -> None:
+        from src.core import menu_bootstrap_shipper
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        refused = MagicMock(status_code=200)
+        refused.json.return_value = {"shared_pos_catalog_updated": False}
+        accepted = MagicMock(status_code=200)
+        accepted.json.return_value = {"shared_pos_catalog_updated": True}
+
+        with patch("requests.post", side_effect=[refused, accepted]) as post:
+            first = menu_bootstrap_shipper.upload_pending(
+                conn, endpoint="http://fake/ingest"
+            )
+            self.assertFalse(first["sent"])
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT value FROM system_config WHERE key=?",
+                    (menu_bootstrap_shipper.LAST_PUSH_HASH_KEY,),
+                ).fetchone()
+            )
+
+            second = menu_bootstrap_shipper.upload_pending(
+                conn, endpoint="http://fake/ingest"
+            )
+            self.assertTrue(second["sent"])
+            self.assertEqual(post.call_count, 2)
+            self.assertIsNotNone(
+                conn.execute(
+                    "SELECT value FROM system_config WHERE key=?",
+                    (menu_bootstrap_shipper.LAST_PUSH_HASH_KEY,),
+                ).fetchone()
+            )
 
     def test_sends_seed_only_role_and_skips_unchanged_id_maps(self) -> None:
         from src.core import menu_bootstrap_shipper
 
-        with TemporaryDirectory() as tmp:
-            data_dir = Path(tmp)
-            self._write_backups(data_dir, {"menu_id_to_str": {"1": "a"}})
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
 
-            response = MagicMock(status_code=200)
-            with patch(
-                "src.core.menu_bootstrap_shipper.get_resource_path", return_value=str(data_dir)
-            ), patch("requests.post", return_value=response) as post:
-                first = menu_bootstrap_shipper.upload_pending(endpoint="http://fake/ingest")
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"shared_pos_catalog_updated": True}
+        with patch("requests.post", return_value=response) as post:
+                first = menu_bootstrap_shipper.upload_pending(conn, endpoint="http://fake/ingest")
                 self.assertTrue(first["sent"])
                 payload = post.call_args.kwargs["json"]
                 self.assertEqual(payload["snapshot_role"], "seed_only")
+                self.assertEqual(payload["id_maps"]["menu_id_to_str"], {"item_a": "a"})
+                self.assertEqual(
+                    payload["shared_pos_catalog"],
+                    [
+                        {
+                            "locator_type": "pos_item",
+                            "locator_value": "101",
+                            "menu_item_id": "item_a",
+                            "variant_id": "variant_a",
+                            "item_name": "a",
+                            "item_type": "Dessert",
+                            "variant_name": "1_PIECE",
+                            "variant_unit": None,
+                            "variant_value": None,
+                            "price": "120.00",
+                        }
+                    ],
+                )
+                self.assertEqual(
+                    payload["cluster_state"][next(iter(payload["cluster_state"]))],
+                    {"101": [["101", "variant_a"]]},
+                )
+                stored_hash = conn.execute(
+                    "SELECT value FROM system_config WHERE key=?",
+                    (menu_bootstrap_shipper.LAST_PUSH_HASH_KEY,),
+                ).fetchone()
+                self.assertIsNotNone(stored_hash)
 
-                # Same id_maps → skipped without an HTTP call.
-                second = menu_bootstrap_shipper.upload_pending(endpoint="http://fake/ingest")
+                # Same id_maps and observation → skipped without an HTTP call.
+                second = menu_bootstrap_shipper.upload_pending(conn, endpoint="http://fake/ingest")
                 self.assertFalse(second["sent"])
-                self.assertEqual(second.get("skipped"), "id_maps unchanged")
+                self.assertEqual(
+                    second.get("skipped"),
+                    "id_maps + shared_pos_catalog unchanged",
+                )
                 self.assertEqual(post.call_count, 1)
 
                 # force=True pushes anyway.
                 forced = menu_bootstrap_shipper.upload_pending(
-                    endpoint="http://fake/ingest", force=True
+                    conn, endpoint="http://fake/ingest", force=True
                 )
                 self.assertTrue(forced["sent"])
                 self.assertEqual(post.call_count, 2)
 
-                # Catalog change → pushed again.
-                self._write_backups(data_dir, {"menu_id_to_str": {"1": "a", "2": "b"}})
-                third = menu_bootstrap_shipper.upload_pending(endpoint="http://fake/ingest")
-                self.assertTrue(third["sent"])
+                # A price-only observation change must not be hidden by the
+                # unchanged legacy id_maps hash.
+                conn.execute(
+                    "UPDATE order_items SET unit_price = 125.50 WHERE petpooja_itemid = '101'"
+                )
+                conn.commit()
+                price_changed = menu_bootstrap_shipper.upload_pending(
+                    conn, endpoint="http://fake/ingest"
+                )
+                self.assertTrue(price_changed["sent"])
                 self.assertEqual(post.call_count, 3)
+                self.assertEqual(
+                    post.call_args.kwargs["json"]["shared_pos_catalog"][0]["price"],
+                    "125.50",
+                )
+
+                # Catalog change → pushed again.
+                conn.execute(
+                    """
+                    INSERT INTO menu_items (menu_item_id, name, type, is_verified)
+                    VALUES ('item_b', 'b', 'Dessert', 1)
+                    """
+                )
+                conn.commit()
+                third = menu_bootstrap_shipper.upload_pending(conn, endpoint="http://fake/ingest")
+                self.assertTrue(third["sent"])
+                self.assertEqual(post.call_count, 4)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from tests.profile_test_helpers import bind_test_profile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ class MenuBootstrapPullTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
+        bind_test_profile(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE menu_items (
@@ -73,16 +75,14 @@ class MenuBootstrapPullTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             data_dir = Path(tmp_dir)
-            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
-                "scripts.seed_from_backups.get_resource_path",
-                return_value=str(data_dir),
-            ):
-                result = apply_menu_bootstrap_snapshot(
-                    self.conn,
-                    id_maps,
-                    cluster_state,
-                    apply_mode="seed_and_relink_orders",
-                )
+            result = apply_menu_bootstrap_snapshot(
+                self.conn,
+                id_maps,
+                cluster_state,
+                apply_mode="seed_and_relink_orders",
+            )
+            self.assertFalse((data_dir / "id_maps_backup.json").exists())
+            self.assertFalse((data_dir / "cluster_state_backup.json").exists())
 
         self.assertIsNone(result["error"])
         self.assertEqual(result["items_seeded"], 1)
@@ -135,16 +135,14 @@ class MenuBootstrapPullTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             data_dir = Path(tmp_dir)
-            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
-                "scripts.seed_from_backups.get_resource_path",
-                return_value=str(data_dir),
-            ):
-                result = apply_menu_bootstrap_snapshot(
-                    self.conn,
-                    id_maps,
-                    cluster_state,
-                    apply_mode="seed_only",
-                )
+            result = apply_menu_bootstrap_snapshot(
+                self.conn,
+                id_maps,
+                cluster_state,
+                apply_mode="seed_only",
+            )
+            self.assertFalse((data_dir / "id_maps_backup.json").exists())
+            self.assertFalse((data_dir / "cluster_state_backup.json").exists())
 
         self.assertIsNone(result["error"])
         self.assertEqual(result["order_items_relinked"], 0)
@@ -181,16 +179,14 @@ class MenuBootstrapPullTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             data_dir = Path(tmp_dir)
-            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
-                "scripts.seed_from_backups.get_resource_path",
-                return_value=str(data_dir),
-            ):
-                result = apply_menu_bootstrap_snapshot(
-                    self.conn,
-                    id_maps,
-                    cluster_state,
-                    apply_mode="seed_and_relink_orders",
-                )
+            result = apply_menu_bootstrap_snapshot(
+                self.conn,
+                id_maps,
+                cluster_state,
+                apply_mode="seed_and_relink_orders",
+            )
+            self.assertFalse((data_dir / "id_maps_backup.json").exists())
+            self.assertFalse((data_dir / "cluster_state_backup.json").exists())
 
         self.assertIsNone(result["error"])
 
@@ -200,16 +196,12 @@ class MenuBootstrapPullTests(unittest.TestCase):
         self.assertEqual(variant["unit"], "GMS")
         self.assertEqual(variant["value"], 500)
 
-    def test_fetch_and_apply_mirrors_strict_flag_but_not_menu_revision(self) -> None:
+    def test_fetch_and_apply_does_not_mirror_menu_revision(self) -> None:
         # Plan §12.5: the catalog bootstrap does not drain the menu event
-        # streams, so it must not mirror the advertised menu_revision — only
-        # strict_mode_enabled. The revision is owned by pull_latest_menu_state
-        # and the assignment snapshot.
-        from src.core.sync_identity import (
-            get_menu_state_revision,
-            get_menu_strict_mode_enabled,
-            set_menu_state_revision,
-        )
+        # streams, so it must not mirror the advertised menu_revision. The
+        # revision is owned by pull_latest_menu_state and the assignment
+        # snapshot.
+        from src.core.sync_identity import get_menu_state_revision, set_menu_state_revision
 
         set_menu_state_revision(self.conn, 7)
         self.conn.commit()
@@ -227,16 +219,13 @@ class MenuBootstrapPullTests(unittest.TestCase):
                 }
             },
             "metadata": {},
-            "scope_state": {"menu_revision": 99, "strict_mode_enabled": True},
+            "scope_state": {"menu_revision": 99},
             "error": None,
         }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             data_dir = Path(tmp_dir)
-            with patch("src.core.menu_bootstrap_sync.get_resource_path", return_value=str(data_dir)), patch(
-                "scripts.seed_from_backups.get_resource_path",
-                return_value=str(data_dir),
-            ), patch(
+            with patch(
                 "src.core.menu_bootstrap_sync.fetch_latest_menu_bootstrap_snapshot",
                 return_value=fetch_result,
             ):
@@ -244,9 +233,10 @@ class MenuBootstrapPullTests(unittest.TestCase):
                     self.conn,
                     "https://cloud.example/menu-bootstrap/latest",
                 )
+            self.assertFalse((data_dir / "id_maps_backup.json").exists())
+            self.assertFalse((data_dir / "cluster_state_backup.json").exists())
 
         self.assertIsNone(result["error"])
-        self.assertTrue(get_menu_strict_mode_enabled(self.conn))
         self.assertEqual(get_menu_state_revision(self.conn), 7)
 
 

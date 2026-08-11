@@ -1,5 +1,4 @@
 import hashlib
-import json
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +11,13 @@ from src.core.queries.customer_query_utils import (
 )
 
 SCHEMA_VERSION = 1
+
+# Anonymous customers (anon:<uuid> identity keys, no phone/address) have no
+# portable identity of their own — they are defined by the orders they own,
+# and order refs (stream_id/event_id/petpooja_order_id) replicate identically
+# on every install. Descriptors therefore carry a capped sample of the
+# customer's order refs as a portable locator.
+ORDER_REF_LOCATOR_LIMIT = 20
 EVENT_TYPE_APPLIED = "customer_merge.applied"
 EVENT_TYPE_UNDONE = "customer_merge.undone"
 SYNC_ORIGIN_CLOUD_PULL = "cloud_pull"
@@ -134,6 +140,7 @@ def _build_portable_locators(
     snapshot: Dict[str, Any],
     current_row: Dict[str, Any],
     current_addresses: List[Dict[str, Any]],
+    order_refs: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     identity_key = current_row.get("customer_identity_key")
     if isinstance(identity_key, str) and identity_key.startswith("anon:"):
@@ -161,17 +168,33 @@ def _build_portable_locators(
         "name_normalized": name_norm or None,
         "address_normalized": address_norm or None,
         "address_book_hashes": [value for value in dict.fromkeys(address_book_hashes) if value],
+        "order_refs": order_refs,
     }
 
 
-def _build_customer_descriptor(conn, customer_id: int, history_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def _build_customer_descriptor(
+    conn,
+    customer_id: int,
+    history_snapshot: Dict[str, Any],
+    *,
+    order_ref_ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """
+    order_ref_ids must reflect the customer's order ownership BEFORE the mutation
+    being described: strict-mode capture builds the event after the local merge
+    moved orders, so callers pass the pre-merge sets explicitly. Defaults to the
+    customer's current orders when ownership was not changed by the mutation.
+    """
     current_row = _select_customer_row(conn, customer_id)
     current_addresses = _select_customer_addresses(conn, customer_id)
     current_address = _current_address_summary(current_row, current_addresses)
     snapshot = _build_snapshot(history_snapshot, current_row, current_address)
+    if order_ref_ids is None:
+        order_ref_ids = _select_recent_customer_order_ids(conn, customer_id)
+    order_refs = _select_order_refs(conn, order_ref_ids)
     return {
         "snapshot": snapshot,
-        "portable_locators": _build_portable_locators(snapshot, current_row, current_addresses),
+        "portable_locators": _build_portable_locators(snapshot, current_row, current_addresses, order_refs),
     }
 
 
@@ -211,6 +234,33 @@ def _select_order_refs(conn, local_order_ids: List[int]) -> List[Dict[str, Any]]
             }
         )
     return refs
+
+
+def _select_recent_customer_order_ids(
+    conn,
+    customer_id: int,
+    exclude_order_ids: Optional[List[int]] = None,
+    limit: int = ORDER_REF_LOCATOR_LIMIT,
+) -> List[int]:
+    exclude = [int(value) for value in (exclude_order_ids or [])]
+    params: List[Any] = [int(customer_id)]
+    exclusion_sql = ""
+    if exclude:
+        placeholders = ",".join("?" for _ in exclude)
+        exclusion_sql = f"AND order_id NOT IN ({placeholders})"
+        params.extend(exclude)
+    params.append(int(limit))
+    rows = conn.execute(
+        f"""
+        SELECT order_id
+        FROM orders
+        WHERE customer_id = ? {exclusion_sql}
+        ORDER BY order_id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    return [int(row["order_id"]) for row in rows]
 
 
 def _build_merge_metadata(merge_row: Dict[str, Any]) -> Dict[str, Any]:
@@ -279,6 +329,11 @@ def _is_cloud_pull_origin(context: Dict[str, Any]) -> bool:
     return str(context.get("sync_origin") or "").strip() == SYNC_ORIGIN_CLOUD_PULL
 
 
+# The customer_merge_sync_events table is a legacy outbox: strict-mode commits
+# never write it (they self-apply through apply_accepted after the server
+# accepts the mutation). The table and _lookup_event_id remain only so
+# build_merge_undone_event_payload can resolve reverts_remote_event_id for
+# merges applied before the strict cutover, whose applied events live there.
 def _lookup_event_id(conn, merge_id: int, event_type: str) -> Optional[str]:
     row = conn.execute(
         """
@@ -290,28 +345,6 @@ def _lookup_event_id(conn, merge_id: int, event_type: str) -> Optional[str]:
         (merge_id, event_type),
     ).fetchone()
     return row["event_id"] if row else None
-
-
-def _insert_event(conn, merge_id: int, event_type: str, occurred_at: str, payload: Dict[str, Any]) -> str:
-    existing_event_id = _lookup_event_id(conn, merge_id, event_type)
-    if existing_event_id:
-        return existing_event_id
-
-    event_id = payload["remote_event_id"]
-    conn.execute(
-        """
-        INSERT INTO customer_merge_sync_events (
-            event_id,
-            merge_id,
-            event_type,
-            payload,
-            occurred_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (event_id, merge_id, event_type, json.dumps(payload, sort_keys=True, default=str), occurred_at),
-    )
-    return event_id
 
 
 def build_merge_applied_event_payload(conn, merge_id: int) -> Optional[Dict[str, Any]]:
@@ -338,14 +371,34 @@ def build_merge_applied_event_payload(conn, merge_id: int) -> Optional[Dict[str,
     moved_order_ids = _normalize_order_ids(merge_row.get("moved_order_ids"))
     event_id = _make_event_id()
 
+    # Capture runs after the local merge moved the source's orders to the
+    # target, so reconstruct pre-merge ownership: the source owned exactly the
+    # moved orders; the target owned its current orders minus the moved ones.
+    source_order_ref_ids = moved_order_ids[-ORDER_REF_LOCATOR_LIMIT:]
+    target_order_ref_ids = _select_recent_customer_order_ids(
+        conn,
+        int(merge_row["target_customer_id"]),
+        exclude_order_ids=moved_order_ids,
+    )
+
     return {
         "remote_event_id": event_id,
         "schema_version": SCHEMA_VERSION,
         "event_type": EVENT_TYPE_APPLIED,
         "occurred_at": merge_row["merged_at"],
         "attribution": get_sync_attribution(conn),
-        "source_customer": _build_customer_descriptor(conn, int(merge_row["source_customer_id"]), source_snapshot),
-        "target_customer": _build_customer_descriptor(conn, int(merge_row["target_customer_id"]), target_snapshot),
+        "source_customer": _build_customer_descriptor(
+            conn,
+            int(merge_row["source_customer_id"]),
+            source_snapshot,
+            order_ref_ids=source_order_ref_ids,
+        ),
+        "target_customer": _build_customer_descriptor(
+            conn,
+            int(merge_row["target_customer_id"]),
+            target_snapshot,
+            order_ref_ids=target_order_ref_ids,
+        ),
         "merge_metadata": _build_merge_metadata(merge_row),
         "moved_orders": {
             "count": len(moved_order_ids),
@@ -353,16 +406,6 @@ def build_merge_applied_event_payload(conn, merge_id: int) -> Optional[Dict[str,
         },
         "local_refs": _build_local_refs(merge_row, moved_order_ids),
     }
-
-
-def record_merge_applied_event(conn, merge_id: int) -> Optional[str]:
-    payload = build_merge_applied_event_payload(conn, merge_id)
-    if not payload:
-        return None
-    merge_row = _get_merge_row(conn, merge_id)
-    if not merge_row:
-        return None
-    return _insert_event(conn, merge_id, EVENT_TYPE_APPLIED, merge_row["merged_at"], payload)
 
 
 def _resolve_reverts_remote_event_id(conn, merge_id: int, suggestion_context: Dict[str, Any]) -> Optional[str]:
@@ -429,43 +472,3 @@ def build_merge_undone_event_payload(conn, merge_id: int) -> Optional[Dict[str, 
         },
         "local_refs": _build_local_refs(merge_row, moved_order_ids),
     }
-
-
-def record_merge_undone_event(conn, merge_id: int) -> Optional[str]:
-    if not has_customer_merge_sync_table(conn):
-        return None
-
-    merge_row = _get_merge_row(conn, merge_id)
-    if not merge_row or not merge_row.get("undone_at"):
-        return None
-
-    suggestion_context = _merge_suggestion_context(merge_row)
-    if _resolve_reverts_remote_event_id(conn, merge_id, suggestion_context) is None:
-        record_merge_applied_event(conn, merge_id)
-
-    payload = build_merge_undone_event_payload(conn, merge_id)
-    if not payload:
-        return None
-    return _insert_event(conn, merge_id, EVENT_TYPE_UNDONE, merge_row["undone_at"], payload)
-
-
-def backfill_customer_merge_sync_events(conn) -> Dict[str, int]:
-    if not has_customer_merge_sync_table(conn):
-        return {"applied": 0, "undone": 0}
-
-    counts = {"applied": 0, "undone": 0}
-    rows = conn.execute("SELECT merge_id FROM customer_merge_history ORDER BY merge_id ASC").fetchall()
-    for row in rows:
-        merge_id = int(row["merge_id"])
-        merge_row = _get_merge_row(conn, merge_id)
-        if not merge_row:
-            continue
-        suggestion_context = _merge_suggestion_context(merge_row)
-        undo_context = _merge_undo_context(merge_row)
-        if _lookup_event_id(conn, merge_id, EVENT_TYPE_APPLIED) is None:
-            if not _is_cloud_pull_origin(suggestion_context) and record_merge_applied_event(conn, merge_id):
-                counts["applied"] += 1
-        if merge_row["undone_at"] and _lookup_event_id(conn, merge_id, EVENT_TYPE_UNDONE) is None:
-            if not _is_cloud_pull_origin(undo_context) and record_merge_undone_event(conn, merge_id):
-                counts["undone"] += 1
-    return counts

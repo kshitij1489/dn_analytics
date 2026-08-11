@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from src.core.utils.business_date import get_business_date_range
+from utils.menu_item_variant_enforcement import addon_seeded_mapping_order_item_id
 
 # SQLite strftime('%w') = 0 Sunday, 1 Monday, ..., 6 Saturday
 DAY_NAME_TO_SQLITE_DOW = {
@@ -24,7 +25,7 @@ def _weekdays_to_sqlite_dow(selected_weekdays):
     return result if result else None
 
 
-def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None, end_date=None, selected_weekdays=None):
+def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None, end_date=None, selected_weekdays=None, include_identity=False):
     """Fetch Menu Analytics (Reorder stats, revenue, etc) with filtering"""
     
     # 1. Build order-level filters
@@ -163,12 +164,14 @@ def fetch_menu_stats(conn, name_search=None, type_choice="All", start_date=None,
             GROUP BY menu_item_id, item_name, item_type
         )
         SELECT 
+            {('menu_item_id,' if include_identity else '')}
             item_name as "Item Name",
             item_type as "Type",
             sold_as_addon as "As Addon (Qty)",
             sold_as_item as "As Item (Qty)",
             total_qty_sold as "Total Sold (Qty)",
             total_revenue as "Total Revenue",
+            repeat_customer_revenue as "Repeat Revenue",
             total_gms as "Total GMS",
             total_ml as "Total ML",
             total_count as "Total COUNT",
@@ -344,16 +347,22 @@ def fetch_menu_types(conn):
     # sqlite3.Row access by name 'type'
     return [row['type'] for row in rows]
 
-def fetch_unverified_items(conn):
+def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
     """Fetch unresolved menu item + variant rows for the resolutions workflow."""
     query = """
         WITH unresolved_variants AS (
             SELECT
                 mv.menu_item_id,
                 mv.variant_id,
+                MIN(mv.is_verified) AS is_verified,
                 COUNT(*) AS unresolved_mapping_rows
             FROM menu_item_variants mv
+            LEFT JOIN menu_item_global_links gil
+                ON gil.local_menu_item_id = mv.menu_item_id
+            LEFT JOIN variant_global_links gvl
+                ON gvl.local_variant_id = mv.variant_id
             WHERE mv.is_verified = 0
+               OR (? = 1 AND (gil.global_menu_item_id IS NULL OR gvl.global_variant_id IS NULL))
             GROUP BY mv.menu_item_id, mv.variant_id
         ),
         order_item_usage AS (
@@ -370,7 +379,9 @@ def fetch_unverified_items(conn):
             SELECT
                 oa.menu_item_id,
                 oa.variant_id,
-                MIN(oa.name_raw) AS sample_addon_name
+                MIN(oa.name_raw) AS sample_addon_name,
+                COUNT(*) AS addon_rows,
+                COALESCE(SUM(oa.quantity), 0) AS addon_qty
             FROM order_item_addons oa
             GROUP BY oa.menu_item_id, oa.variant_id
         )
@@ -383,11 +394,14 @@ def fetch_unverified_items(conn):
             s.name AS suggestion_name,
             s.type AS suggestion_type,
             uv.variant_id AS source_variant_id,
+            uv.is_verified,
             COALESCE(v.variant_name, 'UNKNOWN') AS source_variant_name,
             COALESCE(oi.sample_order_name, au.sample_addon_name) AS sample_order_name,
             uv.unresolved_mapping_rows,
             COALESCE(oi.order_item_rows, 0) AS order_item_rows,
-            COALESCE(oi.order_item_qty, 0) AS order_item_qty
+            COALESCE(oi.order_item_qty, 0) AS order_item_qty,
+            COALESCE(au.addon_rows, 0) AS addon_rows,
+            COALESCE(au.addon_qty, 0) AS addon_qty
         FROM unresolved_variants uv
         JOIN menu_items m ON uv.menu_item_id = m.menu_item_id
         LEFT JOIN menu_items s ON m.suggestion_id = s.menu_item_id
@@ -398,8 +412,37 @@ def fetch_unverified_items(conn):
             ON uv.menu_item_id = au.menu_item_id AND uv.variant_id = au.variant_id
         ORDER BY m.name, v.variant_name
     """
-    cursor = conn.execute(query)
-    return pd.DataFrame([dict(row) for row in cursor.fetchall()])
+    cursor = conn.execute(query, (1 if include_global_identity_gaps else 0,))
+    df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
+    if df.empty:
+        return df
+
+    cursor = conn.execute(
+        """
+        SELECT menu_item_id, variant_id, order_item_id
+        FROM menu_item_variants
+        WHERE is_verified = 0
+        """
+    )
+    addon_gap_pairs = {
+        (str(mid), str(vid))
+        for mid, vid, oid in cursor.fetchall()
+        if oid == addon_seeded_mapping_order_item_id(str(mid), str(vid))
+    }
+
+    df["resolution_kind"] = df.apply(
+        lambda row: (
+            "global_identity_gap"
+            if bool(row["is_verified"])
+            else (
+                "addon_gap"
+                if (str(row["menu_item_id"]), str(row["source_variant_id"])) in addon_gap_pairs
+                else "unverified_mapping"
+            )
+        ),
+        axis=1,
+    )
+    return df
 
 def fetch_menu_matrix(conn):
     """Fetch the full menu matrix as unique menu item + variant pairs."""
@@ -412,12 +455,23 @@ def fetch_menu_matrix(conn):
             MIN(miv.is_active) AS is_active,
             MIN(miv.addon_eligible) AS addon_eligible,
             MIN(miv.delivery_eligible) AS delivery_eligible,
+            MIN(miv.is_verified) AS is_verified,
             miv.menu_item_id,
             miv.variant_id,
-            COUNT(*) AS mapping_count
+            COUNT(*) AS mapping_count,
+            COALESCE(MIN(oc.n), 0) AS order_count
         FROM menu_item_variants miv
         JOIN menu_items mi ON miv.menu_item_id = mi.menu_item_id
         JOIN variants v ON miv.variant_id = v.variant_id
+        LEFT JOIN (
+            SELECT menu_item_id, variant_id, COUNT(*) AS n
+            FROM (
+                SELECT menu_item_id, variant_id FROM order_items
+                UNION ALL
+                SELECT menu_item_id, variant_id FROM order_item_addons
+            )
+            GROUP BY menu_item_id, variant_id
+        ) oc ON oc.menu_item_id = miv.menu_item_id AND oc.variant_id = miv.variant_id
         GROUP BY mi.name, mi.type, v.variant_name, miv.menu_item_id, miv.variant_id
         ORDER BY mi.type, mi.name, v.variant_name
     """
@@ -503,13 +557,13 @@ def fetch_menu_summary_rollups(
 
         if mode == "quantity":
             measure_sql = "CAST(COALESCE(e.qty, 0) AS REAL)"
-            group_sql = "mi.menu_item_id, mi.name"
-            select_extra = "mi.menu_item_id, mi.name"
+            group_sql = "mi.menu_item_id, mi.name, mi.type"
+            select_extra = "mi.menu_item_id, mi.name, mi.type"
         elif mode == "volume":
             measure_sql = "(COALESCE(v.value, 0) * CAST(COALESCE(e.qty, 0) AS REAL))"
             nu = _menu_summary_norm_unit_sql()
-            group_sql = f"mi.menu_item_id, mi.name, ({nu.strip()})"
-            select_extra = f"mi.menu_item_id, mi.name, ({nu.strip()}) AS unit"
+            group_sql = f"mi.menu_item_id, mi.name, mi.type, ({nu.strip()})"
+            select_extra = f"mi.menu_item_id, mi.name, mi.type, ({nu.strip()}) AS unit"
         else:
             return None, 0, "mode must be 'volume' or 'quantity'"
 

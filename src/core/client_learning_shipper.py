@@ -1,11 +1,23 @@
 """
-Orchestrator for all client-learning uploads: errors, learning (ai_logs + ai_feedback),
-menu bootstrap, customer merges, menu merges, menu mapping verifications, forecasts
-(revenue + item + backtest caches).
+Orchestrator for client-learning uploads: errors, learning, menu bootstrap.
 
-Call run_all(conn) periodically (e.g. from a background task or POST /api/sync/client-learning).
-Uses placeholder URLs by default; set env vars for plug-and-play when cloud is ready.
-Appends uploaded_by (employee_id, name from app_users) to every payload so cloud knows which employee the upload is from.
+Forecast upload removed — central server is the sole forecast publisher (Phase 5).
+Menu-merge / customer-merge / menu-mapping-verification legacy batch uploads removed —
+the server is strict-only and those events now go through the mutation-commit path
+(src/core/menu_mutation_commit.py, src/core/customer_mutation_commit.py).
+
+The three uploads have different scopes, so they are separate entry points:
+
+* ``run_global_uploads`` — error-log files live in one app-wide log directory.
+  They are uploaded **once per cycle**, not once per restaurant, so a multi-profile
+  loop must not re-send them for every store.
+* ``run_profile_telemetry_uploads`` — ai_logs / ai_feedback rows are read from one
+  profile database but stay **unscoped on the wire** (``learning/ingest`` takes no
+  restaurant selector), so they run per profile without a restaurant header.
+* ``run_scoped_uploads`` — the menu bootstrap seed snapshot is restaurant-scoped and
+  carries the profile's ``X-Restaurant-ID``; it runs once per profile.
+
+``run_all`` composes all three for the single-profile Phase 1 path.
 """
 
 from typing import Any, Dict, Optional
@@ -15,25 +27,14 @@ from src.core.config.cloud_sync_config import get_cloud_sync_config
 from src.core.error_shipper import upload_pending as upload_errors
 from src.core.learning_shipper import upload_pending as upload_learning
 from src.core.menu_bootstrap_shipper import upload_pending as upload_menu_bootstrap
-from src.core.customer_merge_shipper import upload_pending as upload_customer_merges
-from src.core.menu_merge_shipper import upload_pending as upload_menu_merges
-from src.core.menu_mapping_verification_shipper import (
-    upload_pending as upload_menu_mapping_verifications,
-)
-from src.core.forecast_shipper import upload_pending as upload_forecasts
 from src.core.sync_identity import get_active_user_identity, get_device_identity
 
 
 def get_uploaded_by(conn) -> Optional[Dict[str, str]]:
-    """
-    Return the current app user for cloud payload attribution.
-    Reads from app_users (singleton). Returns {"employee_id": "...", "name": "..."} or None if no user.
-    """
     return get_active_user_identity(conn)
 
 
 def get_uploaded_from(conn) -> Optional[Dict[str, str]]:
-    """Return persistent device/install attribution for cloud payloads."""
     if conn is None:
         return None
     try:
@@ -42,115 +43,104 @@ def get_uploaded_from(conn) -> Optional[Dict[str, str]]:
         return None
 
 
-def run_all(conn, log_dir: Optional[str] = None, base_url: Optional[str] = None, auth: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Run all cloud push shippers: error logs, ai_logs + ai_feedback, menu bootstrap,
-    customer merge events, menu merge events, and forecasts.
-    Appends uploaded_by (from app_users) to every payload so cloud knows which employee the upload is from.
-    conn: database connection (used for learning shipper and to read app_users).
-    log_dir: optional override for error log directory.
-    Returns combined result for each shipper.
-    """
-    result: Dict[str, Any] = {
-        "errors": {},
-        "learning": {},
-        "menu_bootstrap": {},
-        "customer_merges": {},
-        "menu_merges": {},
-        "menu_mapping_verifications": {},
-        "forecasts": {},
+def _resolve_cloud_config(conn, base_url: Optional[str], auth: Optional[str]):
+    if conn and (not base_url or not auth):
+        db_url, db_auth = get_cloud_sync_config(conn)
+        base_url = base_url or db_url
+        auth = auth or db_auth
+    return base_url, auth
+
+
+def _endpoint(base_url: Optional[str], path: str) -> Optional[str]:
+    if not base_url:
+        return None
+    return f"{base_url.rstrip('/')}/desktop-analytics-sync/{path}"
+
+
+def run_global_uploads(
+    conn=None,
+    log_dir: Optional[str] = None,
+    base_url: Optional[str] = None,
+    auth: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upload app-global error-log files. Run once per cycle, never per store."""
+    base_url, auth = _resolve_cloud_config(conn, base_url, auth)
+    kwargs: Dict[str, Any] = {
+        "uploaded_by": get_uploaded_by(conn) if conn else None,
+        "log_dir": log_dir,
     }
-    uploaded_by = get_uploaded_by(conn) if conn else None
-    uploaded_from = get_uploaded_from(conn) if conn else None
-
-    # If auth is not provided, try to fetch it from system_config (if conn is available)
-    if not auth and conn:
-        _, db_auth = get_cloud_sync_config(conn)
-        if db_auth:
-            auth = db_auth
-
-    # Push Now calls run_all(conn) without base_url; background sync passes it explicitly.
-    # Without this, learning/menu-bootstrap/error shippers fall back to CLIENT_LEARNING_* env
-    # defaults (http://localhost in client_learning_config), ignoring Configuration.
-    if not base_url and conn:
-        db_url, _ = get_cloud_sync_config(conn)
-        if db_url:
-            base_url = db_url
-
-    # Pass configured endpoints/auth to sub-shippers if base_url is provided.
-    # Each sub-shipper (error, learning, menu, customer merges, forecasts) accepts
-    # (endpoint=..., auth=...).
-    
-    error_kwargs = {"uploaded_by": uploaded_by, "log_dir": log_dir}
-    learning_kwargs = {"uploaded_by": uploaded_by}
-    menu_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
-    customer_merge_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
-    menu_merge_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
-    menu_mapping_kwargs = {"uploaded_by": uploaded_by, "uploaded_from": uploaded_from}
-    forecast_kwargs = {"uploaded_by": uploaded_by}
-    
-    if base_url:
-         # Construct specific endpoints from base URL
-         base = base_url.rstrip("/")
-         error_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/errors/ingest"
-         learning_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/learning/ingest"
-         menu_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-bootstrap/ingest"
-         customer_merge_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/customer-merges/ingest"
-         menu_merge_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-merges/ingest"
-         menu_mapping_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/menu-mapping-verifications/ingest"
-         forecast_kwargs["endpoint"] = f"{base}/desktop-analytics-sync/forecasts/ingest"
-    else:
-         # Fall back to env-based full URLs (for POST /api/sync/client-learning)
-         from src.core.config.client_learning_config import (
-             CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL,
-             CLIENT_LEARNING_FORECAST_INGEST_URL,
-             CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL,
-             CLIENT_LEARNING_MENU_MERGE_INGEST_URL,
-         )
-         if CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL:
-             customer_merge_kwargs["endpoint"] = CLIENT_LEARNING_CUSTOMER_MERGE_INGEST_URL
-         if CLIENT_LEARNING_MENU_MERGE_INGEST_URL:
-             menu_merge_kwargs["endpoint"] = CLIENT_LEARNING_MENU_MERGE_INGEST_URL
-         if CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL:
-             menu_mapping_kwargs["endpoint"] = CLIENT_LEARNING_MENU_MAPPING_VERIFICATION_INGEST_URL
-         if CLIENT_LEARNING_FORECAST_INGEST_URL:
-             forecast_kwargs["endpoint"] = CLIENT_LEARNING_FORECAST_INGEST_URL
-
+    endpoint = _endpoint(base_url, "errors/ingest")
+    if endpoint:
+        kwargs["endpoint"] = endpoint
     if auth:
-         error_kwargs["auth"] = auth
-         learning_kwargs["auth"] = auth
-         menu_kwargs["auth"] = auth
-         customer_merge_kwargs["auth"] = auth
-         menu_merge_kwargs["auth"] = auth
-         menu_mapping_kwargs["auth"] = auth
-         forecast_kwargs["auth"] = auth
+        kwargs["auth"] = auth
+    return upload_errors(**kwargs)
 
-    result["errors"] = upload_errors(**error_kwargs)
-    result["learning"] = (
-        upload_learning(conn, **learning_kwargs)
-        if conn
-        else {"ai_logs_sent": 0, "ai_feedback_sent": 0, "tier3_included": False, "error": "No connection"}
-    )
-    result["menu_bootstrap"] = upload_menu_bootstrap(**menu_kwargs)
-    result["customer_merges"] = (
-        upload_customer_merges(conn, **customer_merge_kwargs)
-        if conn
-        else {"events_sent": 0, "backfilled_applied": 0, "backfilled_undone": 0, "error": "No connection"}
-    )
-    result["menu_merges"] = (
-        upload_menu_merges(conn, **menu_merge_kwargs)
-        if conn
-        else {"events_sent": 0, "backfilled_applied": 0, "error": "No connection"}
-    )
-    result["menu_mapping_verifications"] = (
-        upload_menu_mapping_verifications(conn, **menu_mapping_kwargs)
-        if conn
-        else {"events_sent": 0, "error": "No connection"}
-    )
-    result["forecasts"] = (
-        upload_forecasts(conn, **forecast_kwargs)
-        if conn
-        else {"revenue_sent": 0, "items_sent": 0, "error": "No connection"}
-    )
 
-    return result
+def run_profile_telemetry_uploads(
+    conn,
+    base_url: Optional[str] = None,
+    auth: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Drain one profile's ai_logs/ai_feedback. Unscoped on the wire by design."""
+    if conn is None:
+        return {
+            "ai_logs_sent": 0,
+            "ai_feedback_sent": 0,
+            "tier3_included": False,
+            "error": "No connection",
+        }
+    base_url, auth = _resolve_cloud_config(conn, base_url, auth)
+    kwargs: Dict[str, Any] = {"uploaded_by": get_uploaded_by(conn)}
+    endpoint = _endpoint(base_url, "learning/ingest")
+    if endpoint:
+        kwargs["endpoint"] = endpoint
+    if auth:
+        kwargs["auth"] = auth
+    return upload_learning(conn, **kwargs)
+
+
+def run_scoped_uploads(
+    conn,
+    base_url: Optional[str] = None,
+    auth: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upload one profile's menu bootstrap seed with that profile's restaurant header."""
+    if conn is None:
+        return {"sent": False, "error": "No connection"}
+    base_url, auth = _resolve_cloud_config(conn, base_url, auth)
+    kwargs: Dict[str, Any] = {
+        "uploaded_by": get_uploaded_by(conn),
+        "uploaded_from": get_uploaded_from(conn),
+    }
+    endpoint = _endpoint(base_url, "menu-bootstrap/ingest")
+    if endpoint:
+        kwargs["endpoint"] = endpoint
+    if auth:
+        kwargs["auth"] = auth
+    return upload_menu_bootstrap(conn, **kwargs)
+
+
+def run_all(
+    conn,
+    log_dir: Optional[str] = None,
+    base_url: Optional[str] = None,
+    auth: Optional[str] = None,
+    *,
+    include_global_uploads: bool = True,
+) -> Dict[str, Any]:
+    """Run every upload for one profile.
+
+    Phase 2 fan-out passes ``include_global_uploads=False`` for every store after
+    the first so app-global error files are shipped exactly once per cycle.
+    """
+    base_url, auth = _resolve_cloud_config(conn, base_url, auth)
+    return {
+        "errors": (
+            run_global_uploads(conn, log_dir=log_dir, base_url=base_url, auth=auth)
+            if include_global_uploads
+            else {"skipped": "already uploaded this cycle"}
+        ),
+        "learning": run_profile_telemetry_uploads(conn, base_url=base_url, auth=auth),
+        "menu_bootstrap": run_scoped_uploads(conn, base_url=base_url, auth=auth),
+    }

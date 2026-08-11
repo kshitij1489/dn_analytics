@@ -64,7 +64,7 @@ const formatVolume = (val: number, unit: string) => {
     return `${Math.round(val).toLocaleString()} ${unit}`;
 };
 
-export default function ItemVolumeForecast({ trainingActive = false }: { trainingActive?: boolean }) {
+export default function ItemVolumeForecast() {
     const [data, setData] = useState<VolumeForecastResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -73,8 +73,8 @@ export default function ItemVolumeForecast({ trainingActive = false }: { trainin
     const [cumulativeSearch, setCumulativeSearch] = useState('');
 
     useEffect(() => {
-        if (!trainingActive) loadData();
-    }, [trainingActive]);
+        loadData();
+    }, []);
 
     const loadData = async () => {
         setLoading(true);
@@ -86,10 +86,6 @@ export default function ItemVolumeForecast({ trainingActive = false }: { trainin
                 setSelectedItemId(res.data.items[0].item_id);
             }
         } catch (e: any) {
-            if (e?.response?.status === 503) {
-                // Training in progress — don't show error, parent overlay handles it
-                return;
-            }
             console.error('Failed to fetch volume forecast:', e);
             const detail = e.response?.data?.detail || e.message || 'Failed to load volume forecast';
             setError(detail);
@@ -205,36 +201,7 @@ export default function ItemVolumeForecast({ trainingActive = false }: { trainin
                     gap: '12px',
                     flexWrap: 'wrap',
                 }}>
-                    <span>{data.message || 'Volume forecast cache is empty. Use Pull from Cloud or Full Retrain to populate.'}</span>
-                    <button
-                        onClick={async () => {
-                            try {
-                                const res = await endpoints.forecast.pullFromCloud('volume');
-                                const msg = res.data as { volume_inserted?: number };
-                                setPopup({ type: 'success', message: `Done. Volume: ${msg.volume_inserted ?? 0}` });
-                                loadData();
-                            } catch (e: any) {
-                                setPopup({ type: 'error', message: e.response?.data?.detail || "Pull failed" });
-                            }
-                        }}
-                        style={{ padding: '8px 14px', background: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                        Pull from Cloud
-                    </button>
-                    <button
-                        onClick={async () => {
-                            try {
-                                await endpoints.forecast.fullRetrain('volume');
-                                setPopup({ type: 'info', message: 'Volume retrain started. This might take a few minutes.' });
-                                loadData();
-                            } catch (e: any) {
-                                setPopup({ type: 'error', message: e.response?.data?.detail || "Retrain failed" });
-                            }
-                        }}
-                        style={{ padding: '8px 14px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.4)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                        Full Retrain
-                    </button>
+                    <span>{data.message || 'Volume forecast cache is empty. Run Sync DB to fetch from the central server.'}</span>
                 </div>
             )}
             <Card
@@ -253,7 +220,7 @@ export default function ItemVolumeForecast({ trainingActive = false }: { trainin
                 <div className="forecast-chart-container">
                     {chartData.length === 0 ? (
                         <div className="empty-state-message">
-                            {data?.items?.length ? 'Select a menu item to view its volume forecast.' : 'No volume data available. Configure menu items with variants (unit: Count/mg/ml) and value.'}
+                            {data?.items?.length ? 'Select a menu item to view its volume forecast.' : 'No volume data available. Configure menu items with variants (unit: Count/g) and value.'}
                         </div>
                     ) : (
                         <ResponsiveContainer width="100%" height="100%">

@@ -1,0 +1,737 @@
+{
+  "description": "Global menu group payload fixtures (contract v1.7, §25). Base path /desktop-analytics-sync/global-menu/, auth Authorization: Bearer <SYNC_API_KEY> plus the required X-Restaurant-ID selector; the two mutation routes additionally require X-Global-Menu-Key. Global identifiers below are illustrative — they are server-issued opaque tokens and are never derived from a name.",
+  "fixtures": [
+    {
+      "name": "global_menu_snapshot_items_empty",
+      "description": "The canonical catalog of a group that has been opened but holds nothing yet. The versioned snapshot watermark is null because no global event has been appended (§25.5).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 0,
+        "snapshot_watermark": {
+          "event_seq": null,
+          "menu_group_revision": 0
+        },
+        "section": "items",
+        "rows": [],
+        "next_cursor": null,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_snapshot_items",
+      "description": "One page of canonical items. Redirected and tombstoned rows are served explicitly with their lifecycle_state — omission is never deletion (§25.5).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=items&limit=500",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 0,
+        "snapshot_watermark": {
+          "event_seq": null,
+          "menu_group_revision": 0
+        },
+        "section": "items",
+        "rows": [
+          {
+            "global_item_id": "1795ed65318544a9907caab6202b9d42",
+            "canonical_name": "Vanilla Ice Cream",
+            "canonical_type": "Dessert",
+            "is_verified": false,
+            "lifecycle_state": "active",
+            "updated_at": "2026-08-09T08:08:55.045809+00:00"
+          }
+        ],
+        "next_cursor": null,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_snapshot_rules",
+      "description": "The shared-Petpooja policy projects the same group-scoped POS entry and canonical decimal price to every member. GlobalMenuMappingRule is the allowed item/variant pair; there is no separate GlobalMenuItemVariant (§25.1, §25.5).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=rules&limit=500",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 0,
+        "snapshot_watermark": {
+          "event_seq": null,
+          "menu_group_revision": 0
+        },
+        "section": "rules",
+        "rows": [
+          {
+            "rule_id": 1,
+            "rule_scope": "group",
+            "restaurant_id": "",
+            "locator_type": "pos_item",
+            "locator_value": "1001",
+            "global_item_id": "1795ed65318544a9907caab6202b9d42",
+            "global_variant_id": "",
+            "price": "290.00",
+            "provenance": "backfill",
+            "menu_group_revision": 0
+          }
+        ],
+        "next_cursor": null,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_events_page",
+      "description": "The ordered semantic tail a client applies after a snapshot. Each event carries complete authoritative catalog/rule deltas plus explicit tombstones and assignment-refresh instructions (§25.6).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/events?after=0&limit=500",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 1,
+        "event_head_seq": 1,
+        "events": [
+          {
+            "event_seq": 1,
+            "menu_group_revision": 1,
+            "event_type": "global_item.merge",
+            "entity_type": "item",
+            "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
+            "origin_restaurant_id": "1c8w7fp500",
+            "actor": "ops",
+            "occurred_at": "2026-08-09T08:08:55.056714+00:00",
+            "server_ingested_at": "2026-08-09T08:08:55.056775+00:00",
+            "payload": {
+              "action": {
+                "mutation_type": "global_item.merge",
+                "source": {
+                  "global_menu_item_id": "1795ed65318544a9907caab6202b9d42"
+                },
+                "target": {
+                  "global_menu_item_id": "9c6cc3eed9eb410b8540cfae2318fc10"
+                },
+                "variant_reconciliation": []
+              },
+              "items": [
+                {
+                  "global_item_id": "1795ed65318544a9907caab6202b9d42",
+                  "canonical_name": "Vanilla Ice Cream",
+                  "canonical_type": "Dessert",
+                  "is_verified": false,
+                  "lifecycle_state": "redirected",
+                  "updated_at": "2026-08-09T08:08:55.056714+00:00"
+                },
+                {
+                  "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+                  "canonical_name": "Eggless Vanilla Ice Cream",
+                  "canonical_type": "Dessert",
+                  "is_verified": false,
+                  "lifecycle_state": "active",
+                  "updated_at": "2026-08-09T08:08:55.056714+00:00"
+                }
+              ],
+              "variants": [],
+              "redirects": [
+                {
+                  "entity_type": "item",
+                  "source_global_id": "1795ed65318544a9907caab6202b9d42",
+                  "target_global_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+                  "menu_group_revision": 1
+                }
+              ],
+              "mapping_rules": [
+                {
+                  "rule_id": 1,
+                  "rule_scope": "group",
+                  "restaurant_id": "",
+                  "locator_type": "pos_item",
+                  "locator_value": "1001",
+                  "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+                  "global_variant_id": "",
+                  "price": "290.00",
+                  "provenance": "backfill",
+                  "menu_group_revision": 1
+                }
+              ],
+              "tombstones": {
+                "redirects": [],
+                "mapping_rules": []
+              },
+              "assignment_snapshot_required": true,
+              "assignment_restaurants": [
+                "1c8w7fp500",
+                "9zz9zz9zz9"
+              ],
+              "menu_group_revision": 1
+            }
+          }
+        ],
+        "next_cursor": 1,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_status",
+      "description": "Lifecycle rung, advertised capabilities and per-restaurant global identity coverage. verified_coverage_complete is the gate an operator must reach before aggregation and mutations are enabled (§25.7).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/status",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "status": "active",
+        "menu_capabilities": [
+          "global_menu_v1",
+          "global_menu_resolution_v1",
+          "global_menu_shared_pos_catalog_v1",
+          "global_menu_aggregation_v1",
+          "global_menu_mutations_v1"
+        ],
+        "menu_group_revision": 0,
+        "latest_event_seq": null,
+        "catalog": {
+          "items": 2,
+          "variants": 0,
+          "redirects": 0,
+          "mapping_rules": 5,
+          "shared_pos_entries": 5,
+          "shared_pos_catalog_digest": "e2aa5538f4409745fbfa2f99812019ce6be84b65f39bf4dd7ecff18967f3270a"
+        },
+        "restaurants": [
+          {
+            "assignments": 2,
+            "assignments_linked": 2,
+            "assignments_unlinked": 0,
+            "verified_assignments": 2,
+            "verified_assignments_linked": 2,
+            "verified_assignments_unlinked": 0,
+            "verified_coverage_complete": true,
+            "has_verified_assignments": true,
+            "shared_pos_entries_observed": 5,
+            "shared_pos_entries_matching": 5,
+            "shared_pos_entries_missing": 0,
+            "shared_pos_peer_extras": 0,
+            "shared_pos_identity_mismatches": 0,
+            "shared_pos_price_mismatches": 0,
+            "shared_pos_catalog_complete": true,
+            "restaurant_id": "1c8w7fp500"
+          },
+          {
+            "assignments": 2,
+            "assignments_linked": 2,
+            "assignments_unlinked": 0,
+            "verified_assignments": 2,
+            "verified_assignments_linked": 2,
+            "verified_assignments_unlinked": 0,
+            "verified_coverage_complete": true,
+            "has_verified_assignments": true,
+            "shared_pos_entries_observed": 3,
+            "shared_pos_entries_matching": 3,
+            "shared_pos_entries_missing": 2,
+            "shared_pos_peer_extras": 0,
+            "shared_pos_identity_mismatches": 0,
+            "shared_pos_price_mismatches": 0,
+            "shared_pos_catalog_complete": true,
+            "restaurant_id": "9zz9zz9zz9"
+          }
+        ],
+        "verified_coverage_complete": true,
+        "shared_pos_catalog_complete": true
+      }
+    },
+    {
+      "name": "global_menu_history_page",
+      "description": "One group-wide human audit page combining future global mutations with old restaurant merge events. Legacy rows are visible to every member but are never represented as undoable global mutations (§25.10).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/history?limit=100",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "9zz9zz9zz9"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "rows": [
+          {
+            "history_id": "global:1",
+            "source_event_id": "1",
+            "source_kind": "global_menu_event",
+            "event_type": "global_item.merge",
+            "origin_restaurant_id": "1c8w7fp500",
+            "actor": "ops",
+            "attribution": null,
+            "occurred_at": "2026-08-09T08:08:55.056714+00:00",
+            "server_ingested_at": "2026-08-09T08:08:55.056775+00:00",
+            "source": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "name": "Vanilla Ice Cream",
+              "item_type": "Dessert"
+            },
+            "target": {
+              "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+              "name": "Eggless Vanilla Ice Cream",
+              "item_type": "Dessert"
+            },
+            "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
+            "is_undoable": true,
+            "detail": {
+              "assignments_moved": 2
+            }
+          },
+          {
+            "history_id": "legacy:9zz9zz9zz9:legacy-super-2",
+            "source_event_id": "legacy-super-2",
+            "source_kind": "legacy_restaurant_event",
+            "event_type": "menu_merge.applied",
+            "origin_restaurant_id": "9zz9zz9zz9",
+            "actor": null,
+            "attribution": {
+              "employee_name": "Owner",
+              "device_label": "Super Mart Mac"
+            },
+            "occurred_at": "2026-07-30T10:15:00+00:00",
+            "server_ingested_at": "2026-07-30T10:15:01+00:00",
+            "source": {
+              "global_item_id": null,
+              "name": "Vanilla",
+              "item_type": "Dessert"
+            },
+            "target": {
+              "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+              "name": "Eggless Vanilla Ice Cream",
+              "item_type": "Dessert"
+            },
+            "mutation_id": null,
+            "is_undoable": false,
+            "detail": {
+              "affected_order_items": 1
+            }
+          }
+        ],
+        "next_cursor": null,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_mutation_preview_merge",
+      "description": "Impact of a merge across every member restaurant, written nowhere. preview_digest is what the commit must echo; commit_allowed is false while conflicts is non-empty (§25.8.1).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "mutation_type": "global_item.merge",
+        "expected_menu_group_revision": 0,
+        "payload": {
+          "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "target_global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10"
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "preview",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 0,
+        "mutation_type": "global_item.merge",
+        "payload": {
+          "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "target_global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+          "variant_reconciliation": []
+        },
+        "impact": {
+          "restaurants": [
+            {
+              "assignments": 1,
+              "mapping_rules": 2,
+              "restaurant_id": "1c8w7fp500"
+            }
+          ],
+          "totals": {
+            "assignments": 2,
+            "mapping_rules": 4,
+            "redirects": 1
+          },
+          "catalog": {
+            "source": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "canonical_name": "Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            },
+            "target": {
+              "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+              "canonical_name": "Eggless Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            }
+          },
+          "variant_reconciliation": []
+        },
+        "conflicts": [],
+        "commit_allowed": true,
+        "preview_digest": "724eb90c8d1aab3c2596e8ce5010676029f8ee84dc8017c57f30f50e54ec5e73",
+        "expected_menu_group_revision": 0,
+        "revision_current": true
+      }
+    },
+    {
+      "name": "global_menu_mutation_preview_price_update",
+      "description": "A current-price change previews one shared POS rule plus the local projection rows every member will refresh. Historical order prices are unaffected (§25.8.1).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "mutation_type": "global_locator.price_update",
+        "expected_menu_group_revision": 5,
+        "payload": {
+          "locator_type": "pos_item",
+          "locator_value": "1001",
+          "price": "310.00"
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "preview",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "mutation_type": "global_locator.price_update",
+        "payload": {
+          "locator_type": "pos_item",
+          "locator_value": "1001",
+          "price": "310.00"
+        },
+        "impact": {
+          "restaurants": [
+            {
+              "restaurant_id": "1c8w7fp500",
+              "projected_rows": 1
+            },
+            {
+              "restaurant_id": "9zz9zz9zz9",
+              "projected_rows": 1
+            }
+          ],
+          "totals": {
+            "mapping_rules": 1,
+            "projected_rows": 2
+          },
+          "catalog": {
+            "locator_type": "pos_item",
+            "locator_value": "1001",
+            "previous_price": "290.00",
+            "price": "310.00"
+          }
+        },
+        "conflicts": [],
+        "commit_allowed": true,
+        "preview_digest": "a18aec891e47bf9c7c562d581090d160200a851fad647ddc0f103422908afa0e",
+        "expected_menu_group_revision": 5,
+        "revision_current": true
+      }
+    },
+    {
+      "name": "global_menu_mutation_commit_merge",
+      "description": "One accepted global mutation. applied carries aggregate and per-restaurant counts, never a list of order rows; this exact body is replayed by the status route and by a duplicate mutation_id (§25.8.2).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
+        "mutation_type": "global_item.merge",
+        "expected_menu_group_revision": 0,
+        "preview_digest": "724eb90c8d1aab3c2596e8ce5010676029f8ee84dc8017c57f30f50e54ec5e73",
+        "payload": {
+          "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "target_global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10"
+        },
+        "uploaded_by": {
+          "employee_id": "E-1",
+          "name": "Ops Lead"
+        },
+        "uploaded_from": {
+          "device_id": "device-1",
+          "install_id": "install-1",
+          "device_label": "Front Desk"
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "accepted",
+        "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
+        "mutation_type": "global_item.merge",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 1,
+        "origin_restaurant_id": "1c8w7fp500",
+        "actor": "ops",
+        "event_seq": 1,
+        "accepted_at": "2026-08-09T08:08:55.056714+00:00",
+        "impact": {
+          "restaurants": [
+            {
+              "assignments": 1,
+              "mapping_rules": 2,
+              "restaurant_id": "1c8w7fp500"
+            }
+          ],
+          "totals": {
+            "assignments": 2,
+            "mapping_rules": 4,
+            "redirects": 1
+          },
+          "catalog": {
+            "source": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "canonical_name": "Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            },
+            "target": {
+              "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+              "canonical_name": "Eggless Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            }
+          },
+          "variant_reconciliation": []
+        },
+        "applied": {
+          "redirect": {
+            "source": "1795ed65318544a9907caab6202b9d42",
+            "target": "9c6cc3eed9eb410b8540cfae2318fc10"
+          },
+          "assignments_moved": {
+            "1c8w7fp500": 1,
+            "9zz9zz9zz9": 1
+          },
+          "mapping_rules_repointed": 3,
+          "variant_redirects": {},
+          "marked": {
+            "assignments": 2,
+            "mapping_rules": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "global_menu_mutation_commit_item_create",
+      "description": "Adding a genuinely new product to the shared menu (§25.8.4). The backfill reconciles the menus that existed when a group opted in and never runs again over live authority, so this is the only supported way a dish added afterwards becomes canonical. It moves no assignment by itself — map a locator to the returned global_item_id next. Undoing it tombstones the row rather than deleting it.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEY>"
+      },
+      "request": {
+        "schema_version": 1,
+        "mutation_id": "6f1a4b90-6d4c-4f2f-9a1e-2f7c1d5b8e30",
+        "mutation_type": "global_item.create",
+        "expected_menu_group_revision": 4,
+        "preview_digest": "<preview_digest from mutations/preview>",
+        "payload": {
+          "canonical_name": "Pistachio Kulfi",
+          "canonical_type": "Dessert",
+          "is_verified": false
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "accepted",
+        "mutation_id": "6f1a4b90-6d4c-4f2f-9a1e-2f7c1d5b8e30",
+        "mutation_type": "global_item.create",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "origin_restaurant_id": "1c8w7fp500",
+        "actor": "ops-lead",
+        "event_seq": 12,
+        "accepted_at": "2026-08-09T11:20:31.442913+00:00",
+        "impact": {
+          "restaurants": [
+            {
+              "assignments": 0,
+              "mapping_rules": 0,
+              "restaurant_id": "1c8w7fp500"
+            }
+          ],
+          "totals": {
+            "assignments": 0,
+            "mapping_rules": 0,
+            "redirects": 0
+          },
+          "catalog": {
+            "created": {
+              "canonical_name": "Pistachio Kulfi",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            }
+          }
+        },
+        "applied": {
+          "created": {
+            "global_item_id": "4f0d2c1b9a8e47d6b3c5a1f2e9d80714",
+            "canonical_name": "Pistachio Kulfi",
+            "canonical_type": "Dessert",
+            "is_verified": false,
+            "lifecycle_state": "active"
+          },
+          "global_item_id": "4f0d2c1b9a8e47d6b3c5a1f2e9d80714"
+        }
+      }
+    },
+    {
+      "name": "error_global_menu_revision_conflict",
+      "description": "Non-destructive. Sent when expected_menu_group_revision is stale, and when the re-derived preview no longer matches the digest a human confirmed (§25.8.2).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "http_status": 409,
+      "payload": {
+        "status": "conflict",
+        "code": "global_menu_revision_conflict",
+        "error": "The menu group changed on the server. Pull the latest global menu state, re-preview and confirm again.",
+        "expected_menu_group_revision": 0,
+        "current_menu_group_revision": 1,
+        "recommended_action": "pull_latest_global_menu_state"
+      }
+    },
+    {
+      "name": "error_global_menu_not_enabled",
+      "description": "The selected restaurant belongs to no menu group, or its group has not been advanced past provisioning. The client's only gate is the capability list on GET /analytics/restaurants/ (§23.6); calling anyway is a client that ignored it.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "Restaurant '1c8w7fp500' has no menu group with capability 'global_menu_v1'. Global menu behavior activates only when the registry advertises it.",
+        "code": "global_menu_not_enabled"
+      }
+    },
+    {
+      "name": "error_global_menu_mutations_disabled",
+      "description": "The group permits coverage-repair creates and locator mappings, but has not been opened for unrestricted global mutations. A separate rung from 'no group at all', because an operator advances it deliberately (§25.3).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request_payload": {
+        "schema_version": 1,
+        "mutation_type": "global_item.merge",
+        "expected_menu_group_revision": 0,
+        "payload": {
+          "source_global_item_id": "source-item",
+          "target_global_item_id": "target-item"
+        }
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "Menu group 'group-1' permits resolution writes only at this lifecycle rung. Full global-menu mutations activate only after the aggregation gate passes.",
+        "code": "global_menu_mutations_disabled"
+      }
+    },
+    {
+      "name": "error_global_menu_editor_required",
+      "description": "Editing a menu group rewrites every member restaurant's canonical menu, so it needs its own credential. An unset GLOBAL_MENU_EDITOR_KEYS authorizes nobody — there is no 'auth skipped' branch here (§25.3).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 403,
+      "payload": {
+        "error": "X-Global-Menu-Key is required to author a global menu mutation. Read access to a restaurant does not grant it.",
+        "code": "global_menu_editor_required"
+      }
+    },
+    {
+      "name": "error_global_menu_editor_forbidden",
+      "description": "The editor credential is valid but GLOBAL_MENU_EDITOR_GRANTS does not name the selected restaurant. A separate code from editor_required on purpose: reaching it takes a working credential, so it leaks nothing to an unauthenticated caller, and it tells an operator which of the two settings to fix (§25.3).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value granted elsewhere>"
+      },
+      "http_status": 403,
+      "payload": {
+        "error": "This global-menu credential may not author mutations from restaurant '1c8w7fp500'.",
+        "code": "global_menu_editor_forbidden"
+      }
+    },
+    {
+      "name": "error_global_menu_invalid_mutation",
+      "description": "A commit whose re-derived preview still has open conflicts. Nothing moved and no revision advanced — unlike the 409, this request was never committable. The body carries the §25.8.1 conflict codes so a client can branch on undo_not_latest_mutation rather than parsing prose. Mutation ids below are illustrative.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request_payload": {
+        "schema_version": 1,
+        "mutation_type": "global_menu.undo",
+        "expected_menu_group_revision": 2,
+        "mutation_id": "3f0d1b1e-6a4f-4f4d-9f5a-2b8c1d0e7a91",
+        "preview_digest": "<preview_digest from §25.8.1>",
+        "payload": {
+          "undo_mutation_id": "8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10"
+        }
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "This mutation has unresolved conflicts: Mutation '8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10' is not the latest accepted mutation in this menu group ('b71e93af-24c8-4a05-8d6e-90f2c4b17d33' is). Undo applies to the most recent mutation only: a later edit may have moved the very rows this would move back, and two desktops would then stop converging.",
+        "code": "global_menu_invalid_mutation",
+        "conflicts": [
+          {
+            "code": "undo_not_latest_mutation",
+            "message": "Mutation '8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10' is not the latest accepted mutation in this menu group ('b71e93af-24c8-4a05-8d6e-90f2c4b17d33' is). Undo applies to the most recent mutation only: a later edit may have moved the very rows this would move back, and two desktops would then stop converging."
+          }
+        ]
+      }
+    }
+  ]
+}

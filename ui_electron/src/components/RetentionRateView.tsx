@@ -25,6 +25,7 @@ import {
 } from './customerAnalyticsShared';
 import { CustomerAnalyticsViewToolbar, type CustomerAnalyticsTableViewMode } from './CustomerAnalyticsViewToolbar';
 import { CustomerLink } from './CustomerLink';
+import { useStore } from '../contexts/StoreContext';
 import { DateSelector } from './DateSelector';
 import { KPICard } from './KPICard';
 import { LoadingSpinner } from './LoadingSpinner';
@@ -39,6 +40,9 @@ interface RetentionRateViewProps {
 }
 
 export function RetentionRateView({ lastDbSync, sort, filters, setFilters }: RetentionRateViewProps) {
+    // All Stores rows are profile-qualified: a local customer_id is only
+    // unique inside its own store, so the owning restaurant keys and labels it.
+    const { isAllStores } = useStore();
     const [data, setData] = useState<CustomerRetentionRateResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -177,6 +181,7 @@ export function RetentionRateView({ lastDbSync, sort, filters, setFilters }: Ret
                         <thead>
                             <tr>
                                 <th onClick={() => sort.handleSort('customer_name')}>Customer{sort.renderSortIcon('customer_name')}</th>
+                                {isAllStores && <th>Store</th>}
                                 <th onClick={() => sort.handleSort('retained_flag')}>Status{sort.renderSortIcon('retained_flag')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('lookback_order_count')}>Lookback Orders{sort.renderSortIcon('lookback_order_count')}</th>
                                 <th className="text-right" onClick={() => sort.handleSort('evaluation_order_count')}>Eval Orders{sort.renderSortIcon('evaluation_order_count')}</th>
@@ -188,8 +193,9 @@ export function RetentionRateView({ lastDbSync, sort, filters, setFilters }: Ret
                         </thead>
                         <tbody>
                             {rows.length > 0 ? rows.map((row) => (
-                                <tr key={String(row.customer_id)}>
-                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} /></td>
+                                <tr key={String((row as any).row_key ?? row.customer_id)}>
+                                    <td><CustomerLink customerId={row.customer_id} name={row.customer_name} restaurantId={(row as any).restaurant_id} restaurantName={(row as any).restaurant_name} /></td>
+                                    {isAllStores && <td>{(row as any).restaurant_name ?? '—'}</td>}
                                     <td><span className={row.retained_flag ? 'status-returning' : 'status-new'}>{row.retention_status}</span></td>
                                     <td className="text-right">{row.lookback_order_count}</td>
                                     <td className="text-right">{row.evaluation_order_count}</td>
@@ -199,7 +205,7 @@ export function RetentionRateView({ lastDbSync, sort, filters, setFilters }: Ret
                                     <td>{row.retention_reason}</td>
                                 </tr>
                             )) : (
-                                <tr><td colSpan={8} className="text-center customers-analytics-empty">No prior-cohort customers found for the selected filters.</td></tr>
+                                <tr><td colSpan={isAllStores ? 9 : 8} className="text-center customers-analytics-empty">No prior-cohort customers found for the selected filters.</td></tr>
                             )}
                         </tbody>
                     </table>

@@ -1,0 +1,65 @@
+{
+  "description": "Menu catalog snapshot payload fixtures for 100% coverage (contract v1.2, §20.3).",
+  "fixtures": [
+    {
+      "name": "menu_catalog_snapshot_response",
+      "description": "Normalized catalog checkpoint with items, variants, and bootstrap-compatible id_maps (§20.3).",
+      "endpoint": "GET /desktop-analytics-sync/menu-catalog-snapshot/latest",
+      "http_status": 200,
+      "payload": {
+        "snapshot_id": "menu-catalog-2026-07-06T12:34:56+00:00",
+        "version": 1,
+        "generated_at": "2026-07-06T12:34:56+00:00",
+        "id_maps": {
+          "menu_id_to_str": {
+            "item_latte": "Latte"
+          },
+          "variant_id_to_str": {
+            "variant_hot": "Hot"
+          },
+          "type_id_to_str": {
+            "type_bev": "Beverage"
+          }
+        },
+        "items": [
+          {
+            "menu_item_id": "item_latte",
+            "name": "Latte",
+            "type": "Beverage",
+            "is_verified": true
+          }
+        ],
+        "variants": [
+          {
+            "variant_id": "variant_hot",
+            "variant_name": "Hot",
+            "unit": "ML",
+            "value": 250.0,
+            "metadata_source": "explicit",
+            "is_verified": true
+          }
+        ],
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "menu_catalog_snapshot_response_empty",
+      "description": "Catalog snapshot when no catalog entries exist for the scope.",
+      "endpoint": "GET /desktop-analytics-sync/menu-catalog-snapshot/latest",
+      "http_status": 200,
+      "payload": {
+        "snapshot_id": null,
+        "version": 1,
+        "generated_at": null,
+        "id_maps": {
+          "menu_id_to_str": {},
+          "variant_id_to_str": {},
+          "type_id_to_str": {}
+        },
+        "items": [],
+        "variants": [],
+        "menu_revision": 0
+      }
+    }
+  ]
+}

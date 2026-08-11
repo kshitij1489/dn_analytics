@@ -1,9 +1,9 @@
 import json
 import sqlite3
 import unittest
+from tests.profile_test_helpers import bind_test_profile
 from unittest.mock import Mock, patch
 
-from src.core.menu_mapping_verification_shipper import upload_pending
 from src.core.menu_mapping_verification_sync import pull_and_apply_menu_mapping_verification_events
 from src.core.menu_mapping_verification_sync_events import (
     record_menu_mapping_verification_events,
@@ -16,6 +16,7 @@ class MenuMappingVerificationSyncTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
+        bind_test_profile(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE menu_items (
@@ -187,26 +188,6 @@ class MenuMappingVerificationSyncTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(row["is_verified"]), 1)
 
-    def test_upload_pending_marks_uploaded(self) -> None:
-        record_menu_mapping_verification_events_chunked(
-            self.conn,
-            [{"order_item_id": "oid-1", "menu_item_id": "m1", "variant_id": "v1", "is_verified": 1}],
-        )
-        self.conn.commit()
-
-        mock_resp = Mock()
-        mock_resp.status_code = 200
-
-        with patch("requests.post", return_value=mock_resp) as post:
-            result = upload_pending(self.conn, endpoint="http://example.test/ingest", auth="secret")
-
-        self.assertEqual(result["events_sent"], 1)
-        self.assertIsNone(result["error"])
-        post.assert_called_once()
-        uploaded = self.conn.execute(
-            "SELECT uploaded_at FROM menu_mapping_verification_sync_events LIMIT 1"
-        ).fetchone()[0]
-        self.assertIsNotNone(uploaded)
     def test_poison_event_is_quarantined_and_cursor_advances(self) -> None:
         # One bad event must not abort the pull without advancing the cursor
         # (the old failure mode); it is quarantined and the stream keeps moving.
@@ -301,51 +282,6 @@ class MenuMappingVerificationSyncTests(unittest.TestCase):
             "SELECT resolved_at FROM menu_sync_event_quarantine WHERE remote_event_id = 'quarantined-1'"
         ).fetchone()
         self.assertIsNotNone(quarantine_row["resolved_at"])
-
-    def test_upload_pending_mixed_accepted_rejected_batch(self) -> None:
-        record_menu_mapping_verification_events(
-            self.conn,
-            [{"order_item_id": "oid-1", "menu_item_id": "m1", "variant_id": "v1", "is_verified": 1}],
-        )
-        record_menu_mapping_verification_events(
-            self.conn,
-            [{"order_item_id": "oid-2", "menu_item_id": "m1", "variant_id": "v1", "is_verified": 1}],
-        )
-        self.conn.commit()
-        event_ids = [
-            str(row[0])
-            for row in self.conn.execute(
-                "SELECT event_id FROM menu_mapping_verification_sync_events ORDER BY created_at ASC, event_id ASC"
-            ).fetchall()
-        ]
-        accepted_id, rejected_id = event_ids
-
-        mock_resp = Mock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "status": "ok",
-            "accepted": [accepted_id],
-            "rejected": [{"remote_event_id": rejected_id, "error": "boom"}],
-        }
-
-        with patch("requests.post", return_value=mock_resp):
-            result = upload_pending(self.conn, endpoint="http://example.test/ingest", auth="secret")
-
-        self.assertIsNone(result["error"])
-        self.assertEqual(result["events_sent"], 1)
-        self.assertEqual(result["events_rejected"], 1)
-
-        rejected_row = self.conn.execute(
-            "SELECT uploaded_at, last_error FROM menu_mapping_verification_sync_events WHERE event_id = ?",
-            (rejected_id,),
-        ).fetchone()
-        self.assertIsNotNone(rejected_row["uploaded_at"])
-        self.assertEqual(rejected_row["last_error"], "boom")
-        quarantine_row = self.conn.execute(
-            "SELECT stream FROM menu_sync_event_quarantine WHERE remote_event_id = ?",
-            (rejected_id,),
-        ).fetchone()
-        self.assertEqual(quarantine_row["stream"], "mapping_verification_push")
 
     def test_bulk_verified_partial_apply(self) -> None:
         """Bulk verified events should apply existing rows immediately and defer the event

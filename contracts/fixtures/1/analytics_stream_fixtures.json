@@ -1,0 +1,342 @@
+{
+  "description": "Raw analytics stream, restaurant-selection and retired-parameter payload fixtures (contract v1.2, §23 and §24). Base path /analytics/ unless the endpoint says otherwise, auth X-API-Key, selector header X-Restaurant-ID (required).",
+  "fixtures": [
+    {
+      "name": "orders_stream_page",
+      "description": "One page of order headers for the selected restaurant (§23.4). aggregate_id is the bare Petpooja order ID and is NOT unique across restaurants.",
+      "endpoint": "GET /analytics/orders/?cursor=0&limit=2",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "data": [
+          {
+            "stream_id": 4181,
+            "event_id": "2c9f0f2f-6a4d-4a1f-8c1a-1f0b9c3d5e77",
+            "aggregate_type": "order",
+            "aggregate_id": "19470",
+            "event_type": "orderdetails",
+            "occurred_at": "2026-08-05T12:04:11.318000+00:00",
+            "raw_event": {
+              "raw_payload": {
+                "event": "orderdetails",
+                "properties": {
+                  "Order": {
+                    "total": 732,
+                    "status": "Success",
+                    "orderID": 19470,
+                    "created_on": "2026-08-05 17:33:59",
+                    "order_from": "Swiggy",
+                    "tax_total": 34.84
+                  },
+                  "Discount": [],
+                  "OrderItem": [
+                    {
+                      "name": "Strawberry Cream Cheese Ice Cream",
+                      "addon": [],
+                      "price": 290,
+                      "total": 290,
+                      "itemid": 1284985341,
+                      "quantity": 1
+                    }
+                  ],
+                  "Restaurant": {
+                    "restID": "1c8w7fp500",
+                    "res_name": "Dach & Nona"
+                  }
+                }
+              },
+              "source": "petpooja",
+              "command_id": "cmd-3f21a0c8"
+            }
+          }
+        ],
+        "cursor": {
+          "cursor": 4181
+        }
+      }
+    },
+    {
+      "name": "orders_stream_page_empty",
+      "description": "A caught-up page. cursor.cursor is null, so the client must keep its own cursor rather than store this one (§23.5).",
+      "endpoint": "GET /analytics/orders/?cursor=4181",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "data": [],
+        "cursor": {
+          "cursor": null
+        }
+      }
+    },
+    {
+      "name": "order_items_stream_page",
+      "description": "Order lines whose current parent header belongs to the selected restaurant. Lines carry order_line_key/line_index; there is no order_pk (§23.4).",
+      "endpoint": "GET /analytics/order-items/?cursor=0&limit=2",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "data": [
+          {
+            "stream_id": 8362,
+            "event_id": "2c9f0f2f-6a4d-4a1f-8c1a-1f0b9c3d5e77",
+            "order_item_id": "1284985341",
+            "order_line_key": "9d2a5f1c0b7e43a68c15d0f27b3e9a4416c8d5027fe391ba64c0d8e75f2a1b3c",
+            "line_index": 0,
+            "raw_item": {
+              "name": "Strawberry Cream Cheese Ice Cream",
+              "addon": [],
+              "price": 290,
+              "total": 290,
+              "itemid": 1284985341,
+              "quantity": 1
+            }
+          }
+        ],
+        "cursor": {
+          "cursor": 8362
+        }
+      }
+    },
+    {
+      "name": "addons_stream_page",
+      "description": "Addon lines pointing at their exact parent line by parent_order_line_key plus line_index/addon_index. Two occurrences of one menu item stay distinguishable, which order_item_pk could never express (§23.4).",
+      "endpoint": "GET /analytics/addons/?cursor=0&limit=2",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "data": [
+          {
+            "stream_id": 1204,
+            "event_id": "2c9f0f2f-6a4d-4a1f-8c1a-1f0b9c3d5e77",
+            "parent_order_line_key": "9d2a5f1c0b7e43a68c15d0f27b3e9a4416c8d5027fe391ba64c0d8e75f2a1b3c",
+            "line_index": 0,
+            "addon_index": 0,
+            "raw_addon": {
+              "name": "Old Fashioned Vanilla Ice Cream",
+              "price": 0,
+              "addon_id": "61458683",
+              "quantity": 1,
+              "group_name": "Choose your Ice Cream",
+              "addon_group_id": 1863734
+            }
+          }
+        ],
+        "cursor": {
+          "cursor": 1204
+        }
+      }
+    },
+    {
+      "name": "discounts_stream_page",
+      "description": "Discount lines, linked to their order by event_id only (§23.4).",
+      "endpoint": "GET /analytics/discounts/?cursor=0&limit=2",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "data": [
+          {
+            "stream_id": 331,
+            "event_id": "2c9f0f2f-6a4d-4a1f-8c1a-1f0b9c3d5e77",
+            "raw_discount": {
+              "type": "F",
+              "price": 10,
+              "title": "Promo"
+            }
+          }
+        ],
+        "cursor": {
+          "cursor": 331
+        }
+      }
+    },
+    {
+      "name": "allowed_restaurants",
+      "description": "The desktop profile selector source. Both branches advertise the same active shared-Petpooja menu-group capabilities; internal sync_scope_key and credential_ref are never exposed (§23.6, §25.3).",
+      "endpoint": "GET /analytics/restaurants/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>"
+      },
+      "http_status": 200,
+      "payload": {
+        "restaurants": [
+          {
+            "restaurant_id": "1c8w7fp500",
+            "display_name": "Dach & Nona",
+            "timezone": "Asia/Kolkata",
+            "menu_group_id": "group-1",
+            "menu_capabilities": [
+              "global_menu_v1",
+              "global_menu_resolution_v1",
+              "global_menu_shared_pos_catalog_v1",
+              "global_menu_aggregation_v1",
+              "global_menu_mutations_v1"
+            ]
+          },
+          {
+            "restaurant_id": "9zz9zz9zz9",
+            "display_name": "Restaurant 2",
+            "timezone": "Asia/Kolkata",
+            "menu_group_id": "group-1",
+            "menu_capabilities": [
+              "global_menu_v1",
+              "global_menu_resolution_v1",
+              "global_menu_shared_pos_catalog_v1",
+              "global_menu_aggregation_v1",
+              "global_menu_mutations_v1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "allowed_restaurants_ungranted",
+      "description": "A credential with no configured grant is authorized for no restaurant; there is no implicit default (§23.6).",
+      "endpoint": "GET /analytics/restaurants/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>"
+      },
+      "http_status": 200,
+      "payload": {
+        "restaurants": []
+      }
+    },
+    {
+      "name": "error_selector_missing",
+      "description": "No X-Restaurant-ID. The server never picks a restaurant for the caller (§23.2).",
+      "endpoint": "GET /analytics/orders/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "X-Restaurant-ID is required.",
+        "code": "restaurant_selector_missing"
+      }
+    },
+    {
+      "name": "error_selector_invalid",
+      "description": "Header present but blank after ASCII-space trimming (§23.2).",
+      "endpoint": "GET /analytics/orders/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "   "
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "X-Restaurant-ID must be a non-empty restaurant ID.",
+        "code": "restaurant_selector_invalid"
+      }
+    },
+    {
+      "name": "error_restaurant_forbidden",
+      "description": "A valid credential asked for a restaurant it has no grant for. Returned whether or not the restaurant exists, so a credential cannot enumerate the registry (§23.2).",
+      "endpoint": "GET /analytics/order-items/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "9zz9zz9zz9"
+      },
+      "http_status": 403,
+      "payload": {
+        "error": "This credential is not authorized for restaurant '9zz9zz9zz9'.",
+        "code": "restaurant_forbidden"
+      }
+    },
+    {
+      "name": "error_unknown_restaurant",
+      "description": "The credential is granted a restaurant this deployment does not configure — an operator misconfiguration, not a client error (§23.2).",
+      "endpoint": "GET /analytics/orders/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "not-configured"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "Restaurant 'not-configured' is not configured.",
+        "code": "unknown_restaurant"
+      }
+    },
+    {
+      "name": "error_invalid_page_parameter",
+      "description": "cursor and limit are integers; limit is at least 1 and clamped to 5000 (§23.5).",
+      "endpoint": "GET /analytics/orders/?cursor=abc",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "'cursor' must be an integer.",
+        "code": "invalid_page_parameter"
+      }
+    },
+    {
+      "name": "error_invalid_api_key",
+      "description": "The analytics streams authenticate with X-API-Key, not the sync Bearer token. Checked before any selection (§23.4).",
+      "endpoint": "GET /analytics/orders/",
+      "request_headers": {
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 403,
+      "payload": {
+        "error": "invalid api key"
+      }
+    },
+    {
+      "name": "error_sync_scope_forbidden",
+      "description": "The same selector rules on a /desktop-analytics-sync/ route: the shared Bearer token's grants come from SYNC_RESTAURANT_GRANTS (§4.2, §23.3).",
+      "endpoint": "GET /desktop-analytics-sync/customer-merges",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "9zz9zz9zz9"
+      },
+      "http_status": 403,
+      "payload": {
+        "error": "This credential is not authorized for restaurant '9zz9zz9zz9'.",
+        "code": "restaurant_forbidden"
+      }
+    },
+    {
+      "name": "error_selector_in_query_string",
+      "description": "A selector-shaped query parameter is refused before the header is read. Ignoring it is the one silent case that matters: a header naming one restaurant and a query string naming another would be answered with the header's rows (§24).",
+      "endpoint": "GET /analytics/orders/?restaurant_id=9zz9zz9zz9",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "Restaurant selection uses the X-Restaurant-ID header, not the query string; remove restaurant_id.",
+        "code": "restaurant_selector_not_a_parameter"
+      }
+    },
+    {
+      "name": "error_retired_query_parameter",
+      "description": "legacy and scope_key are refused on every scoped /desktop-analytics-sync/ route, before the selector resolves, so a client learns the real reason rather than a selector error (§24).",
+      "endpoint": "GET /desktop-analytics-sync/customer-merges?scope_key=default",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "Retired query parameter(s): scope_key. The restaurant selector decides the scope, and the legacy forecast payload no longer exists.",
+        "code": "retired_parameter"
+      }
+    }
+  ]
+}

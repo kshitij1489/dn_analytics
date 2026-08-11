@@ -1,0 +1,156 @@
+{
+  "description": "Shared customer merge event fixtures for parity between the desktop analytics client and the Dachnona server.",
+  "fixtures": [
+    {
+      "name": "customer_merge_applied",
+      "event": {
+        "remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+        "schema_version": 1,
+        "event_type": "customer_merge.applied",
+        "occurred_at": "2024-02-05 12:00:00",
+        "attribution": {
+          "employee": {
+            "employee_id": "0001",
+            "name": "Owner"
+          },
+          "device": {
+            "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+            "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+            "device_label": "MacBook-Pro",
+            "platform": "Darwin",
+            "platform_release": "24.5.0",
+            "machine": "arm64"
+          }
+        },
+        "source_customer": {
+          "snapshot": {
+            "name": "Rahul Sharma",
+            "phone": "9999999999",
+            "address": "HSR Layout",
+            "gstin": null,
+            "total_orders": 1,
+            "total_spent": 80.0,
+            "last_order_date": "2024-02-03 10:00:00",
+            "is_verified": false
+          },
+          "portable_locators": {
+            "customer_identity_key": "phone:source",
+            "phone_hash": "8c1f1046219ddd216a023f792356ddf127fce372a8d304f8115b01f9501ef7c3",
+            "name_address_hash": "7cb95a5f8f495f7b4454d7b2207c1c12ab57f2e1d1d5656e2e6ae4d3e15cf287",
+            "name_normalized": "rahul sharma",
+            "address_normalized": "hsr layout",
+            "address_book_hashes": [
+              "93d0a31ea8c636f0f4096f3c490769f2f255f78e7baf8854b45ea0f59052785e"
+            ]
+          }
+        },
+        "target_customer": {
+          "snapshot": {
+            "name": "Rahul S.",
+            "phone": null,
+            "address": "HSR Layout",
+            "gstin": null,
+            "total_orders": 1,
+            "total_spent": 120.0,
+            "last_order_date": "2024-02-04 10:00:00",
+            "is_verified": false
+          },
+          "portable_locators": {
+            "customer_identity_key": "addr:target",
+            "phone_hash": null,
+            "name_address_hash": "c2e16ebf6f3f5f7dab2db4b74df4c8f3817afef27506f3ccb452fc6d33f34551",
+            "name_normalized": "rahul s.",
+            "address_normalized": "hsr layout",
+            "address_book_hashes": [
+              "93d0a31ea8c636f0f4096f3c490769f2f255f78e7baf8854b45ea0f59052785e"
+            ]
+          }
+        },
+        "merge_metadata": {
+          "similarity_score": 0.98,
+          "model_name": "duplicate_matcher_v1",
+          "reasons": [
+            "phone exact match"
+          ],
+          "copied_address_count": 0,
+          "target_before_fields": {
+            "phone": null,
+            "address": "HSR Layout",
+            "gstin": null,
+            "is_verified": false
+          },
+          "target_is_verified_after_merge": true,
+          "mark_target_verified": true
+        },
+        "moved_orders": {
+          "count": 1,
+          "portable_refs": [
+            {
+              "petpooja_order_id": "PP-101",
+              "stream_id": 5001,
+              "event_id": "evt-101",
+              "aggregate_id": "agg-101",
+              "created_on": "2024-02-03 10:00:00",
+              "total": 80.0,
+              "local_order_id": 101
+            }
+          ]
+        },
+        "local_refs": {
+          "merge_id": 999,
+          "source_customer_id": 11,
+          "target_customer_id": 22,
+          "moved_order_ids": [
+            444
+          ],
+          "inserted_target_address_ids": [],
+          "removed_target_address_ids": []
+        }
+      }
+    },
+    {
+      "name": "customer_merge_undone",
+      "event": {
+        "remote_event_id": "74fc71320f9b4b598c7dcb2f6de716ef",
+        "schema_version": 1,
+        "event_type": "customer_merge.undone",
+        "occurred_at": "2024-02-05 13:00:00",
+        "reverts_remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+        "attribution": {
+          "employee": {
+            "employee_id": "0001",
+            "name": "Owner"
+          },
+          "device": {
+            "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+            "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+            "device_label": "MacBook-Pro",
+            "platform": "Darwin",
+            "platform_release": "24.5.0",
+            "machine": "arm64"
+          }
+        },
+        "source_customer": {},
+        "target_customer": {},
+        "merge_metadata": {},
+        "undo_metadata": {
+          "restored_order_count": 1,
+          "restored_target_fields": [
+            "address",
+            "gstin",
+            "is_verified",
+            "phone"
+          ],
+          "original_merged_at": "2024-02-05 12:00:00"
+        },
+        "moved_orders": {
+          "count": 1,
+          "portable_refs": []
+        },
+        "local_refs": {
+          "merge_id": 999
+        }
+      }
+    }
+  ]
+}

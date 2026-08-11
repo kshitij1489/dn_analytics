@@ -11,6 +11,8 @@ from typing import Dict, List, Any, Optional, Tuple
 
 from ai_mode.cache import get_or_call, normalize_prompt
 from ai_mode.llm.client import get_ai_client, get_ai_model
+from ai_mode.llm.completion import chat_completion
+from ai_mode.llm.schemas import FollowUpResult, ReplyToClarificationResult
 from ai_mode.prompts.prompt_ai_mode import (
     FOLLOW_UP_DETECTION_PROMPT,
     CONTEXT_REWRITE_PROMPT,
@@ -62,33 +64,30 @@ def get_previous_user_question(history: Optional[List[Dict[str, Any]]]) -> Optio
 def _is_follow_up_impl(
     conn, current_message: str, previous_user_question: str
 ) -> bool:
-    """Call LLM to detect if current_message is a follow-up. Returns False on error."""
+    """Call LLM to detect if current_message is a follow-up. Raises on LLM error (so failures are not cached)."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    try:
-        user_content = f"""Previous user question: {previous_user_question}
+    user_content = f"""Previous user question: {previous_user_question}
 Current user message: {current_message}"""
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": FOLLOW_UP_DETECTION_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0,
-            max_tokens=150,
-            response_format={"type": "json_object"},
-        )
-        out = json.loads(response.choices[0].message.content or "{}")
-        return out.get("is_follow_up", False)
-    except Exception as e:
-        print(f"⚠️ Follow-up detection failed, treating as standalone: {e}")
-        return False
+    response = chat_completion(
+        client, "is_follow_up", model,
+        messages=[
+            {"role": "system", "content": FOLLOW_UP_DETECTION_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0,
+        max_tokens=150,
+        response_format={"type": "json_object"},
+    )
+    out = FollowUpResult.model_validate(json.loads(response.choices[0].message.content or "{}"))
+    return out.is_follow_up
 
 
 def is_follow_up(conn, current_message: str, previous_user_question: str) -> bool:
     """
     Determine if current_message is a follow-up that continues previous_user_question.
-    Uses LLM with FOLLOW_UP_DETECTION_PROMPT. Returns False on error or no API.
+    Uses LLM with FOLLOW_UP_DETECTION_PROMPT. Returns False on error or no API
+    (the error fallback is never cached).
     Cached by (model, current_message, previous_user_question).
     """
     if not current_message or not previous_user_question:
@@ -99,35 +98,35 @@ def is_follow_up(conn, current_message: str, previous_user_question: str) -> boo
         return False
     key_current = normalize_prompt(current_message)
     key_previous = normalize_prompt(previous_user_question)
-    return get_or_call(
-        "is_follow_up",
-        (model, key_current, key_previous),
-        lambda: _is_follow_up_impl(conn, current_message, previous_user_question),
-    )
+    try:
+        return get_or_call(
+            "is_follow_up",
+            (model, key_current, key_previous),
+            lambda: _is_follow_up_impl(conn, current_message, previous_user_question),
+        )
+    except Exception as e:
+        print(f"⚠️ Follow-up detection failed, treating as standalone: {e}")
+        return False
 
 
 def _rewrite_with_context_impl(
     conn, current_message: str, previous_user_question: str
 ) -> str:
-    """Call LLM to rewrite follow-up into standalone question. Returns current_message on error."""
+    """Call LLM to rewrite follow-up into standalone question. Raises on LLM error (so failures are not cached)."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    try:
-        prompt = CONTEXT_REWRITE_PROMPT.format(
-            previous_question=previous_user_question,
-            current_message=current_message,
-        )
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=300,
-        )
-        rewritten = (response.choices[0].message.content or "").strip()
-        return rewritten if rewritten else current_message
-    except Exception as e:
-        print(f"⚠️ Context rewrite failed, using original: {e}")
-        return current_message
+    prompt = CONTEXT_REWRITE_PROMPT.format(
+        previous_question=previous_user_question,
+        current_message=current_message,
+    )
+    response = chat_completion(
+        client, "rewrite_with_context", model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=300,
+    )
+    rewritten = (response.choices[0].message.content or "").strip()
+    return rewritten if rewritten else current_message
 
 
 def rewrite_with_context(
@@ -135,7 +134,7 @@ def rewrite_with_context(
 ) -> str:
     """
     Rewrite the follow-up message into a standalone question using the previous user question.
-    Returns the rewritten string, or current_message on error.
+    Returns the rewritten string, or current_message on error (the error fallback is never cached).
     Cached by (model, current_message, previous_user_question).
     """
     if not current_message or not previous_user_question:
@@ -146,13 +145,17 @@ def rewrite_with_context(
         return current_message
     key_current = normalize_prompt(current_message)
     key_previous = normalize_prompt(previous_user_question)
-    return get_or_call(
-        "rewrite_with_context",
-        (model, key_current, key_previous),
-        lambda: _rewrite_with_context_impl(
-            conn, current_message, previous_user_question
-        ),
-    )
+    try:
+        return get_or_call(
+            "rewrite_with_context",
+            (model, key_current, key_previous),
+            lambda: _rewrite_with_context_impl(
+                conn, current_message, previous_user_question
+            ),
+        )
+    except Exception as e:
+        print(f"⚠️ Context rewrite failed, using original: {e}")
+        return current_message
 
 
 def resolve_follow_up(
@@ -182,31 +185,27 @@ def _resolve_reply_to_clarification_impl(
     previous_user_question: str,
     current_message: str,
 ) -> List[Any]:
-    """Call LLM; return [is_reply, effective_query] for JSON cache storage."""
+    """Call LLM; return [is_reply, effective_query] for JSON cache storage. Raises on LLM error (so failures are not cached)."""
     client = get_ai_client(conn)
     model = get_ai_model(conn)
-    try:
-        user_content = f"""Assistant asked: {clarification_text}
+    user_content = f"""Assistant asked: {clarification_text}
 Previous user question: {previous_user_question}
 User now said: {current_message}"""
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0,
-            max_tokens=300,
-            response_format={"type": "json_object"},
-        )
-        out = json.loads(response.choices[0].message.content or "{}")
-        is_reply = out.get("is_reply_to_clarification", False)
-        rewritten = (out.get("rewritten_query") or "").strip()
-        effective = rewritten if (is_reply and rewritten) else current_message
-        return [is_reply, effective]
-    except Exception as e:
-        print(f"⚠️ Reply-to-clarification failed, treating as new query: {e}")
-        return [False, current_message]
+    response = chat_completion(
+        client, "resolve_reply_to_clarification", model,
+        messages=[
+            {"role": "system", "content": REPLY_TO_CLARIFICATION_AND_REWRITE_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0,
+        max_tokens=300,
+        response_format={"type": "json_object"},
+    )
+    out = ReplyToClarificationResult.model_validate(json.loads(response.choices[0].message.content or "{}"))
+    is_reply = out.is_reply_to_clarification
+    rewritten = (out.rewritten_query or "").strip()
+    effective = rewritten if (is_reply and rewritten) else current_message
+    return [is_reply, effective]
 
 
 def resolve_reply_to_clarification(
@@ -230,14 +229,18 @@ def resolve_reply_to_clarification(
     key_clar = normalize_prompt(clarification_text)
     key_previous = normalize_prompt(previous_user_question)
     key_current = normalize_prompt(current_message)
-    result = get_or_call(
-        "resolve_reply_to_clarification",
-        (model, key_clar, key_previous, key_current),
-        lambda: _resolve_reply_to_clarification_impl(
-            conn,
-            clarification_text,
-            previous_user_question,
-            current_message,
-        ),
-    )
-    return (result[0], result[1])
+    try:
+        result = get_or_call(
+            "resolve_reply_to_clarification",
+            (model, key_clar, key_previous, key_current),
+            lambda: _resolve_reply_to_clarification_impl(
+                conn,
+                clarification_text,
+                previous_user_question,
+                current_message,
+            ),
+        )
+        return (result[0], result[1])
+    except Exception as e:
+        print(f"⚠️ Reply-to-clarification failed, treating as new query: {e}")
+        return (False, current_message)

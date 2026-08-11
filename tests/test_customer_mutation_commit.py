@@ -3,6 +3,7 @@ import json
 import sqlite3
 import unittest
 from unittest.mock import Mock, patch
+from tests.profile_test_helpers import bind_test_profile
 
 from src.core.customer_merge_sync import (
     apply_remote_customer_merge_event,
@@ -14,7 +15,6 @@ from src.core.customer_merge_sync_events import (
     EVENT_TYPE_APPLIED,
     SCHEMA_VERSION,
     build_merge_applied_event_payload,
-    record_merge_applied_event,
 )
 from src.core.customer_mutation_commit import (
     LOCAL_APPLY_FAILED_MESSAGE,
@@ -30,11 +30,7 @@ from src.core.customer_mutation_commit import (
     strict_mode_ready,
 )
 from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
-from src.core.sync_identity import (
-    get_customer_state_revision,
-    set_customer_state_revision,
-    set_customer_strict_mode_enabled,
-)
+from src.core.sync_identity import get_customer_state_revision, set_customer_state_revision
 
 
 def _conn_with_cloud_config(url=None, api_key="k"):
@@ -57,6 +53,7 @@ def _conn_with_cloud_config(url=None, api_key="k"):
             (api_key,),
         )
     conn.commit()
+    bind_test_profile(conn)
     return conn
 
 
@@ -202,6 +199,7 @@ def _customer_merge_db() -> sqlite3.Connection:
         [(101, "m_burger", "Burger", 1), (102, "m_fries", "Fries", 2)],
     )
     conn.commit()
+    bind_test_profile(conn)
     return conn
 
 
@@ -223,19 +221,15 @@ class CustomerStrictModeGateTests(unittest.TestCase):
         set_customer_state_revision(conn, 3)
         self.assertTrue(strict_mode_ready(conn))
 
-    def test_active_requires_flag_and_readiness(self) -> None:
+    def test_active_true_when_ready(self) -> None:
         conn = _conn_with_cloud_config(url="https://cloud.example")
         self.addCleanup(conn.close)
         set_customer_state_revision(conn, 3)
-        self.assertFalse(strict_mode_active(conn))
-
-        set_customer_strict_mode_enabled(conn, True)
         self.assertTrue(strict_mode_active(conn))
 
-    def test_active_false_when_flag_on_but_not_ready(self) -> None:
+    def test_active_false_when_not_ready(self) -> None:
         conn = _conn_with_cloud_config(url=None)
         self.addCleanup(conn.close)
-        set_customer_strict_mode_enabled(conn, True)
         self.assertFalse(strict_mode_active(conn))
 
 
@@ -295,35 +289,6 @@ class CustomerMutationBuildingBlocksTests(unittest.TestCase):
         finally:
             capture_conn.close()
             peer_conn.close()
-
-    def test_record_merge_applied_event_matches_build_plus_insert(self) -> None:
-        conn = _customer_merge_db()
-        try:
-            merge_result = merge_customers(
-                conn,
-                "1",
-                "2",
-                similarity_score=0.98,
-                model_name="duplicate_matcher_v1",
-                reasons=["phone exact match"],
-            )
-            self.assertEqual(merge_result["status"], "success")
-            row = conn.execute(
-                "SELECT payload FROM customer_merge_sync_events WHERE merge_id = ?",
-                (merge_result["merge_id"],),
-            ).fetchone()
-            self.assertIsNotNone(row)
-            stored_payload = json.loads(row["payload"])
-            self.assertEqual(stored_payload["schema_version"], SCHEMA_VERSION)
-            self.assertEqual(stored_payload["event_type"], EVENT_TYPE_APPLIED)
-            expected_phone_hash = hashlib.sha256("9999999999".encode("utf-8")).hexdigest()
-            self.assertEqual(
-                stored_payload["source_customer"]["portable_locators"]["phone_hash"],
-                expected_phone_hash,
-            )
-        finally:
-            conn.close()
-
 
 class CustomerMutationCommitFlowTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -665,7 +630,6 @@ class CustomerStrictModeMergeTests(unittest.TestCase):
             "INSERT INTO system_config (key, value) VALUES ('cloud_sync_api_key', 'secret')"
         )
         set_customer_state_revision(self.conn, 10)
-        set_customer_strict_mode_enabled(self.conn, True)
         self.conn.commit()
 
     def tearDown(self) -> None:
@@ -718,8 +682,25 @@ class CustomerStrictModeMergeTests(unittest.TestCase):
     @patch("requests.post")
     def test_strict_mode_undo_without_reverts_target_fails_locally(self, mock_post, _mock_cfg) -> None:
         """Strict undo must not mint a dangling reverts_remote_event_id and POST a 422."""
-        set_customer_strict_mode_enabled(self.conn, False)
-        self.conn.commit()
+
+        def _capture_post(*_args, **kwargs):
+            event = kwargs["json"]["event"]
+            accepted = {
+                "status": "accepted",
+                "mutation_id": kwargs["json"]["mutation_id"],
+                "customer_revision": 11,
+                "accepted_events": [
+                    {
+                        "remote_event_id": event["remote_event_id"],
+                        "server_seq": 55,
+                        "server_ingested_at": "2026-07-06T10:00:00Z",
+                    }
+                ],
+                "customer_merge_cursor": "cursor-1",
+            }
+            return Mock(status_code=200, content=json.dumps(accepted), json=lambda: accepted)
+
+        mock_post.side_effect = _capture_post
 
         merge_result = merge_customers(
             self.conn,
@@ -732,6 +713,9 @@ class CustomerStrictModeMergeTests(unittest.TestCase):
         self.assertEqual(merge_result["status"], "success")
         merge_id = merge_result["merge_id"]
 
+        # Simulate a merge whose applied-event reference is missing (data
+        # predating this bookkeeping, or corrupted) so the strict undo has
+        # nothing to revert.
         self.conn.execute(
             "DELETE FROM customer_merge_sync_events WHERE merge_id = ?",
             (merge_id,),
@@ -752,9 +736,7 @@ class CustomerStrictModeMergeTests(unittest.TestCase):
             ),
         )
         self.conn.commit()
-
-        set_customer_strict_mode_enabled(self.conn, True)
-        self.conn.commit()
+        mock_post.reset_mock()
 
         undo_result = undo_customer_merge(self.conn, merge_id)
 

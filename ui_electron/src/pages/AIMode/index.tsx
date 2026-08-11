@@ -41,6 +41,8 @@ export default function AIMode() {
 
     const { suggestions, showSuggestions, setShowSuggestions, loadSuggestions } = useSuggestions();
     const debug = useDebug();
+    // Most recent AI message with a query_id — used to key the per-step trace panel (§4).
+    const lastQueryId = [...messages].reverse().find(m => m.role === 'ai' && m.query_id)?.query_id;
     const cacheEntries = useCacheEntries();
     const chat = useChat({
         messages,
@@ -55,6 +57,7 @@ export default function AIMode() {
         setConversationId: conversations.setConversationId,
         loadConversations: conversations.loadConversations,
         loadDebugLogs: debug.loadDebugLogs,
+        loadTelemetry: debug.loadTelemetry,
         setDebugLogEntries: (entries) => debug.setDebugLogEntries(entries)
     });
 
@@ -130,7 +133,7 @@ export default function AIMode() {
                 }}
                 debug={{
                     show: debug.showDebug,
-                    onToggle: debug.handleDebug
+                    onToggle: () => debug.handleDebug(lastQueryId)
                 }}
                 onNewChat={conversations.startNewConversation}
                 messageCount={messages.length}
@@ -205,6 +208,8 @@ export default function AIMode() {
             {debug.showDebug && (
                 <DebugOverlay
                     entries={debug.debugLogEntries}
+                    trace={debug.traceEntries}
+                    counters={debug.cacheCounters}
                     onClose={() => debug.setShowDebug(false)}
                 />
             )}

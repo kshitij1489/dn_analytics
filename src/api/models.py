@@ -35,26 +35,69 @@ class VariantMappingRequest(BaseModel):
 
 # --- Menu Management Models ---
 
-class MergeRequest(BaseModel):
+class GlobalMenuPreviewReference(BaseModel):
+    """Opaque server preview fields; ignored by legacy restaurant mode."""
+    global_mutation_id: Optional[str] = None
+    global_preview_digest: Optional[str] = None
+    global_menu_group_id: Optional[str] = None
+    global_preview_revision: Optional[int] = None
+    global_coverage_complete: Optional[bool] = None
+    global_conflicts: Optional[List[Dict[str, Any]]] = None
+    global_mutation_type: Optional[str] = None
+    global_mutation_payload: Optional[Dict[str, Any]] = None
+
+
+class GlobalMenuMutationPreviewRequest(BaseModel):
+    mutation_type: str
+    payload: Dict[str, Any]
+    mutation_id: Optional[str] = None
+
+
+class GlobalMenuLocalMutationPreviewRequest(BaseModel):
+    mutation_type: str
+    source_local_menu_item_id: Optional[str] = None
+    source_local_variant_id: Optional[str] = None
+    target_local_menu_item_id: Optional[str] = None
+    target_local_variant_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    mutation_id: Optional[str] = None
+
+
+class GlobalMenuMutationCommitRequest(GlobalMenuPreviewReference):
+    pass
+
+
+class GlobalMenuResolutionContextRequest(BaseModel):
+    local_menu_item_id: str
+    local_variant_id: Optional[str] = None
+
+
+class MergeRequest(GlobalMenuPreviewReference):
     """Request to merge two menu items"""
     source_id: str
     target_id: str
     variant_mappings: Optional[List[VariantMappingRequest]] = None
 
 
-class UndoMergeRequest(BaseModel):
+class UndoMergeRequest(GlobalMenuPreviewReference):
     """Request to undo a menu item merge"""
     merge_id: int
 
 
-class RemapRequest(BaseModel):
+class RetypeMenuItemRequest(GlobalMenuPreviewReference):
+    """Request to change a menu item's type, keeping its name"""
+    menu_item_id: str
+    new_type: str
+
+
+class RemapRequest(GlobalMenuPreviewReference):
     """Request to remap an order item to different menu item/variant"""
     order_item_id: str
     new_menu_item_id: str
     new_variant_id: str
 
 
-class CreateVariantTypeRequest(BaseModel):
+class CreateVariantTypeRequest(GlobalMenuPreviewReference):
     """Request to create a new variant type from the Variants tab."""
     variant_name: str
     description: Optional[str] = None
@@ -62,14 +105,14 @@ class CreateVariantTypeRequest(BaseModel):
     value: Optional[float] = None
 
 
-class UpdateVariantMappingRequest(BaseModel):
+class UpdateVariantMappingRequest(GlobalMenuPreviewReference):
     """Request to update an existing menu item + variant mapping to a new variant."""
     menu_item_id: str
     current_variant_id: str
     new_variant_id: str
 
 
-class VerifyRequest(BaseModel):
+class VerifyRequest(GlobalMenuPreviewReference):
     """Request to verify a menu item, optionally renaming it"""
     menu_item_id: str
     new_name: Optional[str] = None
@@ -77,7 +120,7 @@ class VerifyRequest(BaseModel):
     new_variant_id: Optional[str] = None
 
 
-class ResolveVariantRequest(BaseModel):
+class ResolveVariantRequest(GlobalMenuPreviewReference):
     """Resolve a single unresolved menu item + variant pair."""
     source_menu_item_id: str
     source_variant_id: str

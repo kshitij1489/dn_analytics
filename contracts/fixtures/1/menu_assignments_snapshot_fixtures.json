@@ -1,0 +1,51 @@
+{
+  "description": "Menu assignments snapshot payload fixtures for 100% coverage (contract v1.4). Global group metadata is always present so a client can validate assignment identity before applying rows.",
+  "fixtures": [
+    {
+      "name": "menu_assignments_snapshot_response",
+      "endpoint": "GET /desktop-analytics-sync/menu-assignments/snapshot",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": null,
+        "menu_group_revision": null,
+        "assignments": [
+          {
+            "order_item_id": "101",
+            "menu_item_id": "item_target",
+            "variant_id": null,
+            "is_verified": 1,
+            "last_seq": 123,
+            "last_verification_seq": 45,
+            "last_event_id": "fx-v1-basic",
+            "petpooja_itemid": "PP-ITEM-1"
+          }
+        ],
+        "watermark_seq": 123,
+        "watermark_cursor": "menu-merge-cursor-0123",
+        "verification_watermark_seq": 45,
+        "verification_watermark_cursor": "verification-cursor-0045",
+        "next_page": "101",
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "menu_assignments_snapshot_response_empty",
+      "description": "Last page or empty scope — no assignments, next_page is null.",
+      "endpoint": "GET /desktop-analytics-sync/menu-assignments/snapshot",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": null,
+        "menu_group_revision": null,
+        "assignments": [],
+        "watermark_seq": 123,
+        "watermark_cursor": "menu-merge-cursor-0123",
+        "verification_watermark_seq": 45,
+        "verification_watermark_cursor": "verification-cursor-0045",
+        "next_page": null,
+        "menu_revision": 42
+      }
+    }
+  ]
+}

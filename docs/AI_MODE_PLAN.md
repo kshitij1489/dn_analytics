@@ -1,8 +1,56 @@
 # AI Mode — Plan & Task List
 
-**Status: All phases complete.**
+**Status: All phases complete.** Hardened post-completion (2026-07-11 → 2026-07-12) for cost/observability, concurrency, SQL safety, and prompt single-sourcing — see **[Revised behavior & hardening](#revised-behavior--hardening-2026-07-11--2026-07-12)** below.
 
 This document is the single plan for AI Mode. It merges the former **Error / Crash Report Logging** and **LLM Response Cache** plans; see sections below and **Future plan of actions** for improvements (e.g. error-log concurrency, summary/report cache deferral).
+
+---
+
+## Revised behavior & hardening (2026-07-11 → 2026-07-12)
+
+Post-completion pass over the finished pipeline — cost/observability, concurrency, SQL safety, and prompt single-sourcing. Commits `2930a158`, `3b609191`, `cca21bbd`. Behavior is unchanged for callers; the pipeline is now instrumented, thread-safe, read-only on AI paths, and driven by a single prompt source.
+
+### Telemetry — per-query cost / latency / cache-effectiveness
+
+- **Request-scoped trace.** `ai_mode/telemetry.py` holds a `ContextVar` trace list, started per request (`start_trace()` in the orchestrator). Each LLM round-trip and cache hit appends one entry: `step`, `source` (`llm` | `cache`), `model`, `latency_ms`, `prompt_tokens`, `completion_tokens`. A `ContextVar` (not a module global) so concurrent requests never clobber each other.
+- **Single completion choke point.** `ai_mode/llm/completion.py::chat_completion(client, step, model, **kwargs)` wraps every non-streaming `chat.completions.create`, timing it and recording `response.usage` tokens (previously discarded). Streaming handlers record their own telemetry (usage arrives on the final chunk).
+- **Aggregation + persistence.** `summarize(trace)` rolls the trace into `ai_logs` columns — `model`, `total_prompt_tokens`, `total_completion_tokens`, `llm_calls` (cache misses), `cache_hits` — and the full per-step trace persists to the new `ai_call_trace` table (`persist_call_trace`, keyed by `query_id`). `execution_time_ms` is logged too.
+- **Cumulative cache counters.** `llm_cache_counters(call_id, hits, misses)` tracks hit/miss per `call_id` across all queries (bumped in `get_or_call` and the diversity path) for cache-effectiveness reporting.
+- **Debug endpoints.** `GET /api/ai/debug/trace/{query_id}` (per-step trace), `GET /api/ai/debug/cache-counters` (cumulative counters), `GET /api/ai/debug/cache-entries` + `PATCH …/{key_hash}` (list / human-flag entries).
+- **Cloud shipping.** `client_learning_shipper` ships the per-step `ai_call_trace` rows alongside each `ai_logs` batch (bounded by the batch's `query_id`s) to central §18. Accept-marking tightened (`13de4d1b`): `feedback_id` is compared as a string so echoed values match, and log-upload marking is withheld when the server short-counts trace rows so logs and traces retry together.
+
+### Single-source prompts (TS copy removed)
+
+- The hand-maintained TS prompt copy `ui_electron/src/constants/prompts.ts` is **deleted** (−294 lines) — this resolves the code-duplication risk flagged under *Observations / Risks*.
+- The SQL Console "LLM Prompt" tab now fetches from the backend: `GET /api/ai/prompt-context` → `build_console_sql_prompt()` (`ai_mode/llm/sql_gen.py`), which renders `SQL_CONSOLE_PROMPT` with the curated schema.
+- Python `ai_mode/prompts/prompt_ai_mode.py` is the single source of truth. Shared schema/date blocks are factored so the two variants stay in lockstep and diverge only where they must: `SQL_GENERATION_PROMPT` (AI Mode; the server injects IST business-day literals) vs `SQL_CONSOLE_PROMPT` (pasteable; uses SQLite `datetime('now','localtime')` since the pasted text has no server to inject dates).
+
+### Curated schema context
+
+- `ai_mode/llm/schema.py::get_schema_context()` now emits an **allowlist** of analytics tables/views only (`ALLOWLIST_TABLES`: restaurants, customers, menu_items, variants, orders, order_items, order_item_addons, weather_daily, …) instead of the full ~900-line DDL. Cuts ~7–8k tokens per SQL/chart call and stops the model querying internal sync/merge/forecast/AI-log plumbing.
+- With a live `conn` it introspects `sqlite_master`, so the schema — and `get_schema_hash()`, used in LLM cache keys — reflects the **actual migrated DB**, fixing packaged-app drift where the shipped file and live DB differ. Without a conn (the console prompt endpoint) it falls back to introspecting the shipped schema file in an in-memory DB. `clear_schema_cache()` drops the file-based cache after editing `schema_sqlite.sql` in dev.
+
+### Read-only SQL enforcement (defense in depth)
+
+- Every AI SQL/chart execution path runs `ensure_read_only_sql()` (first token must be `SELECT`/`WITH`; blocks hallucinated or prompt-injected `UPDATE`/`DELETE`/`DROP`) then `read_sql_readonly()`, which opens a **separate read-only handle** to the DB file (`file:…?mode=ro` URI + `PRAGMA query_only=1`). Even if the guard were bypassed, the engine itself rejects the write. In-memory test DBs fall back to the shared connection.
+- The human SQL Console (`/api/sql/query`) deliberately still allows writes; only the AI paths are locked down.
+
+### Cache hardening
+
+- **Human-flagged entries treated as misses.** An entry with `is_incorrect=1` (set via the cache-entries `PATCH`, human feedback) returns `None` from `_get` — the row is kept for cloud learning but never served; a fresh value written later clears the flag.
+- **Error fallbacks never cached.** `fn()` exceptions propagate out of `get_or_call` uncached, so a transient LLM failure is never stored as the answer for a key.
+- **`business_today` in the chart cache key.** Chart configs are keyed by `(model, schema_hash, business_today, normalized_prompt)` because generated SQL embeds literal date boundaries; without the date a stale config would replay yesterday's window.
+
+### Race-free debug log + concurrency
+
+- Per-query debug entries persist to the new `ai_debug_log` table keyed by `query_id` (`persist_debug_log`); `GET /api/ai/debug/logs` reads from there (`fetch_debug_entries`). This replaces the old cross-request in-memory global that leaked one request's steps into another request's panel. `ai_mode/debug_log.py` is now `ContextVar`-only.
+- Blocking LLM steps in `process_chat` (`correct_query`, `resolve_reply_to_clarification`, `resolve_follow_up`, `classify_intent`, each action handler) run via `asyncio.to_thread`, so a slow OpenAI call no longer stalls the FastAPI event loop and concurrent chat requests stay responsive. `to_thread` copies the context, so the telemetry and debug `ContextVar`s reach the worker threads.
+
+### Schema additions (`database/schema_sqlite.sql`)
+
+- `ai_logs`: `model`, `total_prompt_tokens`, `total_completion_tokens`, `llm_calls`, `cache_hits`, `execution_time_ms`.
+- New `ai_call_trace` (per-step telemetry; `query_id` FK, cascade delete) and `ai_debug_log` (per-step debug preview; `query_id` FK, cascade delete).
+- Cache DB (created lazily): `llm_cache.is_incorrect` column + `llm_cache_counters` table.
 
 ## Your Flow (Validated)
 
@@ -12,7 +60,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 |------|------------------|---------------|--------|
 | 1 | Incoming query: Electron UI → Python FastAPI | ✅ Done | None |
 | 2 | Python server = AI brain | ✅ Done | None |
-| 3a | User question → API | ✅ Done (`/ai/chat`, `AIMode.tsx`) | None |
+| 3a | User question → API | ✅ Done (`/ai/chat`, `AIMode/index.tsx`) | None |
 | 3b | Spelling correction (small LLM) | ✅ Done (`ai_mode/llm/spelling.py`) | None |
 | 3c | Intent recognition (LLM) | ✅ Done (`classify_intent`) | None |
 | 3d | Decide sequence of actions from intent | ✅ Done (`planner`, `actions`) | None |
@@ -26,7 +74,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 ## Architecture (Confirmed)
 
 ```
-[Electron UI - AIMode.tsx]
+[Electron UI - AIMode/index.tsx]
          │
          │ POST /api/ai/chat  { prompt, history }
          ▼
@@ -81,7 +129,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 ### UI & observability
 
 - [x] **5.1** If you expose “corrected question” in the API response, optionally show it in the UI (e.g. “You asked: …” with corrected version in subtle text).
-- [x] **5.2** Support multi-part responses in `AIMode.tsx`: e.g. loop over `content[]` and render each part (text, table, chart) in order.
+- [x] **5.2** Support multi-part responses in `AIMode/index.tsx`: e.g. loop over `content[]` and render each part (text, table, chart) in order.
 - [x] **5.3** Add minimal logging/tracing (e.g. intent, action list, which step failed) so you can debug the brain without touching the DB every time.
 
 ### Pipeline metadata storage (debug / evaluation / cache)
@@ -106,6 +154,7 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 
 - [x] **6.1** Extend schema for AI pipeline metadata:
   - Done: Added columns to `ai_logs`: `raw_user_query`, `corrected_query`, `action_sequence` (JSON text), `explanation`. `response_payload` is limited to a small summary when large (e.g. row count, type). Schema is in `database/schema_sqlite.sql` (single source; apply for fresh DB).
+  - Telemetry (2026-07-12): `ai_logs` also carries `model`, `total_prompt_tokens`, `total_completion_tokens`, `llm_calls`, `cache_hits`, `execution_time_ms`; the per-step trace persists to `ai_call_trace` and per-step debug previews to `ai_debug_log` (both `query_id` FK, cascade delete). See [Telemetry](#telemetry--per-query-cost--latency--cache-effectiveness) and [Race-free debug log](#race-free-debug-log--concurrency).
 - [x] **6.2** In the orchestrator (or logging module), after the pipeline runs, persist: raw prompt, corrected prompt, intent, action_sequence, SQL text from each step that generated SQL, and explanation(s). Do **not** persist full table/chart result payloads.
 - [x] **6.3** Per-step metadata: action_sequence stored as JSON; explanation(s) from parts concatenated. Payload summary (type + row_count / parts count) when content is large.
 
@@ -181,8 +230,8 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 | Call | Key | Notes |
 |------|-----|--------|
 | correct_query, classify_intent | model + normalized prompt | High value |
-| generate_sql | model + schema_hash + date + normalized prompt | Schema hash from `get_schema_context()` |
-| generate_chart_config | model + schema_hash + normalized prompt | Config cached; SQL re-run on hit for fresh data |
+| generate_sql | model + schema_hash + date + normalized prompt | Schema hash from **curated** `get_schema_context()` (allowlist; live-DB introspection) |
+| generate_chart_config | model + schema_hash + **business_today** + normalized prompt | Config cached; SQL re-run on hit for fresh data. `business_today` added so a cached config never replays a stale date window |
 | is_follow_up, rewrite_with_context, resolve_reply_to_clarification | model + message(s) | Follow-up/clarification |
 | run_general_chat | model + normalized prompt | **Diversity cache:** up to 5 distinct responses per prompt; when full, randomly pick one |
 | _suggest_no_data_hint | model, prompt, sql_query, valid_values_str | Optional; temperature=0 |
@@ -190,6 +239,8 @@ Your proposed flow is **correct** and aligns well with a single “brain” on t
 **Deferred / low priority:** Summary and report (and streaming variants) — data-heavy, non-deterministic (temp 0.5), low hit rate; **skip or defer**. generate_explanation — same; low priority.
 
 **Decisions:** Schema version = hash of `get_schema_context()` (same source as generators). Persistence = SQLite. Eviction = LRU, global max entries (config). Diversity cache scope = chitchat only; if factual/system queries are added, route them elsewhere or use single-response cache.
+
+**Hardening (2026-07-12):** human-flagged entries (`is_incorrect=1`) are treated as misses but kept for cloud learning; `fn()` errors propagate uncached so transient LLM failures are never stored; per-`call_id` hit/miss counters (`llm_cache_counters`) feed cache-effectiveness telemetry. See [Cache hardening](#cache-hardening) and [Telemetry](#telemetry--per-query-cost--latency--cache-effectiveness).
 
 **Regression risks (document in code):** If `classify_intent` or `run_general_chat` later use history/context in the LLM call, cache key must include it. SQL prompt should encourage relative time (`date('now')`, etc.) so cached SQL stays valid. Schema hash must be computed from `get_schema_context()` only, not a separate file read.
 
@@ -201,9 +252,8 @@ Track tasks and future improvements here. Not required for current functionality
 
 ### ⚠️ Observations / Risks
 
-- **Code duplication:** Maintaining two identical copies of the schema and rules (one in Python, one in TS) is risky. If they drift, the frontend "Debug/Playground" might behave differently than the actual Python backend.  
-  **Suggestion:** In the future, consider having the Python backend serve the prompt text to the frontend via an API endpoint (e.g. `/api/ai/prompts`), or just treat the Python version as the single source of truth.
-- **LLM complexity:** The date logic (business day 5:00 AM–4:59:59 IST) is quite verbose in the prompts. If the LLM consistently struggles with syntax errors on the `CASE WHEN` block, consider adding a computed column `business_date` to the `orders` table (or a view) to simplify SQL generation.
+- **Code duplication:** ✅ **Resolved (2026-07-12).** The TS prompt copy `ui_electron/src/constants/prompts.ts` is deleted; the SQL Console fetches the prompt from the backend (`GET /api/ai/prompt-context`), and `ai_mode/prompts/prompt_ai_mode.py` is the single source of truth. See [Single-source prompts](#single-source-prompts-ts-copy-removed).
+- **LLM complexity:** The date logic (business day 5:00 AM–4:59:59 IST) is quite verbose in the prompts. If the LLM consistently struggles with syntax errors on the `CASE WHEN` block, consider adding a computed column `business_date` to the `orders` table (or a view) to simplify SQL generation. Note: AI Mode already injects concrete business-day literals from Python (`get_current_business_date`), and `business_today` is part of the chart cache key, so cached SQL/config stays valid across the boundary.
 
 ### Error logging
 
@@ -222,6 +272,13 @@ Track tasks and future improvements here. Not required for current functionality
 
 - [ ] **Context sensitivity:** If `classify_intent` or `run_general_chat` ever send history/context to the LLM, update cache keys to include it and document in code.
 - [ ] **Diversity cache scope:** Keep run_general_chat for chitchat; if factual/system queries are added, exclude them from the diversity cache or use a separate path.
+
+### AI Mode hardening — open follow-ups (from the 2026-07-11 review)
+
+The 2026-07-11 AI-Mode / SQL-Console review is fully applied except these two; everything else landed in commits `2930a158` / `3b609191` / `cca21bbd` (see [Revised behavior & hardening](#revised-behavior--hardening-2026-07-11--2026-07-12)).
+
+- [ ] **§3.4 streaming-handler event-loop offload.** The two streaming handlers (report / summary) still iterate their synchronous OpenAI stream on the FastAPI event loop — bounded now by the client timeout (`AI_LLM_TIMEOUT`, default 30 s) but not offloaded. Needs a thread→queue bridge (the non-streaming steps already run via `asyncio.to_thread`). Design decision / multi-day; low urgency while the timeout caps worst case.
+- [ ] **P2 eval / regression suite.** A YAML of `(question → expected SQL properties)` checked with `sqlglot` parsing (right tables, has `order_status='Success'` filter, no `name_raw` filter, correct date boundaries), run in CI against a fixture DB. Catches prompt regressions before users do — the single biggest quality lever for the NL→SQL path.
 
 ---
 
@@ -253,7 +310,7 @@ Use this to trace code paths when reviewing the implementation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│  UI (Electron) — ui_electron/src/pages/AIMode.tsx                                │
+│  UI (Electron) — ui_electron/src/pages/AIMode/ (index.tsx, hooks/, components/)  │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  • User types message; sends: POST /api/ai/chat                                  │
 │    Body: { prompt, history[], last_ai_was_clarification? }                        │
@@ -348,7 +405,7 @@ Use this to trace code paths when reviewing the implementation.
 
 | Step | What happens | Where |
 |------|----------------|-------|
-| UI → API | User message + history + `last_ai_was_clarification` sent to backend | `AIMode.tsx` → `routers/ai.py` |
+| UI → API | User message + history + `last_ai_was_clarification` sent to backend | `AIMode/index.tsx` → `routers/ai.py` |
 | Spelling | Raw prompt corrected (small LLM) | `orchestrator` → `ai_mode.llm.spelling.correct_query` |
 | Reply vs new query | If last AI was clarification: one LLM call decides + rewrites (clarification + previous question + current msg); else → previous ignored | `orchestrator` + `ai_mode.llm.followup.resolve_reply_to_clarification` |
 | Follow-up rewrite | If message is follow-up (e.g. "and yesterday?"), rewrite to full question using history | `ai_mode.llm.followup.resolve_follow_up` → `is_follow_up`, `rewrite_with_context` |
@@ -357,4 +414,4 @@ Use this to trace code paths when reviewing the implementation.
 | Execute | Run each action handler with shared context; ASK_CLARIFICATION sets incomplete | `orchestrator` loop → `handlers.*` |
 | Response | Single or multi-part (text / table / chart); + corrected_prompt, query_status, etc. | `orchestrator` builds `AIResponse` |
 | Saving | Pipeline metadata (no large payloads) written to `ai_logs` | `logging.log_interaction` |
-| UI display | Show content, "You asked:", ignored notice, multi-part list | `AIMode.tsx` |
+| UI display | Show content, "You asked:", ignored notice, multi-part list | `AIMode/index.tsx` |

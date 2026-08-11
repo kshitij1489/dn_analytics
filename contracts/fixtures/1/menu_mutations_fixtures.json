@@ -1,0 +1,674 @@
+{
+  "description": "Menu mutation commit payload fixtures for coverage of menu mutation types including catalog_update, conflict, status reconcile and the retired assignment fields (contract v1.2, §19 and §24).",
+  "fixtures": [
+    {
+      "name": "menu_mutations_commit_request_merge_applied",
+      "description": "Commit a menu_merge.applied mutation with assignments and catalog_delta (§19.4).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "123e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "menu_merge.applied",
+        "expected_menu_revision": 42,
+        "event": {
+          "remote_event_id": "remote-menu-merge-1",
+          "event_type": "menu_merge.applied",
+          "schema_version": 2,
+          "occurred_at": "2026-07-09T12:00:00Z",
+          "source_item": {
+            "menu_item_id": "item_source",
+            "name": "Iced Coffee",
+            "type": "Beverage",
+            "is_verified": true
+          },
+          "target_item": {
+            "menu_item_id": "item_target",
+            "name": "Cold Coffee",
+            "type": "Beverage",
+            "is_verified": true
+          },
+          "merge_payload": {
+            "kind": "basic_merge_v1",
+            "assignments": [
+              {
+                "order_item_id": "101",
+                "menu_item_id": "item_target",
+                "variant_id": "variant_large",
+                "is_verified": 1
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_merge_undone",
+      "description": "Commit a menu_merge.undone mutation with reverts_remote_event_id (§19.4).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "223e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "menu_merge.undone",
+        "expected_menu_revision": 43,
+        "event": {
+          "remote_event_id": "remote-menu-merge-undo-1",
+          "event_type": "menu_merge.undone",
+          "schema_version": 2,
+          "occurred_at": "2026-07-09T12:10:00Z",
+          "reverts_remote_event_id": "remote-menu-merge-1",
+          "source_item": {
+            "menu_item_id": "item_source",
+            "name": "Iced Coffee",
+            "type": "Beverage",
+            "is_verified": true
+          },
+          "target_item": {
+            "menu_item_id": "item_target",
+            "name": "Cold Coffee",
+            "type": "Beverage",
+            "is_verified": true
+          },
+          "merge_payload": {
+            "kind": "basic_merge_v1",
+            "assignments": [
+              {
+                "order_item_id": "101",
+                "menu_item_id": "item_source",
+                "variant_id": "variant_large",
+                "is_verified": 1
+              }
+            ]
+          },
+          "undo_metadata": {
+            "original_merged_at": "2026-07-09T12:00:00Z"
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_resolution_variant",
+      "description": "Commit a resolution_variant mutation — resolves an order-item cluster to a different variant (§19.1).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "323e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "resolution_variant",
+        "expected_menu_revision": 44,
+        "event": {
+          "remote_event_id": "remote-resolution-1",
+          "event_type": "menu_merge.applied",
+          "schema_version": 2,
+          "occurred_at": "2026-07-09T12:20:00Z",
+          "source_item": {
+            "menu_item_id": "item_paneer_roll",
+            "name": "Paneer Roll",
+            "type": "Food",
+            "is_verified": false
+          },
+          "target_item": {
+            "menu_item_id": "item_paneer_kathi_roll",
+            "name": "Paneer Kathi Roll",
+            "type": "Food",
+            "is_verified": true
+          },
+          "merge_payload": {
+            "kind": "resolution_variant_v1",
+            "resolution": {
+              "source_variant_id": "__NULL_VARIANT__",
+              "source_variant_name": "UNASSIGNED",
+              "target_variant_id": "variant_regular",
+              "target_variant_name": "REGULAR"
+            },
+            "assignments": [
+              {
+                "order_item_id": "401",
+                "menu_item_id": "item_paneer_kathi_roll",
+                "variant_id": "variant_regular",
+                "is_verified": 1
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_order_item_remap",
+      "description": "Commit an order_item_remap mutation — remaps order items to a different menu item (§19.1).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "423e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "order_item_remap",
+        "expected_menu_revision": 45,
+        "event": {
+          "remote_event_id": "remote-remap-1",
+          "event_type": "menu_merge.applied",
+          "schema_version": 2,
+          "occurred_at": "2026-07-09T12:30:00Z",
+          "source_item": {
+            "menu_item_id": "item_wrong",
+            "name": "Wrong Item",
+            "type": "Food",
+            "is_verified": false
+          },
+          "target_item": {
+            "menu_item_id": "item_correct",
+            "name": "Correct Item",
+            "type": "Food",
+            "is_verified": true
+          },
+          "merge_payload": {
+            "kind": "basic_merge_v1",
+            "assignments": [
+              {
+                "order_item_id": "501",
+                "menu_item_id": "item_correct",
+                "variant_id": null,
+                "is_verified": 1
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_verify",
+      "description": "Commit a verify mutation — event is null, verification_events carry the flag changes (§19.1, §19.4).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "523e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "verify",
+        "expected_menu_revision": 46,
+        "event": null,
+        "verification_events": [
+          {
+            "remote_event_id": "vfx-strict-verify-1",
+            "schema_version": 1,
+            "event_type": "mapping.verified",
+            "occurred_at": "2026-07-09T12:40:00Z",
+            "order_item_id": "601",
+            "menu_item_id": "item_target",
+            "variant_id": "variant_large",
+            "is_verified": 1
+          }
+        ],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_200",
+      "description": "Accepted commit response with assignment_rows and cursors (§19.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "123e4567-e89b-12d3-a456-426614174000",
+        "menu_revision": 43,
+        "accepted_events": [
+          {
+            "remote_event_id": "remote-menu-merge-1",
+            "server_seq": 456,
+            "server_ingested_at": "2026-07-09T12:00:01Z"
+          }
+        ],
+        "assignment_rows": [
+          {
+            "order_item_id": "101",
+            "menu_item_id": "item_target",
+            "variant_id": "variant_large",
+            "is_verified": 1,
+            "assignment_seq": 456,
+            "verification_seq": 89
+          }
+        ],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "merge_cursor": "menu-merge-cursor-000001",
+        "verification_cursor": "verification-cursor-000001"
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_catalog_update",
+      "description": "Commit a pure catalog_update mutation — no assignment or verification events (§19.1, §19.4).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "623e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "catalog_update",
+        "expected_menu_revision": 47,
+        "event": null,
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [
+            {
+              "menu_item_id": "item_catalog_label",
+              "name": "Coffee With Almonds",
+              "type": "Ice Cream",
+              "is_verified": true
+            }
+          ],
+          "variants": [
+            {
+              "variant_id": "variant_family_tub",
+              "variant_name": "FAMILY_TUB",
+              "description": "Share pack",
+              "unit": "GMS",
+              "value": 500,
+              "is_verified": true
+            }
+          ]
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_catalog_update_200",
+      "description": "Accepted pure catalog_update response — revision advances, events/cursors remain empty or unchanged (§19.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "623e4567-e89b-12d3-a456-426614174000",
+        "menu_revision": 48,
+        "accepted_events": [],
+        "assignment_rows": [],
+        "catalog_delta": {
+          "items": [
+            {
+              "menu_item_id": "item_catalog_label",
+              "name": "Coffee With Almonds",
+              "type": "Ice Cream",
+              "is_verified": true
+            }
+          ],
+          "variants": [
+            {
+              "variant_id": "variant_family_tub",
+              "variant_name": "FAMILY_TUB",
+              "description": "Share pack",
+              "unit": "GMS",
+              "value": 500,
+              "is_verified": true
+            }
+          ]
+        },
+        "merge_cursor": "menu-merge-cursor-000001",
+        "verification_cursor": "verification-cursor-000001"
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_derived_assignment_sync",
+      "description": "Commit machine-derived POS-backed assignments create-only; expected_menu_revision is accepted but ignored for OCC (§19.1, §19.7).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "723e4567-e89b-42d3-a456-426614174000",
+        "mutation_type": "derived_assignment.sync",
+        "expected_menu_revision": 48,
+        "event": {
+          "remote_event_id": "remote-derived-assignment-1",
+          "schema_version": 2,
+          "event_type": "menu_merge.applied",
+          "occurred_at": "2026-07-10T10:30:00Z",
+          "merge_payload": {
+            "kind": "derived_assignment_v1",
+            "assignments": [
+              {
+                "order_item_id": "101",
+                "menu_item_id": "item_orange_ice_cream",
+                "variant_id": "variant_scoop",
+                "is_verified": 0
+              }
+            ],
+            "item_snapshots": [
+              {
+                "menu_item_id": "item_orange_ice_cream",
+                "name": "Orange Ice Cream",
+                "type": "Ice Cream",
+                "is_verified": false
+              }
+            ],
+            "variant_snapshots": [
+              {
+                "variant_id": "variant_scoop",
+                "variant_name": "SCOOP",
+                "unit": null,
+                "value": null,
+                "is_verified": false
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [
+            {
+              "menu_item_id": "item_orange_ice_cream",
+              "name": "Orange Ice Cream",
+              "type": "Ice Cream",
+              "is_verified": false
+            }
+          ],
+          "variants": [
+            {
+              "variant_id": "variant_scoop",
+              "variant_name": "SCOOP",
+              "unit": null,
+              "value": null,
+              "is_verified": false
+            }
+          ]
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_derived_assignment_sync_200",
+      "description": "Accepted derived assignment flush — merge stream advances, menu_revision does not, existing rows are echoed in skipped_existing (§19.5, §19.7).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "723e4567-e89b-42d3-a456-426614174000",
+        "menu_revision": 48,
+        "accepted_events": [
+          {
+            "remote_event_id": "remote-derived-assignment-1",
+            "server_seq": 457,
+            "server_ingested_at": "2026-07-10T10:30:01Z"
+          }
+        ],
+        "assignment_rows": [
+          {
+            "order_item_id": "101",
+            "menu_item_id": "item_orange_ice_cream",
+            "variant_id": "variant_scoop",
+            "is_verified": 0,
+            "assignment_seq": 457,
+            "verification_seq": null
+          }
+        ],
+        "catalog_delta": {
+          "items": [
+            {
+              "menu_item_id": "item_orange_ice_cream",
+              "name": "Orange Ice Cream",
+              "type": "Ice Cream",
+              "is_verified": false
+            }
+          ],
+          "variants": [
+            {
+              "variant_id": "variant_scoop",
+              "variant_name": "SCOOP",
+              "unit": null,
+              "value": null,
+              "is_verified": false
+            }
+          ]
+        },
+        "skipped_existing": [],
+        "merge_cursor": "menu-merge-cursor-000002",
+        "verification_cursor": "verification-cursor-000001"
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_409",
+      "description": "Conflict — expected_menu_revision stale, conflicting_events with order_item_ids (§19.6).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 409,
+      "payload": {
+        "status": "conflict",
+        "error": "Menu state changed on the server. Pull latest menu state and retry.",
+        "expected_menu_revision": 42,
+        "current_menu_revision": 45,
+        "conflicting_events": [
+          {
+            "remote_event_id": "event-from-other-app",
+            "server_seq": 105,
+            "server_ingested_at": "2026-07-09T12:05:00Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "emp-456",
+                "name": "Other User"
+              },
+              "device": {
+                "device_id": "dev-789",
+                "install_id": "inst-012",
+                "device_label": "POS-2"
+              }
+            },
+            "order_item_ids": [
+              "101",
+              "102"
+            ]
+          }
+        ],
+        "recommended_action": "pull_latest_menu_state"
+      }
+    },
+    {
+      "name": "menu_mutations_status_response_200",
+      "description": "Mutation was committed — returns stored accepted response for idempotent reconcile (§19.8).",
+      "endpoint": "GET /desktop-analytics-sync/menu-mutations/{mutation_id}",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "123e4567-e89b-12d3-a456-426614174000",
+        "menu_revision": 43,
+        "accepted_events": [
+          {
+            "remote_event_id": "remote-menu-merge-1",
+            "server_seq": 456,
+            "server_ingested_at": "2026-07-09T12:00:01Z"
+          }
+        ],
+        "assignment_rows": [
+          {
+            "order_item_id": "101",
+            "menu_item_id": "item_target",
+            "variant_id": "variant_large",
+            "is_verified": 1,
+            "assignment_seq": 456,
+            "verification_seq": 89
+          }
+        ],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        },
+        "merge_cursor": "menu-merge-cursor-000001",
+        "verification_cursor": "verification-cursor-000001"
+      }
+    },
+    {
+      "name": "menu_mutations_status_response_404",
+      "description": "Mutation was never committed — client should re-POST (§19.8).",
+      "endpoint": "GET /desktop-analytics-sync/menu-mutations/{mutation_id}",
+      "http_status": 404,
+      "payload": {
+        "error": "Mutation not found."
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_retired_field",
+      "description": "An assignment carrying order_line_key (or its petpooja_order_id / petpooja_itemid metadata). Accepted and ignored in 1.1; refused in 1.2 because a silently discarded field leaves a client believing it wrote a locator that does not exist (§17.2, §24).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "923e4567-e89b-12d3-a456-426614174000",
+        "mutation_type": "menu_merge.applied",
+        "expected_menu_revision": 42,
+        "event": {
+          "remote_event_id": "remote-menu-merge-retired-field",
+          "event_type": "menu_merge.applied",
+          "schema_version": 2,
+          "occurred_at": "2026-07-09T12:00:00Z",
+          "merge_payload": {
+            "kind": "basic_merge_v1",
+            "assignments": [
+              {
+                "order_item_id": "101",
+                "menu_item_id": "item_target",
+                "is_verified": 1,
+                "order_line_key": "0f4c3a1d9b2e5f6071829304a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e"
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_retired_field_400",
+      "description": "The refusal the request above receives. Sent from the view, not the serializer: DRF's field-error shape carries no code, and the contract publishes one (§24).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 400,
+      "payload": {
+        "error": "Retired assignment field(s): order_line_key. Locators are materialized centrally from current order-line facts; there is no client-supplied path.",
+        "code": "retired_field"
+      }
+    },
+    {
+      "name": "menu_mutations_commit_request_global_shadow_write",
+      "description": "A restaurant-only canonical merge attempted after the selected restaurant's menu group reached shadow (§25.3).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "a23e4567-e89b-42d3-a456-426614174000",
+        "mutation_type": "menu_merge.applied",
+        "expected_menu_revision": 42,
+        "event": {
+          "remote_event_id": "remote-menu-merge-shadow-refused",
+          "event_type": "menu_merge.applied",
+          "schema_version": 2,
+          "occurred_at": "2026-08-11T12:00:00Z",
+          "merge_payload": {
+            "kind": "basic_merge_v1",
+            "assignments": [
+              {
+                "order_item_id": "101",
+                "menu_item_id": "item_target",
+                "variant_id": "variant_large",
+                "is_verified": 1
+              }
+            ]
+          }
+        },
+        "verification_events": [],
+        "catalog_delta": {
+          "items": [],
+          "variants": []
+        }
+      }
+    },
+    {
+      "name": "menu_mutations_commit_response_global_shadow_write_409",
+      "description": "Canonical restaurant writes are refused from shadow onward; verification-only commits remain legal (§25.3).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
+      "http_status": 409,
+      "payload": {
+        "error": "Menu group 'group-1' is in shadow mode. Canonical menu edits must use the global-menu mutation routes.",
+        "code": "global_menu_shadow_write_blocked",
+        "menu_group_id": "group-1",
+        "menu_group_status": "shadow",
+        "recommended_action": "use_global_menu_mutations"
+      }
+    }
+  ]
+}

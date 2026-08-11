@@ -15,7 +15,8 @@ export interface UseChatOptions {
     conversationId: string | null;
     setConversationId: (v: string | null) => void;
     loadConversations: () => void;
-    loadDebugLogs: (keepOnError?: boolean) => Promise<void>;
+    loadDebugLogs: (keepOnError?: boolean, queryId?: string) => Promise<void>;
+    loadTelemetry: (queryId?: string) => Promise<void>;
     setDebugLogEntries: (entries: DebugLogEntry[]) => void;
 }
 
@@ -32,6 +33,7 @@ export function useChat(options: UseChatOptions) {
         setConversationId,
         loadConversations,
         loadDebugLogs,
+        loadTelemetry,
         setDebugLogEntries
     } = options;
 
@@ -146,6 +148,7 @@ export function useChat(options: UseChatOptions) {
                         content: resolvedContent,
                         type: resolvedType
                     };
+                    void loadTelemetry(finalResponseData?.query_id as string | undefined);
 
                     if (currentConvId) {
                         endpoints.conversations
@@ -182,7 +185,8 @@ export function useChat(options: UseChatOptions) {
                         previous_query_ignored: res.data.previous_query_ignored
                     };
                     setMessages(prev => [...prev, aiMsg]);
-                    loadDebugLogs();
+                    loadDebugLogs(false, res.data.query_id);
+                    void loadTelemetry(res.data.query_id);
                     if (currentConvId) {
                         endpoints.conversations.addMessage(currentConvId, aiMsg).then((res: { data: { message_id: string } }) => {
                             setMessages(prev =>
@@ -215,6 +219,7 @@ export function useChat(options: UseChatOptions) {
             setLastFailedPrompt,
             loadConversations,
             loadDebugLogs,
+            loadTelemetry,
             setDebugLogEntries
         ]
     );

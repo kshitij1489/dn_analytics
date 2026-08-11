@@ -1,0 +1,288 @@
+{
+  "description": "Menu mapping verification sync payload fixtures. Strict-only (2026-07-09): the `mapping_verification_ingest_request_*` / `mapping_verification_ingest_response` fixtures are HISTORICAL — the batched `POST menu-mapping-verifications/ingest` endpoint was removed (returns 404); verification events now land via the menu commit endpoint (§19, `verify` mutation) and the baseline-import ops command. The `mapping_verification_pull_response_*` fixtures remain authoritative for `GET menu-mapping-verifications`. Covers all three event types: mapping.verified, mapping.reopened, mapping.bulk_verified.",
+  "fixtures": [
+    {
+      "name": "mapping_verification_ingest_request_verified",
+      "description": "Ingest a single mapping.verified event (§17.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mapping-verifications/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "vfx-verified-1",
+            "schema_version": 1,
+            "event_type": "mapping.verified",
+            "occurred_at": "2026-06-01 10:00:00",
+            "order_item_id": "101",
+            "menu_item_id": "item_a",
+            "variant_id": "variant_x",
+            "is_verified": 1,
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mapping_verification_ingest_request_reopened",
+      "description": "Ingest a single mapping.reopened event — sets is_verified to 0 (§17.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mapping-verifications/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "vfx-reopened-1",
+            "schema_version": 1,
+            "event_type": "mapping.reopened",
+            "occurred_at": "2026-06-01 11:00:00",
+            "order_item_id": "201",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mapping_verification_ingest_request_bulk",
+      "description": "Ingest a mapping.bulk_verified event with multiple mappings (§17.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-mapping-verifications/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "vfx-bulk-1",
+            "schema_version": 1,
+            "event_type": "mapping.bulk_verified",
+            "occurred_at": "2026-06-01 12:00:00",
+            "mappings": [
+              {
+                "order_item_id": "301",
+                "menu_item_id": "item_b",
+                "variant_id": null,
+                "is_verified": 1
+              },
+              {
+                "order_item_id": "302",
+                "menu_item_id": "item_b",
+                "variant_id": "variant_y",
+                "is_verified": 1
+              }
+            ],
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mapping_verification_ingest_response",
+      "description": "Successful ingest of a fresh verification event.",
+      "endpoint": "POST /desktop-analytics-sync/menu-mapping-verifications/ingest",
+      "http_status": 200,
+      "payload": {
+        "status": "ok",
+        "schema_version": 1,
+        "ingested_count": 1,
+        "duplicate_count": 0,
+        "accepted": [
+          "vfx-verified-1"
+        ],
+        "rejected": []
+      }
+    },
+    {
+      "name": "mapping_verification_pull_response_verified",
+      "description": "Delta pull returning a mapping.verified event with server-injected fields (§17.5).",
+      "endpoint": "GET /desktop-analytics-sync/menu-mapping-verifications",
+      "http_status": 200,
+      "payload": {
+        "events": [
+          {
+            "remote_event_id": "vfx-verified-1",
+            "schema_version": 1,
+            "event_type": "mapping.verified",
+            "occurred_at": "2026-06-01 10:00:00",
+            "order_item_id": "101",
+            "menu_item_id": "item_a",
+            "variant_id": "variant_x",
+            "is_verified": 1,
+            "server_seq": 100,
+            "server_ingested_at": "2026-06-01T10:00:02Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ],
+        "next_cursor": "verification-cursor-0001",
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "mapping_verification_pull_response_reopened",
+      "description": "Delta pull returning a mapping.reopened event (is_verified defaults to 0).",
+      "endpoint": "GET /desktop-analytics-sync/menu-mapping-verifications",
+      "http_status": 200,
+      "payload": {
+        "events": [
+          {
+            "remote_event_id": "vfx-reopened-1",
+            "schema_version": 1,
+            "event_type": "mapping.reopened",
+            "occurred_at": "2026-06-01 11:00:00",
+            "order_item_id": "201",
+            "is_verified": 0,
+            "server_seq": 101,
+            "server_ingested_at": "2026-06-01T11:00:02Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ],
+        "next_cursor": "verification-cursor-0002",
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "mapping_verification_pull_response_bulk",
+      "description": "Delta pull returning a mapping.bulk_verified event with multiple mappings.",
+      "endpoint": "GET /desktop-analytics-sync/menu-mapping-verifications",
+      "http_status": 200,
+      "payload": {
+        "events": [
+          {
+            "remote_event_id": "vfx-bulk-1",
+            "schema_version": 1,
+            "event_type": "mapping.bulk_verified",
+            "occurred_at": "2026-06-01 12:00:00",
+            "mappings": [
+              {
+                "order_item_id": "301",
+                "menu_item_id": "item_b",
+                "variant_id": null,
+                "is_verified": 1
+              },
+              {
+                "order_item_id": "302",
+                "menu_item_id": "item_b",
+                "variant_id": "variant_y",
+                "is_verified": 1
+              }
+            ],
+            "server_seq": 102,
+            "server_ingested_at": "2026-06-01T12:00:02Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            }
+          }
+        ],
+        "next_cursor": "verification-cursor-0003",
+        "menu_revision": 42
+      }
+    }
+  ]
+}

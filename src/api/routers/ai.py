@@ -1,19 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
-from typing import List, Dict, AsyncGenerator
-import os
+from typing import List, Dict, AsyncGenerator, Optional
 import json
 from src.api.models import AIQueryRequest, AIResponse, AIFeedbackRequest, CacheEntryPatchRequest
 from src.api.dependencies import get_db
 from src.core.queries import insights_queries # For future use if needed
 from ai_mode.orchestrator import process_chat, process_chat_stream
-from ai_mode.cache import clear_cache as llm_clear_cache, list_entries as llm_list_entries, set_incorrect as llm_set_incorrect
-from ai_mode import debug_log as ai_debug_log
+from ai_mode.logging import fetch_debug_entries
+from ai_mode.cache import (
+    clear_cache as llm_clear_cache,
+    list_entries as llm_list_entries,
+    set_incorrect as llm_set_incorrect,
+    get_cache_counters as llm_cache_counters,
+)
 
 router = APIRouter()
-
-# Last request's debug log entries; populated when debug is enabled for /chat or /chat/stream
-_last_debug_entries: List[dict] = []
 
 
 @router.post("/chat", response_model=AIResponse)
@@ -23,9 +24,6 @@ async def chat(request: AIQueryRequest, conn=Depends(get_db)):
     Handles Intent Classification -> Execution -> Response.
     """
     local_debug_log: List[dict] = []
-    global _last_debug_entries
-    _last_debug_entries = local_debug_log
-    ai_debug_log.set_current_request_log(local_debug_log)
 
     try:
         response = await process_chat(
@@ -43,8 +41,6 @@ async def chat(request: AIQueryRequest, conn=Depends(get_db)):
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        ai_debug_log.set_current_request_log(None)
 
 
 @router.post("/chat/stream")
@@ -56,9 +52,6 @@ async def chat_stream(request: AIQueryRequest, conn=Depends(get_db)):
 
     async def generate() -> AsyncGenerator[str, None]:
         local_debug_log: List[dict] = []
-        global _last_debug_entries
-        _last_debug_entries = local_debug_log
-        ai_debug_log.set_current_request_log(local_debug_log)
 
         try:
             async for event_str in process_chat_stream(
@@ -78,8 +71,6 @@ async def chat_stream(request: AIQueryRequest, conn=Depends(get_db)):
             except Exception:
                 pass
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        finally:
-            ai_debug_log.set_current_request_log(None)
 
     return StreamingResponse(
         generate(),
@@ -108,6 +99,26 @@ def get_suggestions(limit: int = 10, conn=Depends(get_db)):
         except Exception:
             pass
         return []
+
+
+@router.get("/prompt-context")
+def get_prompt_context():
+    """
+    SQL Console "LLM Prompt" tab: the SQL-generation prompt to paste into an external LLM.
+    Single source of truth — same schema + rules as AI Mode, generated on demand from
+    ai_mode.prompts (no hand-maintained copy). Relative dates use SQLite localtime because
+    the pasted text has no server to inject business-day literals.
+    """
+    try:
+        from ai_mode.llm.sql_gen import build_console_sql_prompt
+        return {"prompt": build_console_sql_prompt()}
+    except Exception as e:
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().error(f"Error building prompt context: {e}", extra={"context": {"endpoint": "/api/ai/prompt-context"}})
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/feedback")
@@ -173,12 +184,58 @@ def patch_llm_cache_entry(key_hash: str, body: CacheEntryPatchRequest):
 
 
 @router.get("/debug/logs")
-def get_debug_logs():
+def get_debug_logs(query_id: Optional[str] = None, conn=Depends(get_db)):
     """
-    Return debug log entries for the last chat request.
-    Used by the AI Mode Debug panel to show user question, cache hit/miss, and LLM/cache responses.
+    Return debug log entries for a chat request (user question, cache hit/miss, and
+    LLM/cache response per step) for the AI Mode Debug panel.
+    §3.7: reads from persisted ai_debug_log keyed by query_id (race-free) instead of
+    the old cross-request in-memory global. Without query_id, returns the most-recent
+    query's steps.
     """
-    return {"entries": _last_debug_entries}
+    return {"entries": fetch_debug_entries(conn, query_id)}
+
+
+@router.get("/debug/trace/{query_id}")
+def get_call_trace(query_id: str, conn=Depends(get_db)):
+    """
+    §4 telemetry: per-step trace for one query (step, source cache/llm, model,
+    latency_ms, prompt/completion tokens). Answers per-step latency/cost questions.
+    """
+    try:
+        cursor = conn.execute(
+            """
+            SELECT step, source, model, latency_ms, prompt_tokens, completion_tokens, created_at
+            FROM ai_call_trace
+            WHERE query_id = ?
+            ORDER BY trace_id ASC
+            """,
+            (query_id,),
+        )
+        return {"query_id": query_id, "trace": [dict(row) for row in cursor.fetchall()]}
+    except Exception as e:
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().error(f"Error reading call trace: {e}", extra={"context": {"endpoint": "/api/ai/debug/trace"}})
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/debug/cache-counters")
+def get_cache_hit_counters():
+    """
+    §4 telemetry: global LLM cache hit/miss counters per call_id (cache effectiveness
+    over time). Each entry: {call_id, hits, misses}.
+    """
+    try:
+        return {"counters": llm_cache_counters()}
+    except Exception as e:
+        try:
+            from src.core.error_log import get_error_logger
+            get_error_logger().error(f"Error reading cache counters: {e}", extra={"context": {"endpoint": "/api/ai/debug/cache-counters"}})
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/debug/clear-cache")
@@ -194,27 +251,6 @@ def clear_llm_cache():
         try:
             from src.core.error_log import get_error_logger
             get_error_logger().error(f"Error clearing LLM cache: {e}", extra={"context": {"endpoint": "/api/ai/debug/clear-cache"}})
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/debug/init")
-def init_debug_logs():
-    """
-    Initialize the AI debug logs directory.
-    Creates 'ai_mode/ai_debug_logs' if it doesn't exist.
-    """
-    try:
-        log_dir = os.path.join(os.getcwd(), "ai_mode", "ai_debug_logs")
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-            print(f"🐞 Created debug log directory: {log_dir}")
-        return {"status": "ok", "path": log_dir}
-    except Exception as e:
-        try:
-            from src.core.error_log import get_error_logger
-            get_error_logger().error(f"Error initializing debug logs: {e}", extra={"context": {"endpoint": "/api/ai/debug/init"}})
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))

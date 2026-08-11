@@ -4,14 +4,80 @@ import sqlite3
 import unittest
 from unittest.mock import Mock, patch
 
-from src.core.customer_merge_shipper import upload_pending
 from src.core.customer_merge_sync_events import (
     EVENT_TYPE_APPLIED,
     EVENT_TYPE_UNDONE,
     SCHEMA_VERSION,
+    build_merge_applied_event_payload,
     build_merge_undone_event_payload,
 )
-from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
+
+
+def _insert_customer_merge(
+    conn,
+    *,
+    source_id: int = 1,
+    target_id: int = 2,
+    similarity_score: float = 0.98,
+    model_name: str = "duplicate_matcher_v1",
+    reasons=None,
+    moved_order_ids=None,
+    target_is_verified_after_merge: bool = False,
+    remote_event_id=None,
+) -> int:
+    """Insert a customer_merge_history row the way merge_customers used to, without
+    the strict-mode commit gate. Strict commits self-apply via apply_accepted (see
+    src/core/customer_mutation_commit.py) and never write customer_merge_sync_events
+    (legacy pre-cutover rows only) — these tests exercise the build_* payload
+    builders that strict capture uses directly."""
+    context = {
+        "reasons": reasons or [],
+        "target_before_fields": {},
+        "inserted_target_address_ids": [],
+        "target_is_verified_after_merge": target_is_verified_after_merge,
+    }
+    if remote_event_id:
+        context["remote_event_id"] = remote_event_id
+    suggestion_context = json.dumps(context)
+    merge_id = conn.execute(
+        """
+        INSERT INTO customer_merge_history (
+            source_customer_id, target_customer_id, similarity_score, model_name,
+            suggestion_context, source_snapshot, target_snapshot, moved_order_ids, copied_address_count
+        )
+        VALUES (?, ?, ?, ?, ?, '{}', '{}', ?, 0)
+        RETURNING merge_id
+        """,
+        (
+            source_id,
+            target_id,
+            similarity_score,
+            model_name,
+            suggestion_context,
+            json.dumps(moved_order_ids if moved_order_ids is not None else [101]),
+        ),
+    ).fetchone()[0]
+    conn.commit()
+    return int(merge_id)
+
+
+def _mark_customer_merge_undone(conn, merge_id: int, *, restored_order_count: int = 1) -> None:
+    conn.execute(
+        """
+        UPDATE customer_merge_history
+        SET undone_at = CURRENT_TIMESTAMP, undo_context = ?
+        WHERE merge_id = ?
+        """,
+        (
+            json.dumps({
+                "restored_order_count": restored_order_count,
+                "removed_target_address_ids": [],
+                "restored_target_fields": [],
+            }),
+            merge_id,
+        ),
+    )
+    conn.commit()
 
 
 class CustomerMergeSyncTests(unittest.TestCase):
@@ -214,29 +280,30 @@ class CustomerMergeSyncTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.conn.close()
 
-    def test_merge_records_customer_merge_applied_event(self) -> None:
-        result = merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.98,
-            model_name="duplicate_matcher_v1",
-            reasons=["phone exact match"],
-            mark_target_verified=True,
+    def _insert_legacy_applied_event_row(self, merge_id: int, event_id: str) -> None:
+        """Simulate a pre-strict-cutover outbox row (only the legacy shipper wrote these)."""
+        self.conn.execute(
+            """
+            INSERT INTO customer_merge_sync_events (event_id, merge_id, event_type, payload, occurred_at)
+            VALUES (?, ?, ?, '{}', CURRENT_TIMESTAMP)
+            """,
+            (event_id, merge_id, EVENT_TYPE_APPLIED),
         )
+        self.conn.commit()
 
-        self.assertEqual(result["status"], "success")
-        row = self.conn.execute(
-            "SELECT event_id, event_type, payload FROM customer_merge_sync_events WHERE merge_id = ?",
-            (result["merge_id"],),
-        ).fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(row["event_type"], EVENT_TYPE_APPLIED)
+    def test_build_merge_applied_payload_carries_metadata_and_locators(self) -> None:
+        merge_id = _insert_customer_merge(
+            self.conn,
+            similarity_score=0.98,
+            reasons=["phone exact match"],
+            target_is_verified_after_merge=True,
+        )
+        payload = build_merge_applied_event_payload(self.conn, merge_id)
+        self.assertIsNotNone(payload)
 
-        payload = json.loads(row["payload"])
-        self.assertEqual(payload["remote_event_id"], row["event_id"])
         self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
         self.assertEqual(payload["event_type"], EVENT_TYPE_APPLIED)
+        self.assertTrue(payload["remote_event_id"])
         self.assertTrue(payload["merge_metadata"]["mark_target_verified"])
         self.assertEqual(payload["merge_metadata"]["reasons"], ["phone exact match"])
         self.assertEqual(payload["moved_orders"]["count"], 1)
@@ -248,202 +315,58 @@ class CustomerMergeSyncTests(unittest.TestCase):
             payload["source_customer"]["portable_locators"]["phone_hash"],
             expected_phone_hash,
         )
-
-    def test_undo_records_customer_merge_undone_event_linked_to_applied_event(self) -> None:
-        merge_result = merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.9,
-            model_name="duplicate_matcher_v1",
-            reasons=["same address"],
-        )
-        undo_result = undo_customer_merge(self.conn, merge_result["merge_id"])
-
-        self.assertEqual(undo_result["status"], "success")
-        rows = self.conn.execute(
-            """
-            SELECT event_id, event_type, payload
-            FROM customer_merge_sync_events
-            WHERE merge_id = ?
-            ORDER BY event_type ASC
-            """,
-            (merge_result["merge_id"],),
-        ).fetchall()
-        self.assertEqual(len(rows), 2)
-
-        applied_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_APPLIED)
-        undone_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_UNDONE)
-        undone_payload = json.loads(undone_row["payload"])
-
-        self.assertEqual(undone_payload["event_type"], EVENT_TYPE_UNDONE)
-        self.assertEqual(undone_payload["reverts_remote_event_id"], applied_row["event_id"])
-        self.assertEqual(undone_payload["moved_orders"]["count"], 1)
-
-    def test_undo_emits_missing_applied_event_before_recording_undone(self) -> None:
-        merge_result = merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.9,
-            model_name="duplicate_matcher_v1",
-            reasons=["same address"],
-        )
-        self.conn.execute(
-            "DELETE FROM customer_merge_sync_events WHERE merge_id = ? AND event_type = ?",
-            (merge_result["merge_id"], EVENT_TYPE_APPLIED),
-        )
-        self.conn.commit()
-
-        undo_result = undo_customer_merge(self.conn, merge_result["merge_id"])
-        self.assertEqual(undo_result["status"], "success")
-
-        rows = self.conn.execute(
-            """
-            SELECT event_id, event_type, payload
-            FROM customer_merge_sync_events
-            WHERE merge_id = ?
-            ORDER BY event_type ASC
-            """,
-            (merge_result["merge_id"],),
-        ).fetchall()
-        self.assertEqual(len(rows), 2)
-
-        applied_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_APPLIED)
-        undone_row = next(row for row in rows if row["event_type"] == EVENT_TYPE_UNDONE)
-        undone_payload = json.loads(undone_row["payload"])
-
-        self.assertEqual(undone_payload["reverts_remote_event_id"], applied_row["event_id"])
+        # Builders never write the legacy outbox.
         self.assertEqual(
-            json.loads(applied_row["payload"])["remote_event_id"],
-            applied_row["event_id"],
+            self.conn.execute("SELECT COUNT(*) FROM customer_merge_sync_events").fetchone()[0],
+            0,
         )
+
+    def test_build_merge_applied_payload_carries_pre_merge_order_refs(self) -> None:
+        # Capture runs after orders moved to the target: simulate that state,
+        # then assert descriptors reconstruct pre-merge ownership (source =
+        # moved orders, target = its own orders minus moved).
+        self.conn.execute("UPDATE orders SET customer_id = 2 WHERE order_id = 101")
+        self.conn.commit()
+        merge_id = _insert_customer_merge(self.conn, moved_order_ids=[101])
+
+        payload = build_merge_applied_event_payload(self.conn, merge_id)
+        self.assertIsNotNone(payload)
+
+        source_refs = payload["source_customer"]["portable_locators"]["order_refs"]
+        target_refs = payload["target_customer"]["portable_locators"]["order_refs"]
+        self.assertEqual([ref["petpooja_order_id"] for ref in source_refs], ["PP-101"])
+        self.assertEqual([ref["petpooja_order_id"] for ref in target_refs], ["PP-102"])
+
+    def test_build_merge_undone_payload_links_via_legacy_outbox_row(self) -> None:
+        merge_id = _insert_customer_merge(self.conn, similarity_score=0.9, reasons=["same address"])
+        self._insert_legacy_applied_event_row(merge_id, "legacy-applied-1")
+        _mark_customer_merge_undone(self.conn, merge_id)
+
+        payload = build_merge_undone_event_payload(self.conn, merge_id)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["event_type"], EVENT_TYPE_UNDONE)
+        self.assertEqual(payload["reverts_remote_event_id"], "legacy-applied-1")
+        self.assertEqual(payload["moved_orders"]["count"], 1)
+
+    def test_build_merge_undone_payload_links_via_suggestion_context_remote_event_id(self) -> None:
+        merge_id = _insert_customer_merge(
+            self.conn,
+            similarity_score=0.9,
+            reasons=["same address"],
+            remote_event_id="remote-applied-7",
+        )
+        _mark_customer_merge_undone(self.conn, merge_id)
+
+        payload = build_merge_undone_event_payload(self.conn, merge_id)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["reverts_remote_event_id"], "remote-applied-7")
 
     def test_build_merge_undone_payload_returns_none_without_reverts_target(self) -> None:
-        merge_result = merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.9,
-            model_name="duplicate_matcher_v1",
-            reasons=["same address"],
-        )
-        self.conn.execute(
-            "DELETE FROM customer_merge_sync_events WHERE merge_id = ?",
-            (merge_result["merge_id"],),
-        )
-        self.conn.execute(
-            """
-            UPDATE customer_merge_history
-            SET undone_at = CURRENT_TIMESTAMP,
-                undo_context = ?
-            WHERE merge_id = ?
-            """,
-            (
-                json.dumps({
-                    "restored_order_count": 1,
-                    "removed_target_address_ids": [],
-                    "restored_target_fields": [],
-                }),
-                merge_result["merge_id"],
-            ),
-        )
-        self.conn.commit()
+        merge_id = _insert_customer_merge(self.conn, similarity_score=0.9, reasons=["same address"])
+        _mark_customer_merge_undone(self.conn, merge_id)
 
-        payload = build_merge_undone_event_payload(self.conn, merge_result["merge_id"])
+        payload = build_merge_undone_event_payload(self.conn, merge_id)
         self.assertIsNone(payload)
-
-    @patch("requests.post")
-    def test_upload_pending_posts_events_and_marks_rows_uploaded(self, mock_post: Mock) -> None:
-        merge_result = merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.95,
-            model_name="duplicate_matcher_v1",
-            reasons=["same phone"],
-        )
-        self.conn.execute(
-            "DELETE FROM customer_merge_sync_events WHERE merge_id = ?",
-            (merge_result["merge_id"],),
-        )
-        self.conn.commit()
-
-        mock_post.return_value = Mock(status_code=200)
-        uploaded_by = {"employee_id": "0001", "name": "Owner"}
-        result = upload_pending(
-            self.conn,
-            endpoint="https://cloud.example.com/desktop-analytics-sync/customer-merges/ingest",
-            auth="secret-token",
-            uploaded_by=uploaded_by,
-        )
-
-        self.assertEqual(result["events_sent"], 1)
-        self.assertEqual(result["backfilled_applied"], 1)
-        self.assertEqual(result["backfilled_undone"], 0)
-        mock_post.assert_called_once()
-
-        call_kwargs = mock_post.call_args.kwargs
-        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer secret-token")
-        self.assertEqual(call_kwargs["json"]["uploaded_by"], uploaded_by)
-        self.assertEqual(call_kwargs["json"]["schema_version"], SCHEMA_VERSION)
-        self.assertEqual(len(call_kwargs["json"]["events"]), 1)
-
-        row = self.conn.execute(
-            "SELECT uploaded_at, last_error FROM customer_merge_sync_events WHERE merge_id = ?",
-            (merge_result["merge_id"],),
-        ).fetchone()
-        self.assertIsNotNone(row["uploaded_at"])
-        self.assertIsNone(row["last_error"])
-
-    @patch("requests.post")
-    def test_upload_pending_quarantines_server_rejected_events(self, mock_post: Mock) -> None:
-        merge_customers(
-            self.conn,
-            "1",
-            "2",
-            similarity_score=0.95,
-            model_name="duplicate_matcher_v1",
-            reasons=["same phone"],
-        )
-        event_id = str(
-            self.conn.execute(
-                "SELECT event_id FROM customer_merge_sync_events LIMIT 1"
-            ).fetchone()[0]
-        )
-
-        mock_response = Mock(status_code=200)
-        mock_response.json.return_value = {
-            "status": "ok",
-            "accepted": [],
-            "rejected": [{"remote_event_id": event_id, "error": "Use a valid datetime value."}],
-        }
-        mock_post.return_value = mock_response
-
-        result = upload_pending(
-            self.conn,
-            endpoint="https://cloud.example.com/desktop-analytics-sync/customer-merges/ingest",
-            auth="secret-token",
-        )
-
-        self.assertIsNone(result["error"])
-        self.assertEqual(result["events_sent"], 0)
-        self.assertEqual(result["events_rejected"], 1)
-
-        # The rejected event leaves the push queue but keeps the server error,
-        # and a quarantine copy stays visible for review.
-        row = self.conn.execute(
-            "SELECT uploaded_at, last_error FROM customer_merge_sync_events WHERE event_id = ?",
-            (event_id,),
-        ).fetchone()
-        self.assertIsNotNone(row["uploaded_at"])
-        self.assertEqual(row["last_error"], "Use a valid datetime value.")
-        quarantine_row = self.conn.execute(
-            "SELECT stream, resolved_at FROM menu_sync_event_quarantine WHERE remote_event_id = ?",
-            (event_id,),
-        ).fetchone()
-        self.assertEqual(quarantine_row["stream"], "customer_merge_push")
-        self.assertIsNone(quarantine_row["resolved_at"])
 
 
 if __name__ == "__main__":

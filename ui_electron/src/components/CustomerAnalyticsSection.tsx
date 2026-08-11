@@ -230,7 +230,7 @@ export function CustomerAnalyticsSection({ lastDbSync }: { lastDbSync?: number }
                     <tbody>
                         {sortedTopCustomers.map((row, idx) => (
                             <tr key={idx}>
-                                <td><CustomerLink customerId={row.customer_id} name={row.name} /></td>
+                                <td><CustomerLink customerId={row.customer_id} name={row.name} restaurantId={(row as any).restaurant_id} restaurantName={(row as any).restaurant_name} /></td>
                                 <td className="text-right">{row.total_orders}</td>
                                 <td className="text-right">{formatCurrency(row.total_spent)}</td>
                                 <td>{row.last_order_date}</td>

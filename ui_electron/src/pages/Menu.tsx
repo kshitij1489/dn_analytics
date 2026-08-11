@@ -1,14 +1,20 @@
 import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { endpoints } from '../api';
-import { CollapsibleCard, ErrorPopup, TabButton } from '../components';
+import { CollapsibleCard, ErrorPopup, SingleStoreOnly, TabButton } from '../components';
 import type { PopupMessage } from '../components';
+import type { GlobalMenuPreview, GlobalMenuPreviewReference, GlobalMenuResolutionContext } from '../types/api';
 import { Resizable } from 'react-resizable';
 import 'react-resizable/css/styles.css';
 import { formatColumnHeader } from '../utils';
+import { useStore } from '../contexts/StoreContext';
+import {
+    hasGlobalMenuMutationCapability,
+    hasGlobalMenuResolutionCapability,
+} from '../globalMenuCapabilities';
 
 // --- Shared Components ---
 
-const Card = ({ children, title }: { children: React.ReactNode, title: string }) => (
+const Card = ({ children, title }: { children: React.ReactNode, title: React.ReactNode }) => (
     <div style={{ background: 'var(--card-bg)', padding: '20px', borderRadius: '12px', marginBottom: '20px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow)' }}>
         <h3 style={{ marginTop: 0, marginBottom: '15px', color: 'var(--accent-color)' }}>{title}</h3>
         {children}
@@ -39,11 +45,31 @@ interface ResolutionItem {
     unresolved_mapping_rows?: number;
     order_item_rows?: number;
     order_item_qty?: number;
+    addon_rows?: number;
+    addon_qty?: number;
     suggestion_id?: string | null;
     suggestion_name?: string | null;
     suggestion_type?: string | null;
     suggested_variant_id?: string | null;
     suggested_variant_name?: string | null;
+    resolution_kind?: 'addon_gap' | 'unverified_mapping' | 'global_identity_gap' | null;
+    is_verified?: boolean | number | null;
+}
+
+interface SuspectMapping {
+    anomaly_id: number;
+    order_item_id: string;
+    baseline_core_key?: string | null;
+    core_key: string;
+    name_raw: string;
+    is_addon: boolean | number;
+    current_menu_item_id?: string | null;
+    current_mapped_name?: string | null;
+    current_variant_id?: string | null;
+    current_variant_name?: string | null;
+    affected_rows?: number;
+    affected_qty?: number;
+    seen_at?: string;
 }
 
 interface MergeHistoryEntry {
@@ -54,6 +80,8 @@ interface MergeHistoryEntry {
     target_name?: string | null;
     merged_at: string;
     variant_assignments?: MergeHistoryVariantAssignment[];
+    global_mutation_id?: string | null;
+    global_menu_group_id?: string | null;
 }
 
 interface MergeHistoryVariantAssignment {
@@ -85,7 +113,60 @@ interface MergePreview {
     };
     source_variants: MergePreviewVariant[];
     target_variants: MergePreviewVariant[];
+    global_menu?: GlobalMenuPreview;
 }
+
+interface GlobalMenuResolutionCommit {
+    applied?: {
+        global_item_id?: string;
+        global_variant_id?: string;
+    };
+}
+
+const globalPreviewReference = (
+    preview?: GlobalMenuPreview,
+): GlobalMenuPreviewReference => preview ? ({
+    global_mutation_id: preview.mutation_id,
+    global_preview_digest: preview.preview_digest,
+    global_menu_group_id: preview.menu_group_id,
+    global_preview_revision: preview.menu_group_revision,
+    global_coverage_complete: preview.coverage_complete,
+    global_conflicts: preview.conflicts,
+    global_mutation_type: preview.mutation_type,
+    global_mutation_payload: preview.payload,
+}) : {};
+
+const confirmGlobalImpact = (preview: GlobalMenuPreview, operation: string): boolean => {
+    const conflictCount = preview.conflicts?.length ?? 0;
+    if (!preview.commit_allowed) {
+        window.alert(
+            `Global menu commit is blocked for group ${preview.menu_group_id}. ` +
+            `${conflictCount ? `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} require resolution. ` : ''}` +
+            `${preview.coverage_complete ? '' : 'Identity coverage is incomplete.'}`,
+        );
+        return false;
+    }
+    const affected = preview.impact?.restaurants?.length ?? preview.impact?.affected_restaurants;
+    const assignments = preview.impact?.totals?.assignments ?? preview.impact?.existing_assignments;
+    const ruleChanges = preview.impact?.totals?.mapping_rules ?? preview.impact?.mapping_rule_changes;
+    const reconciliation = preview.payload?.variant_reconciliation ?? preview.impact?.variant_reconciliation;
+    const reconciliationLabel = Array.isArray(reconciliation)
+        ? `${reconciliation.length} variant reconciliation${reconciliation.length === 1 ? '' : 's'}`
+        : reconciliation != null
+            ? 'variant reconciliation included'
+            : null;
+    const summary = [
+        affected != null ? `${affected} restaurant${affected === 1 ? '' : 's'}` : null,
+        assignments != null ? `${assignments} existing assignment${assignments === 1 ? '' : 's'}` : null,
+        ruleChanges != null ? `${ruleChanges} mapping-rule change${ruleChanges === 1 ? '' : 's'}` : null,
+        reconciliationLabel,
+        conflictCount ? `${conflictCount} conflict${conflictCount === 1 ? '' : 's'}` : null,
+    ].filter(Boolean).join(', ');
+    return window.confirm(
+        `${operation} affects every restaurant in menu group ${preview.menu_group_id}` +
+        `${summary ? ` (${summary})` : ''}. Continue?`,
+    );
+};
 
 interface MergePreviewVariant {
     variant_id: string;
@@ -106,9 +187,11 @@ interface MatrixRow {
     is_active: boolean;
     addon_eligible: boolean;
     delivery_eligible: boolean;
-    menu_item_id: string;
-    variant_id: string;
+    is_verified?: boolean | number;
+    menu_item_id?: string;
+    variant_id?: string;
     mapping_count: number;
+    order_count: number;
 }
 
 const getApiErrorMessage = (error: unknown): string => {
@@ -193,6 +276,25 @@ const formatVariantDisplayName = (variantName?: string | null) => (
 const formatResolutionTitle = (item: ResolutionItem) => (
     `${item.name} (${formatVariantDisplayName(item.source_variant_name)})`
 );
+
+const isUnverifiedFlag = (value?: boolean | number | null) => value === false || value === 0;
+
+const verificationBadgeStyle: CSSProperties = {
+    marginLeft: '8px',
+    fontSize: '0.75em',
+    fontWeight: 600,
+    color: '#F59E0B',
+    background: 'rgba(245, 158, 11, 0.12)',
+    padding: '2px 8px',
+    borderRadius: '999px',
+    whiteSpace: 'nowrap',
+};
+
+const addonGapBadgeStyle: CSSProperties = {
+    ...verificationBadgeStyle,
+    color: '#8B5CF6',
+    background: 'rgba(139, 92, 246, 0.12)',
+};
 
 const formatDateInputValue = (date: Date) => {
     const localDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60 * 1000));
@@ -699,6 +801,7 @@ function SummaryTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Menu Items Tab ---
 
 function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { isAllStores } = useStore();
     const defaultStartDate = '2025-01-01';
     const today = formatDateInputValue(new Date());
 
@@ -830,7 +933,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                         <table className="standard-table">
                             <thead>
                                 <tr>
-                                    <th onClick={() => handleSort('menu_item_id')}>Menu Item ID{renderSortIcon('menu_item_id')}</th>
+                                    {!isAllStores && (
+                                        <th onClick={() => handleSort('menu_item_id')}>Menu Item ID{renderSortIcon('menu_item_id')}</th>
+                                    )}
                                     <th onClick={() => handleSort('name')}>Name{renderSortIcon('name')}</th>
                                     <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                     <th style={{ textAlign: 'right' }} onClick={() => handleSort('total_revenue')}>Total Revenue{renderSortIcon('total_revenue')}</th>
@@ -843,7 +948,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                             <tbody>
                                 {tableData.map((row, i) => (
                                     <tr key={i}>
-                                        <td style={{ fontSize: '0.8em', color: 'var(--text-secondary)' }}>{row["menu_item_id"]}</td>
+                                        {!isAllStores && (
+                                            <td style={{ fontSize: '0.8em', color: 'var(--text-secondary)' }}>{row["menu_item_id"]}</td>
+                                        )}
                                         <td>{row["name"]}</td>
                                         <td>{row["type"]}</td>
                                         <td style={{ textAlign: 'right' }}>₹{Math.round(row["total_revenue"] || 0).toLocaleString()}</td>
@@ -888,6 +995,10 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Variants Tab ---
 
 function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { isAllStores, selectedStore } = useStore();
+    const globalMenuAdvertised = Boolean(
+        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
+    );
     const [data, setData] = useState<any[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
@@ -938,9 +1049,9 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
         return <span>{sortDirection === 'asc' ? ' ↑' : ' ↓'}</span>;
     };
 
-    const displayColumns = [
-        'variant_id', 'variant_name', 'description', 'unit', 'value', 'is_verified', 'created_at', 'updated_at'
-    ];
+    const displayColumns = isAllStores
+        ? ['variant_name', 'description', 'unit', 'value', 'is_verified']
+        : ['variant_id', 'variant_name', 'description', 'unit', 'value', 'is_verified', 'created_at', 'updated_at'];
 
     const resetAddForm = () => {
         setNewVariantName('');
@@ -962,11 +1073,26 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
 
         setAddSubmitting(true);
         try {
+            let globalPreview: GlobalMenuPreview | undefined;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'variant_create',
+                    details: {
+                        canonical_name: trimmedName,
+                        description: newVariantDescription.trim() || null,
+                        unit: newVariantUnit || null,
+                        value: newVariantValue.trim() ? Number(newVariantValue) : null,
+                    },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Creating this canonical variant')) return;
+            }
             const res = await endpoints.menu.variantsCreate({
                 variant_name: trimmedName,
                 description: newVariantDescription.trim() || undefined,
                 unit: newVariantUnit || undefined,
                 value: newVariantValue.trim() ? Number(newVariantValue) : undefined,
+                ...globalPreviewReference(globalPreview),
             });
             const created = res.data;
             const metaSummary = created.unit
@@ -996,14 +1122,16 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                 <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Variants</h3>
-                <button
-                    onClick={() => setShowAddForm(prev => !prev)}
-                    style={{ padding: '8px 14px', background: showAddForm ? 'var(--card-bg)' : '#2563EB', color: showAddForm ? 'var(--text-color)' : 'white', border: showAddForm ? '1px solid var(--border-color)' : 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
-                >
-                    {showAddForm ? 'Cancel' : '+ Add Variant Type'}
-                </button>
+                {!isAllStores && (
+                    <button
+                        onClick={() => setShowAddForm(prev => !prev)}
+                        style={{ padding: '8px 14px', background: showAddForm ? 'var(--card-bg)' : '#2563EB', color: showAddForm ? 'var(--text-color)' : 'white', border: showAddForm ? '1px solid var(--border-color)' : 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                    >
+                        {showAddForm ? 'Cancel' : '+ Add Variant Type'}
+                    </button>
+                )}
             </div>
-            {showAddForm && (
+            {!isAllStores && showAddForm && (
                 <div style={{ background: 'var(--card-bg)', padding: '16px', borderRadius: '12px', marginBottom: '15px', border: '1px solid var(--border-color)' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) minmax(200px, 2fr) minmax(120px, 1fr) minmax(120px, 1fr)', gap: '10px', alignItems: 'end' }}>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
@@ -1120,6 +1248,10 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Matrix Tab ---
 
 function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { isAllStores, selectedStore } = useStore();
+    const globalMenuAdvertised = Boolean(
+        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
+    );
     const [items, setItems] = useState<MenuLookupItem[]>([]);
     const [variants, setVariants] = useState<VariantOption[]>([]);
     const [matrixData, setMatrixData] = useState<MatrixRow[]>([]);
@@ -1133,6 +1265,13 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [merging, setMerging] = useState(false);
     const [undoingMergeId, setUndoingMergeId] = useState<number | null>(null);
+    const [matrixMode, setMatrixMode] = useState<'merge' | 'edit' | 'retype'>('merge');
+    const [editTargetName, setEditTargetName] = useState('');
+    const [editTargetVariantId, setEditTargetVariantId] = useState('');
+    const [updating, setUpdating] = useState(false);
+    const [menuTypes, setMenuTypes] = useState<string[]>([]);
+    const [retypeTargetType, setRetypeTargetType] = useState('');
+    const [retyping, setRetyping] = useState(false);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -1143,7 +1282,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
     useEffect(() => {
         void refreshData();
-    }, [lastDbSync]);
+    }, [lastDbSync, isAllStores]);
 
     useEffect(() => {
         if (!sourceMenuItemId || !sourceVariantId || !targetMenuItemId) {
@@ -1160,6 +1299,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     source_id: sourceMenuItemId,
                     target_id: targetMenuItemId,
                     source_variant_id: sourceVariantId,
+                    target_variant_id: targetVariantId || undefined,
                 });
                 if (!cancelled) {
                     setMergePreview(res.data);
@@ -1181,20 +1321,31 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         return () => {
             cancelled = true;
         };
-    }, [sourceMenuItemId, sourceVariantId, targetMenuItemId]);
+    }, [sourceMenuItemId, sourceVariantId, targetMenuItemId, targetVariantId]);
 
     const refreshData = async () => {
         try {
-            const [itemsRes, variantsRes, matrixRes, historyRes] = await Promise.all([
+            if (isAllStores) {
+                const matrixRes = await endpoints.menu.matrix();
+                setItems([]);
+                setVariants([]);
+                setMatrixData(matrixRes.data);
+                setMergeHistory([]);
+                setMenuTypes([]);
+                return;
+            }
+            const [itemsRes, variantsRes, matrixRes, historyRes, typesRes] = await Promise.all([
                 endpoints.menu.list(),
                 endpoints.menu.variantsList(),
                 endpoints.menu.matrix(),
                 endpoints.menu.mergeHistory(),
+                endpoints.menu.types(),
             ]);
             setItems(itemsRes.data);
             setVariants(variantsRes.data);
             setMatrixData(matrixRes.data);
             setMergeHistory(historyRes.data.entries);
+            setMenuTypes(typesRes.data);
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         }
@@ -1213,12 +1364,21 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
     const handlePrefill = (row: MatrixRow, side: 'source' | 'target') => {
         if (side === 'source') {
-            setSourceMenuItemId(row.menu_item_id);
-            setSourceVariantId(row.variant_id);
+            setSourceMenuItemId(row.menu_item_id || '');
+            setSourceVariantId(row.variant_id || '');
             return;
         }
-        setTargetMenuItemId(row.menu_item_id);
-        setTargetVariantId(row.variant_id);
+        if (matrixMode === 'edit') {
+            setEditTargetName(row.name);
+            setEditTargetVariantId(row.variant_id || '');
+            return;
+        }
+        if (matrixMode === 'retype') {
+            setRetypeTargetType(row.type);
+            return;
+        }
+        setTargetMenuItemId(row.menu_item_id || '');
+        setTargetVariantId(row.variant_id || '');
     };
 
     const handleMerge = async () => {
@@ -1230,6 +1390,15 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
             setPopup({ type: 'error', message: 'Source and target pair cannot be identical.' });
             return;
         }
+        const globalPreview = mergePreview?.global_menu;
+        if (globalPreview && !globalPreview.commit_allowed) {
+            setPopup({
+                type: 'error',
+                message: 'Global menu commit is blocked until identity coverage is complete and preview conflicts are resolved.',
+            });
+            return;
+        }
+        if (globalPreview && !confirmGlobalImpact(globalPreview, 'This menu merge')) return;
 
         try {
             setMerging(true);
@@ -1238,6 +1407,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                 source_variant_id: sourceVariantId,
                 target_menu_item_id: targetMenuItemId,
                 target_variant_id: targetVariantId,
+                ...globalPreviewReference(globalPreview),
             });
             setPopup({ type: 'success', message: res.data.message || 'Menu item + variant merged successfully.' });
             setSourceMenuItemId('');
@@ -1253,12 +1423,135 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         }
     };
 
+    const handleUpdate = async () => {
+        const newName = editTargetName.trim();
+        if (!sourceMenuItemId || !sourceVariantId || !newName || !editTargetVariantId) {
+            setPopup({ type: 'error', message: 'Select source item + variant, enter a target item name, and select a target variant before updating.' });
+            return;
+        }
+        const sourceItem = items.find(item => item.menu_item_id === sourceMenuItemId);
+        if (!sourceItem) {
+            setPopup({ type: 'error', message: 'Source menu item was not found. Refresh and try again.' });
+            return;
+        }
+        if (
+            editTargetVariantId === sourceVariantId &&
+            newName.toLowerCase() === sourceItem.name.trim().toLowerCase()
+        ) {
+            setPopup({ type: 'error', message: 'New values match the current pair. Change the item name or variant before updating.' });
+            return;
+        }
+
+        try {
+            setUpdating(true);
+            let globalPreview: GlobalMenuPreview | undefined;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'rename',
+                    source_local_menu_item_id: sourceMenuItemId,
+                    source_local_variant_id: sourceVariantId,
+                    target_local_menu_item_id: sourceMenuItemId,
+                    target_local_variant_id: editTargetVariantId,
+                    details: { canonical_name: newName, canonical_type: sourceItem.type },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Renaming this canonical menu pair')) return;
+            }
+            const res = await endpoints.menu.resolve({
+                source_menu_item_id: sourceMenuItemId,
+                source_variant_id: sourceVariantId,
+                new_name: newName,
+                new_type: sourceItem.type,
+                target_variant_id: editTargetVariantId,
+                ...globalPreviewReference(globalPreview),
+            });
+            setPopup({ type: 'success', message: res.data.message || 'Menu item + variant updated successfully.' });
+            setSourceMenuItemId('');
+            setSourceVariantId('');
+            setEditTargetName('');
+            setEditTargetVariantId('');
+            await refreshData();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const handleRetype = async () => {
+        if (!sourceMenuItemId || !retypeTargetType) {
+            setPopup({ type: 'error', message: 'Select a source menu item and a target type before updating.' });
+            return;
+        }
+        const sourceItem = items.find(item => item.menu_item_id === sourceMenuItemId);
+        if (!sourceItem) {
+            setPopup({ type: 'error', message: 'Source menu item was not found. Refresh and try again.' });
+            return;
+        }
+        if (retypeTargetType === sourceItem.type) {
+            setPopup({ type: 'error', message: 'Target type matches the current type. Choose a different target type.' });
+            return;
+        }
+
+        try {
+            setRetyping(true);
+            let globalPreview: GlobalMenuPreview | undefined;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'retype',
+                    source_local_menu_item_id: sourceMenuItemId,
+                    details: { canonical_type: retypeTargetType },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Retyping this canonical menu item')) return;
+            }
+            const res = await endpoints.menu.retype({
+                menu_item_id: sourceMenuItemId,
+                new_type: retypeTargetType,
+                ...globalPreviewReference(globalPreview),
+            });
+            setPopup({ type: 'success', message: res.data.message || 'Menu item type updated successfully.' });
+            setSourceMenuItemId('');
+            setSourceVariantId('');
+            setRetypeTargetType('');
+            await refreshData();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setRetyping(false);
+        }
+    };
+
     const handleUndo = async (mergeId: number) => {
-        if (!window.confirm('Undo this merge?')) return;
+        const entry = mergeHistory.find(candidate => candidate.merge_id === mergeId);
+        let globalPreview: GlobalMenuPreview | undefined;
+        if (globalMenuAdvertised) {
+            if (!entry?.global_mutation_id) {
+                setPopup({
+                    type: 'error',
+                    message: 'This legacy history row has no global mutation identity and cannot be undone in global mode.',
+                });
+                return;
+            }
+            try {
+                const previewResponse = await endpoints.menu.globalPreview({
+                    mutation_type: 'global_menu.undo',
+                    payload: { undo_mutation_id: entry.global_mutation_id },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Undoing this global menu change')) return;
+            } catch (error) {
+                setPopup({ type: 'error', message: getApiErrorMessage(error) });
+                return;
+            }
+        } else if (!window.confirm('Undo this merge?')) return;
 
         setUndoingMergeId(mergeId);
         try {
-            await endpoints.menu.undoMerge({ merge_id: mergeId });
+            await endpoints.menu.undoMerge({
+                merge_id: mergeId,
+                ...globalPreviewReference(globalPreview),
+            });
             setPopup({ type: 'success', message: 'Merge undone successfully.' });
             await refreshData();
         } catch (error) {
@@ -1287,6 +1580,26 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
         Boolean(sourceVariantId) &&
         sourceVariantId === targetVariantId
     );
+    const trimmedEditName = editTargetName.trim();
+    const selectedEditVariant = variants.find(variant => variant.variant_id === editTargetVariantId);
+    const isUnchangedEdit = Boolean(
+        selectedSourceItem &&
+        editTargetVariantId &&
+        editTargetVariantId === sourceVariantId &&
+        trimmedEditName.toLowerCase() === selectedSourceItem.name.trim().toLowerCase()
+    );
+    const isUnchangedRetype = Boolean(
+        selectedSourceItem &&
+        retypeTargetType &&
+        retypeTargetType === selectedSourceItem.type
+    );
+    const retypeExistingTarget = (selectedSourceItem && retypeTargetType && !isUnchangedRetype)
+        ? items.find(item =>
+            item.menu_item_id !== selectedSourceItem.menu_item_id &&
+            item.type === retypeTargetType &&
+            item.name.trim().toLowerCase() === selectedSourceItem.name.trim().toLowerCase()
+        )
+        : undefined;
     const normalizedSearch = search.trim().toLowerCase();
     const filteredMatrixData = matrixData.filter(row =>
         row.name.toLowerCase().includes(normalizedSearch)
@@ -1348,8 +1661,14 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
+            <SingleStoreOnly what="Menu changes">
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.45fr) minmax(300px, 1fr)', gap: '20px' }}>
                 <CollapsibleCard title="Merge Menu Item + Variant" defaultCollapsed>
+                    <div className="segmented-control" style={{ marginBottom: '15px' }}>
+                        <TabButton active={matrixMode === 'merge'} onClick={() => setMatrixMode('merge')} variant="segmented">Merge</TabButton>
+                        <TabButton active={matrixMode === 'edit'} onClick={() => setMatrixMode('edit')} variant="segmented">Edit Name/Variant</TabButton>
+                        <TabButton active={matrixMode === 'retype'} onClick={() => setMatrixMode('retype')} variant="segmented">Edit Type</TabButton>
+                    </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1370,6 +1689,21 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                     ))}
                                 </select>
                             </label>
+                            {matrixMode === 'retype' ? (
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Source Type</span>
+                                <select
+                                    value={selectedSourceItem ? selectedSourceItem.type : ''}
+                                    disabled
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', opacity: 0.7 }}
+                                >
+                                    <option value="">Select a source menu item first</option>
+                                    {menuTypes.map(type => (
+                                        <option key={type} value={type}>{type}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            ) : (
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Source Variant</span>
                                 <select
@@ -1386,7 +1720,9 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                     ))}
                                 </select>
                             </label>
+                            )}
                         </div>
+                        {matrixMode === 'merge' ? (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Menu Item</span>
@@ -1436,9 +1772,78 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                 </select>
                             </label>
                         </div>
+                        ) : matrixMode === 'edit' ? (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Menu Item</span>
+                                <input
+                                    type="text"
+                                    value={editTargetName}
+                                    onChange={e => setEditTargetName(e.target.value)}
+                                    placeholder="Enter new menu item name"
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Variant</span>
+                                <select
+                                    value={editTargetVariantId}
+                                    onChange={e => setEditTargetVariantId(e.target.value)}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select target variant</option>
+                                    {variants.map(variant => (
+                                        <option key={variant.variant_id} value={variant.variant_id}>
+                                            {variant.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                        ) : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Menu Item</span>
+                                <select
+                                    value={sourceMenuItemId}
+                                    disabled
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', opacity: 0.7 }}
+                                >
+                                    <option value="">Same as source menu item</option>
+                                    {sourceSelectableItems.map(item => (
+                                        <option key={item.menu_item_id} value={item.menu_item_id}>
+                                            {item.name} ({item.type})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>Target Type</span>
+                                <select
+                                    value={retypeTargetType}
+                                    onChange={e => setRetypeTargetType(e.target.value)}
+                                    disabled={!sourceMenuItemId}
+                                    style={{ padding: '8px', background: 'var(--input-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
+                                >
+                                    <option value="">Select target type</option>
+                                    {menuTypes.map(type => (
+                                        <option key={type} value={type}>
+                                            {type}{selectedSourceItem && type === selectedSourceItem.type ? ' (current)' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                        )}
                     </div>
 
-                    {(selectedSourceItem || selectedTargetItem) && (
+                    {(selectedSourceItem || (
+                        matrixMode === 'merge'
+                            ? Boolean(selectedTargetItem)
+                            : matrixMode === 'edit'
+                                ? Boolean(trimmedEditName || editTargetVariantId)
+                                : Boolean(retypeTargetType)
+                    )) && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', marginTop: '15px' }}>
                             <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
                                 <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#EF4444', marginBottom: '6px' }}>Source</div>
@@ -1446,28 +1851,54 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                     <>
                                         <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedSourceItem.name}</div>
                                         <div>{selectedSourceItem.type}</div>
-                                        <div>{selectedSourceVariant ? selectedSourceVariant.variant_name : 'Select a source variant'}</div>
+                                        <div>
+                                            {matrixMode === 'retype'
+                                                ? 'All variants'
+                                                : (selectedSourceVariant ? selectedSourceVariant.variant_name : 'Select a source variant')}
+                                        </div>
                                     </>
                                 ) : (
-                                    <div>Select a source menu item + variant.</div>
+                                    <div>{matrixMode === 'retype' ? 'Select a source menu item.' : 'Select a source menu item + variant.'}</div>
                                 )}
                             </div>
                             <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--input-bg)', color: 'var(--text-secondary)' }}>
                                 <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#10B981', marginBottom: '6px' }}>Target</div>
-                                {selectedTargetItem ? (
-                                    <>
-                                        <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedTargetItem.name}</div>
-                                        <div>{selectedTargetItem.type}</div>
-                                        <div>{selectedTargetVariantLabel || 'Select a target variant'}</div>
-                                    </>
+                                {matrixMode === 'merge' ? (
+                                    selectedTargetItem ? (
+                                        <>
+                                            <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedTargetItem.name}</div>
+                                            <div>{selectedTargetItem.type}</div>
+                                            <div>{selectedTargetVariantLabel || 'Select a target variant'}</div>
+                                        </>
+                                    ) : (
+                                        <div>Select a target menu item + variant.</div>
+                                    )
+                                ) : matrixMode === 'edit' ? (
+                                    (trimmedEditName || editTargetVariantId) ? (
+                                        <>
+                                            <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{trimmedEditName || 'Enter a new menu item name'}</div>
+                                            <div>{selectedSourceItem ? selectedSourceItem.type : ''}</div>
+                                            <div>{selectedEditVariant ? selectedEditVariant.name : 'Select a target variant'}</div>
+                                        </>
+                                    ) : (
+                                        <div>Enter a new menu item name + select a target variant.</div>
+                                    )
                                 ) : (
-                                    <div>Select a target menu item + variant.</div>
+                                    (selectedSourceItem && retypeTargetType) ? (
+                                        <>
+                                            <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>{selectedSourceItem.name}</div>
+                                            <div>{retypeTargetType}</div>
+                                            <div>All variants</div>
+                                        </>
+                                    ) : (
+                                        <div>Select a target type.</div>
+                                    )
                                 )}
                             </div>
                         </div>
                     )}
 
-                    {(previewLoading || mergePreview) && (
+                    {matrixMode === 'merge' && (previewLoading || mergePreview) && (
                         <div style={{ marginTop: '15px', padding: '14px', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
                             {previewLoading ? (
                                 <div style={{ color: 'var(--text-secondary)' }}>Loading merge preview...</div>
@@ -1482,6 +1913,14 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                         Selected source-variant totals: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
                                     </div>
+                                    {mergePreview.global_menu && (
+                                        <div style={{ color: '#F59E0B', fontSize: '0.9em', fontWeight: 700 }}>
+                                            Global menu change: affects every restaurant in menu group {mergePreview.global_menu.menu_group_id}
+                                            {mergePreview.global_menu.impact?.affected_restaurants != null
+                                                ? ` (${mergePreview.global_menu.impact.affected_restaurants} restaurants)`
+                                                : ''}.
+                                        </div>
+                                    )}
                                     {sourceMenuItemId === targetMenuItemId ? (
                                         <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
                                             Source and target item are the same. This will consolidate the selected source variant into the selected target variant inside one menu item.
@@ -1496,29 +1935,95 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                         </div>
                     )}
 
-                    {isSameExactPair && (
+                    {matrixMode === 'merge' && isSameExactPair && (
                         <div style={{ marginTop: '12px', color: '#F59E0B', fontSize: '0.9em' }}>
                             Source and target pair are identical. Choose a different target variant or target item.
                         </div>
                     )}
 
+                    {matrixMode === 'edit' && (
+                        <div style={{ marginTop: '12px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                            Update renames the selected pair everywhere (cluster mappings, order history, analytics), keeps the item type, and syncs the change to the cloud. If the new pair already exists, the source pair is consolidated into it.
+                        </div>
+                    )}
+
+                    {matrixMode === 'edit' && isUnchangedEdit && (
+                        <div style={{ marginTop: '12px', color: '#F59E0B', fontSize: '0.9em' }}>
+                            New values match the current pair. Change the item name or variant name before updating.
+                        </div>
+                    )}
+
+                    {matrixMode === 'retype' && (
+                        <div style={{ marginTop: '12px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                            Update changes the item's type everywhere (all variants, cluster mappings, order history, analytics), clears affected forecast caches, and syncs the change to the cloud. If an item with the same name and the target type already exists, their histories are consolidated.
+                        </div>
+                    )}
+
+                    {matrixMode === 'retype' && isUnchangedRetype && (
+                        <div style={{ marginTop: '12px', color: '#F59E0B', fontSize: '0.9em' }}>
+                            Target type matches the current type. Choose a different target type before updating.
+                        </div>
+                    )}
+
+                    {matrixMode === 'retype' && retypeExistingTarget && (
+                        <div style={{ marginTop: '12px', color: '#F59E0B', fontSize: '0.9em' }}>
+                            An item named '{retypeExistingTarget.name}' already exists with type '{retypeExistingTarget.type}'. Updating will consolidate both items' histories into it.
+                        </div>
+                    )}
+
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
-                        <button
-                            onClick={() => void handleMerge()}
-                            disabled={merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair}
-                            style={{
-                                background: '#2563EB',
-                                color: 'white',
-                                border: 'none',
-                                padding: '10px 16px',
-                                cursor: merging ? 'not-allowed' : 'pointer',
-                                opacity: merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair ? 0.7 : 1,
-                                borderRadius: '8px',
-                                fontWeight: 700,
-                            }}
-                        >
-                            {merging ? 'Merging...' : 'Merge Selected Pair'}
-                        </button>
+                        {matrixMode === 'merge' ? (
+                            <button
+                                onClick={() => void handleMerge()}
+                                disabled={merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair || Boolean(mergePreview?.global_menu && !mergePreview.global_menu.commit_allowed)}
+                                style={{
+                                    background: '#2563EB',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '10px 16px',
+                                    cursor: merging ? 'not-allowed' : 'pointer',
+                                    opacity: merging || !sourceMenuItemId || !sourceVariantId || !targetMenuItemId || !targetVariantId || isSameExactPair ? 0.7 : 1,
+                                    borderRadius: '8px',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                {merging ? 'Merging...' : 'Merge Selected Pair'}
+                            </button>
+                        ) : matrixMode === 'edit' ? (
+                            <button
+                                onClick={() => void handleUpdate()}
+                                disabled={updating || !sourceMenuItemId || !sourceVariantId || !trimmedEditName || !editTargetVariantId || isUnchangedEdit}
+                                style={{
+                                    background: '#2563EB',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '10px 16px',
+                                    cursor: updating ? 'not-allowed' : 'pointer',
+                                    opacity: updating || !sourceMenuItemId || !sourceVariantId || !trimmedEditName || !editTargetVariantId || isUnchangedEdit ? 0.7 : 1,
+                                    borderRadius: '8px',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                {updating ? 'Updating...' : 'Update'}
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => void handleRetype()}
+                                disabled={retyping || !sourceMenuItemId || !retypeTargetType || isUnchangedRetype}
+                                style={{
+                                    background: '#2563EB',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '10px 16px',
+                                    cursor: retyping ? 'not-allowed' : 'pointer',
+                                    opacity: retyping || !sourceMenuItemId || !retypeTargetType || isUnchangedRetype ? 0.7 : 1,
+                                    borderRadius: '8px',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                {retyping ? 'Updating...' : 'Update'}
+                            </button>
+                        )}
                     </div>
                 </CollapsibleCard>
 
@@ -1563,6 +2068,7 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     )}
                 </CollapsibleCard>
             </div>
+            </SingleStoreOnly>
 
             {/* Menu Matrix Table Container */}
             <div style={{ marginTop: '20px' }}>
@@ -1580,21 +2086,23 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                     <table className="standard-table">
                         <thead>
                             <tr>
-                                <th>Action</th>
+                                {!isAllStores && <th>Action</th>}
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
                                 <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
+                                <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
                                 <th className="text-right" onClick={() => handleSort('price')}>Price{renderSortIcon('price')}</th>
                                 <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>
                                 <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>
                                 <th className="text-center" onClick={() => handleSort('delivery_eligible')}>Delivery{renderSortIcon('delivery_eligible')}</th>
+                                <th className="text-center" onClick={() => handleSort('is_verified')}>Verified{renderSortIcon('is_verified')}</th>
                             </tr>
                         </thead>
                         <tbody>
                             {displayData.map((r, i) => (
                                 <tr key={i}>
-                                    <td>
+                                    {!isAllStores && <td>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                             <button
                                                 onClick={() => handlePrefill(r, 'source')}
@@ -1623,15 +2131,26 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
                                                 Target
                                             </button>
                                         </div>
+                                    </td>}
+                                    <td>
+                                        <span>{r.name}</span>
+                                        {isUnverifiedFlag(r.is_verified) && (
+                                            <span style={verificationBadgeStyle}>Needs verification</span>
+                                        )}
                                     </td>
-                                    <td>{r.name}</td>
                                     <td>{r.type}</td>
                                     <td>{r.variant_name}</td>
                                     <td className="text-center">{r.mapping_count}</td>
+                                    <td className="text-center">
+                                        {r.order_count > 0 ? r.order_count : (
+                                            <span style={{ color: '#EF4444', fontWeight: 600 }} title="No order lines reference this item + variant in this install's data">0</span>
+                                        )}
+                                    </td>
                                     <td className="text-right">₹{r.price}</td>
                                     <td className="text-center">{r.is_active ? "✅" : "❌"}</td>
                                     <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>
                                     <td className="text-center">{r.delivery_eligible ? "✅" : "❌"}</td>
+                                    <td className="text-center">{isUnverifiedFlag(r.is_verified) ? "❌" : "✅"}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -1667,7 +2186,208 @@ function MatrixTab({ lastDbSync }: { lastDbSync?: number }) {
 
 // --- Resolutions Tab ---
 
+const coreLabel = (coreKey?: string | null): string => {
+    if (!coreKey) return '—';
+    const parts = String(coreKey).split('|');
+    return (parts.length > 1 ? parts.slice(1).join('|') : parts[0]).trim() || '—';
+};
+
+// Silent-reuse guard: PetPooja ids whose incoming name resolves to a different
+// product than the id's verified mapping. See src/core/mapping_anomalies.py.
+function SuspectMappingsCard({
+    lookupItems,
+    variantOptions,
+    setPopup,
+    onRemapped,
+    lastDbSync,
+}: {
+    lookupItems: MenuLookupItem[];
+    variantOptions: VariantOption[];
+    setPopup: (p: PopupMessage | null) => void;
+    onRemapped: () => void;
+    lastDbSync?: number;
+}) {
+    const { selectedStore } = useStore();
+    const globalMenuAdvertised = Boolean(
+        selectedStore?.menu_group_id && selectedStore.menu_capabilities?.includes('global_menu_mutations_v1'),
+    );
+    const [suspects, setSuspects] = useState<SuspectMapping[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selection, setSelection] = useState<Record<number, { itemId: string; variantId: string }>>({});
+    const [busyId, setBusyId] = useState<number | null>(null);
+
+    const load = async () => {
+        setLoading(true);
+        try {
+            const res = await endpoints.menu.suspectMappings();
+            setSuspects(res.data);
+        } catch (error) {
+            setPopup({ type: 'error', message: `Failed to load suspect mappings. ${getApiErrorMessage(error)}` });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+    }, [lastDbSync]);
+
+    const handleDismiss = async (anomalyId: number) => {
+        setBusyId(anomalyId);
+        try {
+            await endpoints.menu.dismissSuspectMapping(anomalyId);
+            setSuspects(prev => prev.filter(s => s.anomaly_id !== anomalyId));
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const handleRemap = async (row: SuspectMapping) => {
+        const pick = selection[row.anomaly_id];
+        if (!pick?.itemId || !pick?.variantId) {
+            setPopup({ type: 'error', message: 'Choose a target item and variant before remapping.' });
+            return;
+        }
+        setBusyId(row.anomaly_id);
+        try {
+            let globalPreview: GlobalMenuPreview | undefined;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'remap',
+                    source_local_menu_item_id: row.current_menu_item_id || undefined,
+                    source_local_variant_id: row.current_variant_id || undefined,
+                    target_local_menu_item_id: pick.itemId,
+                    target_local_variant_id: pick.variantId,
+                    details: { restaurant_pos_assignment_key: row.order_item_id },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Remapping this POS assignment')) return;
+            }
+            const res = await endpoints.menu.remap({
+                order_item_id: row.order_item_id,
+                new_menu_item_id: pick.itemId,
+                new_variant_id: pick.variantId,
+                ...globalPreviewReference(globalPreview),
+            });
+            setPopup({ type: 'success', message: res.data?.message || 'Order item remapped.' });
+            setSuspects(prev => prev.filter(s => s.anomaly_id !== row.anomaly_id));
+            onRemapped();
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const verifiedItems = lookupItems.filter(i => i.is_verified);
+
+    return (
+        <CollapsibleCard
+            title={`⚠️ Suspect Mappings${suspects.length ? ` (${suspects.length})` : ''}`}
+            defaultCollapsed={suspects.length === 0}
+        >
+            <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                A PetPooja id here now carries a different product than its verified mapping — orders are being
+                booked as the old product. Dismiss if it is only a relabel, or remap to the correct item.
+            </p>
+            {loading ? (
+                <p style={{ color: 'var(--text-secondary)' }}>Loading…</p>
+            ) : suspects.length === 0 ? (
+                <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No suspect mappings. 🎉</p>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '520px', overflowY: 'auto' }}>
+                    {suspects.map(row => {
+                        const pick = selection[row.anomaly_id] || { itemId: '', variantId: '' };
+                        const busy = busyId === row.anomaly_id;
+                        return (
+                            <div
+                                key={row.anomaly_id}
+                                style={{ padding: '12px', border: '1px solid var(--border-color)', borderRadius: '10px' }}
+                            >
+                                <div style={{ color: 'var(--text-color)', marginBottom: '4px' }}>
+                                    <span style={{ fontWeight: 700 }}>{row.name_raw}</span>
+                                    {row.is_addon ? (
+                                        <span style={{ marginLeft: 8, fontSize: '0.75em', color: 'var(--text-secondary)' }}>addon</span>
+                                    ) : null}
+                                </div>
+                                <div style={{ fontSize: '0.88em', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                                    booked as <span style={{ color: '#EF4444' }}>{row.current_mapped_name || '—'}</span>
+                                    {' · was '}<code>{coreLabel(row.baseline_core_key)}</code>
+                                    {' → now '}<code>{coreLabel(row.core_key)}</code>
+                                    {typeof row.affected_qty === 'number' && row.affected_qty > 0
+                                        ? ` · ${row.affected_qty} sold under this label`
+                                        : ''}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                                    <input
+                                        list={`suspect-items-${row.anomaly_id}`}
+                                        placeholder="Correct item…"
+                                        defaultValue=""
+                                        onChange={e => {
+                                            const match = verifiedItems.find(i => i.name === e.target.value);
+                                            setSelection(prev => ({
+                                                ...prev,
+                                                [row.anomaly_id]: { ...pick, itemId: match ? match.menu_item_id : '' },
+                                            }));
+                                        }}
+                                        style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)', minWidth: '200px' }}
+                                    />
+                                    <datalist id={`suspect-items-${row.anomaly_id}`}>
+                                        {verifiedItems.map(i => (
+                                            <option key={i.menu_item_id} value={i.name}>{i.type}</option>
+                                        ))}
+                                    </datalist>
+                                    <select
+                                        value={pick.variantId}
+                                        onChange={e => setSelection(prev => ({
+                                            ...prev,
+                                            [row.anomaly_id]: { ...pick, variantId: e.target.value },
+                                        }))}
+                                        style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                    >
+                                        <option value="">Variant…</option>
+                                        {variantOptions.map(v => (
+                                            <option key={v.variant_id} value={v.variant_id}>{v.name}</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        onClick={() => void handleRemap(row)}
+                                        disabled={busy || !pick.itemId || !pick.variantId}
+                                        style={{
+                                            padding: '8px 14px', background: '#2563EB', color: 'white', border: 'none',
+                                            borderRadius: '8px', cursor: busy ? 'not-allowed' : 'pointer',
+                                            opacity: busy || !pick.itemId || !pick.variantId ? 0.6 : 1, fontWeight: 700,
+                                        }}
+                                    >
+                                        {busy ? 'Working…' : 'Remap'}
+                                    </button>
+                                    <button
+                                        onClick={() => void handleDismiss(row.anomaly_id)}
+                                        disabled={busy}
+                                        style={{
+                                            padding: '8px 14px', background: '#444', color: 'white', border: 'none',
+                                            borderRadius: '8px', cursor: busy ? 'not-allowed' : 'pointer',
+                                        }}
+                                    >
+                                        Dismiss (relabel)
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </CollapsibleCard>
+    );
+}
+
 function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { selectedStore } = useStore();
+    const globalMenuAdvertised = hasGlobalMenuMutationCapability(selectedStore);
+    const globalResolutionAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
+    const globalResolutionOnly = globalResolutionAdvertised && !globalMenuAdvertised;
     const [items, setItems] = useState<ResolutionItem[]>([]);
     const [lookupItems, setLookupItems] = useState<MenuLookupItem[]>([]);
     const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
@@ -1895,6 +2615,94 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         openResolutionModal(item, undefined, 'rename');
     };
 
+    const previewAndCommitResolutionAction = async (
+        mutationType: string,
+        payload: Record<string, unknown>,
+        operation: string,
+    ): Promise<GlobalMenuResolutionCommit | null> => {
+        const previewResponse = await endpoints.menu.globalPreview({
+            mutation_type: mutationType,
+            payload,
+        });
+        const preview = previewResponse.data;
+        if (!confirmGlobalImpact(preview, operation)) return null;
+        const commitResponse = await endpoints.menu.globalCommit(
+            globalPreviewReference(preview),
+        );
+        return commitResponse.data;
+    };
+
+    const loadGlobalResolutionContext = async (
+        localMenuItemId: string,
+        localVariantId?: string,
+    ): Promise<GlobalMenuResolutionContext> => {
+        const response = await endpoints.menu.globalResolutionContext({
+            local_menu_item_id: localMenuItemId,
+            local_variant_id: localVariantId,
+        });
+        return response.data;
+    };
+
+    const ensureGlobalResolutionItem = async (
+        context: GlobalMenuResolutionContext,
+        canonicalName: string,
+        canonicalType: string,
+    ): Promise<string | null> => {
+        if (context.global_item_id) return context.global_item_id;
+        const result = await previewAndCommitResolutionAction(
+            'global_item.create',
+            {
+                canonical_name: canonicalName,
+                canonical_type: canonicalType,
+                is_verified: true,
+            },
+            `Creating “${canonicalName}” in the shared canonical menu`,
+        );
+        return result?.applied?.global_item_id || null;
+    };
+
+    const ensureGlobalResolutionVariant = async (
+        context: GlobalMenuResolutionContext | null,
+        fallbackName?: string,
+    ): Promise<string | null> => {
+        if (context?.global_variant_id) return context.global_variant_id;
+        const canonicalName = context?.variant?.canonical_name || fallbackName?.trim();
+        if (!canonicalName) return null;
+        const result = await previewAndCommitResolutionAction(
+            'global_variant.create',
+            {
+                canonical_name: canonicalName,
+                dimension: context?.variant?.dimension || { unit: '', value: null },
+            },
+            `Creating the “${canonicalName}” canonical variant`,
+        );
+        return result?.applied?.global_variant_id || null;
+    };
+
+    const mapGlobalResolutionLocators = async (
+        context: GlobalMenuResolutionContext,
+        globalItemId: string,
+        globalVariantId: string | null,
+        label: string,
+    ): Promise<boolean> => {
+        if (!context.locators.length) {
+            throw new Error('No trusted POS locator or approved alias is available for this resolution.');
+        }
+        for (const locator of context.locators) {
+            const result = await previewAndCommitResolutionAction(
+                'global_locator.map',
+                {
+                    ...locator,
+                    global_item_id: globalItemId,
+                    global_variant_id: globalVariantId || '',
+                },
+                `Mapping ${label} (${locator.locator_type}: ${locator.locator_value})`,
+            );
+            if (!result) return false;
+        }
+        return true;
+    };
+
     const handleMerge = async () => {
         if (!modalItem || !selectedTargetId) {
             setPopup({ type: 'error', message: 'Select a verified target item first.' });
@@ -1924,6 +2732,81 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
         setMergeSubmitting(true);
         try {
             const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
+            const sourceResolutionContext = globalResolutionAdvertised
+                ? await loadGlobalResolutionContext(
+                    modalItem.menu_item_id,
+                    modalItem.source_variant_id,
+                )
+                : null;
+            const useCoverageRepair = Boolean(
+                sourceResolutionContext && (
+                    globalResolutionOnly ||
+                    !sourceResolutionContext.global_item_id ||
+                    !sourceResolutionContext.global_variant_id
+                ),
+            );
+            if (useCoverageRepair && sourceResolutionContext) {
+                const sourceContext = sourceResolutionContext;
+                const targetContext = selectedTargetVariant === '__new__'
+                    ? await loadGlobalResolutionContext(selectedTargetId)
+                    : await loadGlobalResolutionContext(selectedTargetId, selectedTargetVariant);
+                const globalItemId = await ensureGlobalResolutionItem(
+                    targetContext,
+                    targetContext.canonical_name,
+                    targetContext.canonical_type,
+                );
+                if (!globalItemId) return;
+                const globalVariantId = await ensureGlobalResolutionVariant(
+                    selectedTargetVariant === '__new__' ? null : targetContext,
+                    selectedTargetVariant === '__new__'
+                        ? (newVariantNames[selectedSourceVariant.variant_id] || '')
+                        : undefined,
+                );
+                if (!globalVariantId) {
+                    throw new Error('The target canonical variant could not be created or resolved.');
+                }
+                const targetNeedsMapping = !targetContext.global_item_id || (
+                    selectedTargetVariant !== '__new__' && !targetContext.global_variant_id
+                );
+                if (targetNeedsMapping) {
+                    const targetMapped = await mapGlobalResolutionLocators(
+                        targetContext,
+                        globalItemId,
+                        selectedTargetVariant === '__new__' ? null : globalVariantId,
+                        targetContext.canonical_name,
+                    );
+                    if (!targetMapped) return;
+                }
+                const sourceMapped = await mapGlobalResolutionLocators(
+                    sourceContext,
+                    globalItemId,
+                    globalVariantId,
+                    modalItem.display_name || modalItem.name,
+                );
+                if (!sourceMapped) return;
+                removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
+                setPopup({ type: 'success', message: 'Global menu identity resolved successfully.' });
+                closeResolutionModal();
+                await refreshAll();
+                return;
+            }
+            let globalPreview = mergePreview?.global_menu;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'variant_merge',
+                    source_local_menu_item_id: modalItem.menu_item_id,
+                    source_local_variant_id: modalItem.source_variant_id,
+                    target_local_menu_item_id: selectedTargetId,
+                    target_local_variant_id: selectedTargetVariant === '__new__'
+                        ? undefined
+                        : selectedTargetVariant,
+                    details: selectedTargetVariant === '__new__'
+                        ? { new_variant_name: (newVariantNames[selectedSourceVariant.variant_id] || '').trim() }
+                        : undefined,
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Resolving this canonical menu pair')) return;
+            }
             const res = await endpoints.menu.resolve({
                 source_menu_item_id: modalItem.menu_item_id,
                 source_variant_id: modalItem.source_variant_id,
@@ -1932,6 +2815,7 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                 new_variant_name: selectedTargetVariant === '__new__'
                     ? (newVariantNames[selectedSourceVariant.variant_id] || '').trim()
                     : undefined,
+                ...globalPreviewReference(globalPreview),
             });
             removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
             setPopup({ type: 'success', message: res.data.message || 'Variant resolved successfully.' });
@@ -1962,12 +2846,76 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
 
         setRenameSubmitting(true);
         try {
+            const sourceResolutionContext = globalResolutionAdvertised
+                ? await loadGlobalResolutionContext(
+                    modalItem.menu_item_id,
+                    modalItem.source_variant_id,
+                )
+                : null;
+            const useCoverageRepair = Boolean(
+                sourceResolutionContext && (
+                    globalResolutionOnly ||
+                    !sourceResolutionContext.global_item_id ||
+                    !sourceResolutionContext.global_variant_id
+                ),
+            );
+            if (useCoverageRepair && sourceResolutionContext) {
+                const sourceContext = sourceResolutionContext;
+                const variantContext = await loadGlobalResolutionContext(
+                    modalItem.menu_item_id,
+                    renameVariantId,
+                );
+                if (sourceContext.global_item_id && (
+                    sourceContext.canonical_name !== trimmedName ||
+                    sourceContext.canonical_type !== trimmedType
+                )) {
+                    throw new Error(
+                        'Renaming an existing canonical item requires active global-menu mutations. Choose its current canonical name/type or wait for activation.',
+                    );
+                }
+                const globalItemId = await ensureGlobalResolutionItem(
+                    sourceContext,
+                    trimmedName,
+                    trimmedType,
+                );
+                if (!globalItemId) return;
+                const globalVariantId = await ensureGlobalResolutionVariant(variantContext);
+                if (!globalVariantId) {
+                    throw new Error('The selected canonical variant could not be created or resolved.');
+                }
+                const mapped = await mapGlobalResolutionLocators(
+                    sourceContext,
+                    globalItemId,
+                    globalVariantId,
+                    modalItem.display_name || modalItem.name,
+                );
+                if (!mapped) return;
+                removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
+                setPopup({ type: 'success', message: 'Global menu identity resolved successfully.' });
+                closeResolutionModal();
+                await refreshAll();
+                return;
+            }
+            let globalPreview: GlobalMenuPreview | undefined;
+            if (globalMenuAdvertised) {
+                const previewResponse = await endpoints.menu.globalLocalPreview({
+                    mutation_type: 'verify_or_rename',
+                    source_local_menu_item_id: modalItem.menu_item_id,
+                    source_local_variant_id: modalItem.source_variant_id,
+                    target_local_menu_item_id: modalItem.menu_item_id,
+                    target_local_variant_id: renameVariantId,
+                    details: { canonical_name: trimmedName, canonical_type: trimmedType },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Verifying this canonical menu pair')) return;
+            }
             const res = await endpoints.menu.resolve({
                 source_menu_item_id: modalItem.menu_item_id,
                 source_variant_id: modalItem.source_variant_id,
                 new_name: trimmedName,
                 new_type: trimmedType,
                 target_variant_id: renameVariantId,
+                ...globalPreviewReference(globalPreview),
             });
             removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
             setPopup({ type: 'success', message: res.data.message || 'Resolution saved successfully.' });
@@ -1981,11 +2929,35 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const handleUndo = async (mergeId: number) => {
-        if (!window.confirm('Undo this resolution?')) return;
+        const entry = mergeHistory.find(candidate => candidate.merge_id === mergeId);
+        let globalPreview: GlobalMenuPreview | undefined;
+        if (globalMenuAdvertised) {
+            if (!entry?.global_mutation_id) {
+                setPopup({
+                    type: 'error',
+                    message: 'This legacy history row has no global mutation identity and cannot be undone in global mode.',
+                });
+                return;
+            }
+            try {
+                const previewResponse = await endpoints.menu.globalPreview({
+                    mutation_type: 'global_menu.undo',
+                    payload: { undo_mutation_id: entry.global_mutation_id },
+                });
+                globalPreview = previewResponse.data;
+                if (!confirmGlobalImpact(globalPreview, 'Undoing this global menu change')) return;
+            } catch (error) {
+                setPopup({ type: 'error', message: getApiErrorMessage(error) });
+                return;
+            }
+        } else if (!window.confirm('Undo this resolution?')) return;
 
         setUndoingMergeId(mergeId);
         try {
-            await endpoints.menu.undoMerge({ merge_id: mergeId });
+            await endpoints.menu.undoMerge({
+                merge_id: mergeId,
+                ...globalPreviewReference(globalPreview),
+            });
             setPopup({ type: 'success', message: 'Resolution undone successfully.' });
             await refreshAll();
         } catch (error) {
@@ -2029,19 +3001,36 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-                Resolve each unclustered menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
+                Resolve each unclustered or globally unlinked menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
             </p>
+            <SuspectMappingsCard
+                lookupItems={lookupItems}
+                variantOptions={variantOptions}
+                setPopup={setPopup}
+                onRemapped={() => void refreshAll()}
+                lastDbSync={lastDbSync}
+            />
             {loading ? (
                 <div>Loading...</div>
             ) : items.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-color)' }}>
                     <div style={{ fontSize: '3em', marginBottom: '10px' }}>✅</div>
-                    <h3>All items verified!</h3>
-                    <p style={{ color: 'var(--text-secondary)' }}>No unclustered items found.</p>
+                    <h3>All menu identities resolved!</h3>
+                    <p style={{ color: 'var(--text-secondary)' }}>No unclustered or globally unlinked items found.</p>
                 </div>
             ) : (
                 items.map(item => (
-                    <Card key={`${item.menu_item_id}-${item.source_variant_id}`} title={formatResolutionTitle(item)}>
+                    <Card key={`${item.menu_item_id}-${item.source_variant_id}`} title={(
+                        <span>
+                            {formatResolutionTitle(item)}
+                            {item.resolution_kind === 'addon_gap' && (
+                                <span style={addonGapBadgeStyle}>Addon gap — needs confirmation</span>
+                            )}
+                            {item.resolution_kind === 'global_identity_gap' && (
+                                <span style={addonGapBadgeStyle}>Global identity gap</span>
+                            )}
+                        </span>
+                    )}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 420px)', gap: '20px' }}>
                             <div>
                                 <p>Created: {new Date(item.created_at).toLocaleString()}</p>
@@ -2051,6 +3040,8 @@ function ResolutionsTab({ lastDbSync }: { lastDbSync?: number }) {
                                     Unresolved rows: {item.unresolved_mapping_rows || 0} mappings
                                     {item.order_item_rows ? `, ${item.order_item_rows} order rows` : ''}
                                     {item.order_item_qty ? `, ${item.order_item_qty} qty` : ''}
+                                    {item.addon_rows ? `, ${item.addon_rows} addon rows` : ''}
+                                    {item.addon_qty ? `, ${item.addon_qty} addon qty` : ''}
                                 </p>
                                 {item.suggestion_id ? (
                                     <div style={{ padding: '12px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: '10px' }}>
@@ -2534,7 +3525,11 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
             {activeTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
             {activeTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
             {activeTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} />}
-            {activeTab === 'resolutions' && <ResolutionsTab lastDbSync={lastDbSync} />}
+            {activeTab === 'resolutions' && (
+                <SingleStoreOnly what="Menu resolutions">
+                    <ResolutionsTab lastDbSync={lastDbSync} />
+                </SingleStoreOnly>
+            )}
         </div>
     );
 }

@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 
@@ -13,7 +14,15 @@ from src.core.config.client_learning_config import (
 )
 
 
-def verify() -> bool:
+def _headers(api_key: str, restaurant_id: str) -> dict:
+    return {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "X-Restaurant-ID": restaurant_id,
+    }
+
+
+def verify(api_key: str, restaurant_id: str) -> bool:
     all_success = True
     print(f"Testing connection to: {_PLACEHOLDER_BASE}")
 
@@ -21,7 +30,7 @@ def verify() -> bool:
     print(f"Target URL 1: {test_url}")
 
     try:
-        response = requests.get(test_url, timeout=5)
+        response = requests.get(test_url, headers=_headers(api_key, restaurant_id), timeout=5)
         print(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
@@ -46,7 +55,11 @@ def verify() -> bool:
 
     print(f"Testing Forecast Bootstrap: {CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL}")
     try:
-        response = requests.get(CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL, timeout=5)
+        response = requests.get(
+            CLIENT_LEARNING_FORECAST_BOOTSTRAP_URL,
+            headers=_headers(api_key, restaurant_id),
+            timeout=5,
+        )
         print(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
@@ -61,5 +74,26 @@ def verify() -> bool:
     return all_success
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Verify scoped desktop-sync endpoints")
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("DACHNONA_E2E_API_KEY"),
+        help="Desktop sync Bearer token (or DACHNONA_E2E_API_KEY)",
+    )
+    parser.add_argument(
+        "--restaurant-id",
+        default=os.environ.get("DACHNONA_E2E_RESTAURANT_ID"),
+        help="Physical restaurant ID (required; or DACHNONA_E2E_RESTAURANT_ID)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    sys.exit(0 if verify() else 1)
+    args = parse_args()
+    api_key = str(args.api_key or "").strip()
+    restaurant_id = str(args.restaurant_id or "").strip()
+    if not api_key or not restaurant_id or restaurant_id == "__all__":
+        print("FAILURE: --api-key and one physical --restaurant-id are required")
+        raise SystemExit(2)
+    sys.exit(0 if verify(api_key, restaurant_id) else 1)

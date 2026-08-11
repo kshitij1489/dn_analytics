@@ -34,8 +34,8 @@ from src.core.menu_mutation_commit import (
     check_assignment_parity,
     commit_mutation,
 )
-from src.core.menu_outbox_drain import drain_menu_outbox, get_menu_outbox_status
-from src.core.sync_identity import set_menu_state_revision, set_menu_strict_mode_enabled
+from src.core.sync_identity import set_menu_state_revision
+from tests.profile_test_helpers import bind_test_profile
 
 
 def _strict_mode_db() -> sqlite3.Connection:
@@ -125,10 +125,10 @@ def _strict_mode_db() -> sqlite3.Connection:
         "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
     )
     set_menu_state_revision(conn, 10)
-    set_menu_strict_mode_enabled(conn, True)
     ensure_menu_merge_sync_tables(conn)
     ensure_assignment_sync_schema(conn)
     conn.commit()
+    bind_test_profile(conn)
     return conn
 
 
@@ -469,7 +469,9 @@ class Phase7ValidationTests(unittest.TestCase):
 
         bootstrap_pull.assert_called_once()
         order_sync.assert_called_once_with(conn)
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=True)
+        cloud_pull.assert_called_once_with(
+            conn, skip_menu_bootstrap=True, already_locked=False
+        )
         self.assertEqual(statuses[-1].type, "done")
         conn.close()
 
@@ -498,45 +500,6 @@ class Phase7ValidationTests(unittest.TestCase):
 
         self.assertEqual(statuses[-1].type, "error")
         self.assertIn("Menu pull failed", statuses[-1].message)
-
-    # ------------------------------------------------------------------
-    # 7.10 Legacy unsent event drain
-    # ------------------------------------------------------------------
-
-    @patch("src.core.menu_outbox_drain.upload_verification_events", return_value={"events_sent": 0})
-    @patch("src.core.menu_outbox_drain.upload_merge_events")
-    @patch("src.core.menu_outbox_drain.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
-    def test_phase7_10_legacy_outbox_drain_does_not_touch_strict_state(self, _cfg, mock_merge, _verification) -> None:
-        conn = _strict_mode_db()
-        try:
-            conn.execute(
-                """
-                INSERT INTO menu_merge_sync_events (event_id, event_type, payload, occurred_at)
-                VALUES ('evt-legacy', 'menu_merge.applied', '{"remote_event_id":"evt-legacy"}', '2026-07-06T10:00:00Z')
-                """
-            )
-            conn.commit()
-            self.assertFalse(get_menu_outbox_status(conn)["outbox_drained"])
-
-            def _upload(conn, **kwargs):
-                conn.execute(
-                    "UPDATE menu_merge_sync_events SET uploaded_at = '2026-07-06T11:00:00Z' WHERE event_id = 'evt-legacy'"
-                )
-                conn.commit()
-                return {"events_sent": 1, "backfilled_applied": 0, "error": None}
-
-            mock_merge.side_effect = _upload
-            result = drain_menu_outbox(conn)
-            self.assertEqual(result["status"], "ok")
-            self.assertTrue(result["outbox_drained"])
-            self.assertEqual(
-                conn.execute("SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = '1'").fetchone()[
-                    "menu_item_id"
-                ],
-                "item_source",
-            )
-        finally:
-            conn.close()
 
     # ------------------------------------------------------------------
     # 7.12 Orphaned accepted mutation
@@ -576,7 +539,7 @@ class Phase7ValidationTests(unittest.TestCase):
             mock_response.json.return_value = {
                 "events": [remote_event],
                 "next_cursor": "88",
-                "scope_state": {"menu_revision": 12, "strict_mode_enabled": True},
+                "scope_state": {"menu_revision": 12},
             }
             with patch("requests.get", return_value=mock_response):
                 pull_result = pull_and_apply_menu_merge_events(

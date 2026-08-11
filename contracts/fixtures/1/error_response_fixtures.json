@@ -1,0 +1,183 @@
+{
+  "description": "Common error and edge-case response fixtures across all desktop_analytics_app_sync endpoints (contract v1.2). These cover HTTP 400/401/404/422/500 error codes and edge-case success responses (empty pulls, duplicates, rejected events). Note: the legacy batched ingest endpoints were removed (strict-only, 2026-07-09) and now return 404; the former 426 upgrade_required responses no longer occur.",
+  "fixtures": [
+    {
+      "name": "auth_401_missing_header",
+      "description": "Bearer auth required (SYNC_API_KEY is set) but Authorization header is missing (§4.1).",
+      "applies_to": "all endpoints",
+      "http_status": 401,
+      "payload": {
+        "error": "Missing or invalid Authorization header"
+      }
+    },
+    {
+      "name": "auth_401_invalid_key",
+      "description": "Bearer token present but does not match SYNC_API_KEY (§4.1).",
+      "applies_to": "all endpoints",
+      "http_status": 401,
+      "payload": {
+        "error": "Invalid API key"
+      }
+    },
+    {
+      "name": "cursor_400_invalid",
+      "description": "Cursor string cannot be parsed as a v2 cursor token (§4.4).",
+      "applies_to": "GET customer-merges, GET menu-merges, GET menu-mapping-verifications",
+      "http_status": 400,
+      "payload": {
+        "error": "Invalid cursor."
+      }
+    },
+    {
+      "name": "cursor_400_unsupported_version",
+      "description": "Cursor parses but version is not v2 (e.g. v1 or unknown) (§4.4).",
+      "applies_to": "GET customer-merges, GET menu-merges, GET menu-mapping-verifications",
+      "http_status": 400,
+      "payload": {
+        "error": "Unsupported cursor version."
+      }
+    },
+    {
+      "name": "forecast_cursor_400_invalid",
+      "description": "Forecast sync cursor is not a valid numeric string (§22.4).",
+      "applies_to": "GET forecasts/delta",
+      "http_status": 400,
+      "payload": {
+        "error": "Invalid forecast cursor."
+      }
+    },
+    {
+      "name": "ingest_400_envelope_validation",
+      "description": "Top-level envelope validation failure — events field is not a list or missing (§4.7, §7.2).",
+      "applies_to": "POST customer-merges/ingest, POST menu-merges/ingest, POST menu-mapping-verifications/ingest",
+      "http_status": 400,
+      "payload": {
+        "error": "Validation error",
+        "details": {
+          "events": ["This field is required."]
+        }
+      }
+    },
+    {
+      "name": "bootstrap_400_missing_required_fields",
+      "description": "Menu bootstrap ingest missing required id_maps or cluster_state (§9.1).",
+      "applies_to": "POST menu-bootstrap/ingest",
+      "http_status": 400,
+      "payload": {
+        "error": "Validation error",
+        "details": {
+          "id_maps": ["This field is required."],
+          "cluster_state": ["This field is required."]
+        }
+      }
+    },
+    {
+      "name": "mutation_400_batch_rejected",
+      "description": "Mutation commit received an array or batch instead of a single mutation (§19.4, §21.4).",
+      "applies_to": "POST menu-mutations/commit, POST customer-mutations/commit",
+      "http_status": 400,
+      "payload": {
+        "error": "Exactly one mutation per request is required; batches are not accepted."
+      }
+    },
+    {
+      "name": "mutation_400_malformed_event",
+      "description": "Mutation commit event body is malformed or missing required fields (§19.4).",
+      "applies_to": "POST menu-mutations/commit, POST customer-mutations/commit",
+      "http_status": 400,
+      "payload": {
+        "error": "Validation error",
+        "details": {
+          "event": ["This field is required."],
+          "mutation_type": ["This field is required."]
+        }
+      }
+    },
+    {
+      "name": "customer_mutation_422_unknown_revert",
+      "description": "Customer undo references a reverts_remote_event_id that does not exist in this scope (§21.6).",
+      "applies_to": "POST customer-mutations/commit",
+      "http_status": 422,
+      "payload": {
+        "error": "Undo event references unknown remote_event_id 'nonexistent-event-id' in this scope."
+      }
+    },
+    {
+      "name": "legacy_ingest_removed_404",
+      "description": "Strict-only (2026-07-09): the legacy batched ingest endpoints were removed and now resolve to no route. The response is Django's default HTML 404 page (Content-Type: text/html), NOT JSON — clients must key on the status code only and must not attempt to parse the body. Menu/customer/verification mutations must use the commit endpoints (§19, §21).",
+      "applies_to": "POST menu-merges/ingest, POST customer-merges/ingest, POST menu-mapping-verifications/ingest",
+      "http_status": 404,
+      "content_type": "text/html",
+      "payload": null
+    },
+    {
+      "name": "internal_error_500",
+      "description": "Unhandled server error (§4.7).",
+      "applies_to": "all endpoints",
+      "http_status": 500,
+      "payload": {
+        "error": "Internal error"
+      }
+    },
+    {
+      "name": "ingest_response_with_duplicates",
+      "description": "HISTORICAL (endpoints removed 2026-07-09, strict-only): ingest where some events are idempotent re-uploads (duplicate_count > 0). Duplicates appear in accepted[] (§4.3). The same result shape survives internally in the import_menu_assignment_baseline ops command.",
+      "applies_to": "HISTORICAL: POST customer-merges/ingest, POST menu-merges/ingest, POST menu-mapping-verifications/ingest (all removed, return 404)",
+      "http_status": 200,
+      "payload": {
+        "status": "ok",
+        "schema_version": 1,
+        "ingested_count": 0,
+        "duplicate_count": 2,
+        "accepted": [
+          "already-ingested-event-1",
+          "already-ingested-event-2"
+        ],
+        "rejected": []
+      }
+    },
+    {
+      "name": "ingest_response_with_rejected_events",
+      "description": "HISTORICAL (endpoints removed 2026-07-09, strict-only): ingest where one event is accepted and one is malformed. Siblings still ingest (§17.1). The same result shape survives internally in the import_menu_assignment_baseline ops command.",
+      "applies_to": "HISTORICAL: POST customer-merges/ingest, POST menu-merges/ingest, POST menu-mapping-verifications/ingest (all removed, return 404)",
+      "http_status": 200,
+      "payload": {
+        "status": "ok",
+        "schema_version": 1,
+        "ingested_count": 1,
+        "duplicate_count": 0,
+        "accepted": [
+          "valid-event-1"
+        ],
+        "rejected": [
+          {
+            "remote_event_id": "malformed-event-2",
+            "error": "Missing required field: event_type"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pull_response_empty_menu",
+      "description": "Menu pull delta with no new events — cursor is echoed back, events array is empty (§4.4).",
+      "applies_to": "GET menu-merges, GET menu-mapping-verifications",
+      "http_status": 200,
+      "payload": {
+        "events": [],
+        "next_cursor": "existing-cursor-echoed-back",
+        "menu_revision": 42
+      }
+    },
+    {
+      "name": "pull_response_empty_customer",
+      "description": "Customer merge pull with no new events (§8).",
+      "applies_to": "GET customer-merges",
+      "http_status": 200,
+      "payload": {
+        "events": [],
+        "next_cursor": "existing-cursor-echoed-back",
+        "customer_revision": 42
+      }
+    }
+  ]
+}

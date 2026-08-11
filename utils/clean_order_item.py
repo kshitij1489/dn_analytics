@@ -135,6 +135,36 @@ def fix_typos(name: str) -> str:
 
     return name
 
+_MEASURE_RE = re.compile(r'(\d+)\s*(ml|gms?|kg)\b', re.IGNORECASE)
+_MEASURE_UNIT = {'ml': 'ML', 'kg': 'KG', 'gm': 'GMS', 'gms': 'GMS'}
+
+
+def _unknown_measure_variant(text: str) -> Optional[str]:
+    """Return UNKNOWN_<N><UNIT> for the first size token in text, else None.
+
+    Used so an unrecognized size inside a package branch surfaces as a visible
+    UNKNOWN variant for review instead of silently inheriting that branch's
+    hardcoded default weight.
+    """
+    m = _MEASURE_RE.search(text)
+    if not m:
+        return None
+    return f"UNKNOWN_{m.group(1)}{_MEASURE_UNIT[m.group(2).lower()]}"
+
+
+def _has_measure(text: str, amount: int, unit: str) -> bool:
+    """Bounded known-size check so e.g. '1300ml' does NOT match '300ml'.
+
+    `unit` is a regex fragment: 'ml', 'gms?' (matches gm/gms), or 'kg'.
+    """
+    return re.search(rf'\b{amount}\s*{unit}\b', text, flags=re.IGNORECASE) is not None
+
+
+def _remove_measure(text: str, amount: int, unit: str) -> str:
+    """Remove a bounded size token without clipping larger numbers."""
+    return re.sub(rf'\s*\(?\b{amount}\s*{unit}\b\)?', '', text, flags=re.IGNORECASE)
+
+
 def extract_variant(raw_name: str) -> Tuple[str, str]:
     """Extract variant from raw name and return (clean_name, variant)"""
     name = raw_name
@@ -156,77 +186,80 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
     
     # Family Feast patterns
     if 'family feast' in name_lower:
-        if '725ml' in name_lower:
+        if _has_measure(name, 725, 'ml'):
             variant = 'FAMILY_TUB_725ML'
-        elif '700ml' in name_lower:
+        elif _has_measure(name, 700, 'ml'):
             variant = 'FAMILY_TUB_700ML'
-        elif '550gms' in name_lower or '550gm' in name_lower:
+        elif _has_measure(name, 550, 'gms?'):
             variant = 'FAMILY_TUB_550GMS'
         else:
-            variant = 'FAMILY_TUB_725ML'
+            variant = _unknown_measure_variant(name) or 'FAMILY_TUB_725ML'
         name = re.sub(r'\s*\(Family Feast\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Family Feast\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # Family Tub patterns
     if 'family tub' in name_lower:
-        if '725ml' in name_lower:
+        if _has_measure(name, 725, 'ml'):
             variant = 'FAMILY_TUB_725ML'
-        elif '700ml' in name_lower:
+        elif _has_measure(name, 700, 'ml'):
             variant = 'FAMILY_TUB_700ML'
-        elif '500gms' in name_lower or '500gm' in name_lower:
+        elif _has_measure(name, 500, 'gms?'):
             variant = 'FAMILY_TUB_500GMS'
         else:
-            variant = 'FAMILY_TUB_500GMS'
+            variant = _unknown_measure_variant(name) or 'FAMILY_TUB_500GMS'
         name = re.sub(r'\s*\(Family Tub\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Family Tub\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # Perfect Plenty patterns
     if 'perfect plenty' in name_lower:
-        if '350ml' in name_lower:
+        if _has_measure(name, 350, 'ml'):
             variant = 'PERFECT_PLENTY_350ML'
-        elif '325ml' in name_lower:
+        elif _has_measure(name, 325, 'ml'):
             variant = 'PERFECT_PLENTY_325ML'
-        elif '300ml' in name_lower:
+        elif _has_measure(name, 300, 'ml'):
             variant = 'PERFECT_PLENTY_300ML'
-        elif '200ml' in name_lower:
+        elif _has_measure(name, 200, 'ml'):
             variant = 'PERFECT_PLENTY_200ML'
-        elif '200gms' in name_lower or '200gm' in name_lower:
+        elif _has_measure(name, 200, 'gms?'):
             variant = 'PERFECT_PLENTY_200GMS'
         else:
-            variant = 'PERFECT_PLENTY_200GMS'
+            variant = _unknown_measure_variant(name) or 'PERFECT_PLENTY_200GMS'
         name = re.sub(r'\s*\(Perfect Plenty\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Perfect Plenty\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # Mini Indulgence patterns
     if 'mini indulgence' in name_lower:
-        variant = 'MINI_TUB_200ML'
+        if _has_measure(name, 200, 'ml'):
+            variant = 'MINI_TUB_200ML'
+        else:
+            variant = _unknown_measure_variant(name) or 'MINI_TUB_200ML'
         name = re.sub(r'\s*\(Mini Indulgence\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Mini Indulgence\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # Regular Tub patterns
     if 'regular tub' in name_lower:
-        if '300ml' in name_lower:
+        if _has_measure(name, 300, 'ml'):
             variant = 'REGULAR_TUB_300ML'
-        elif '220gms' in name_lower or '220gm' in name_lower:
+        elif _has_measure(name, 220, 'gms?'):
             variant = 'REGULAR_TUB_220GMS'
         else:
-            variant = 'REGULAR_TUB_220GMS'
+            variant = _unknown_measure_variant(name) or 'REGULAR_TUB_220GMS'
         name = re.sub(r'\s*\(Regular Tub\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Regular Tub\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
     
     # Mini Tub patterns
     if 'mini tub' in name_lower:
-        if '200ml' in name_lower:
+        if _has_measure(name, 200, 'ml'):
             variant = 'MINI_TUB_200ML'
-        elif '160gms' in name_lower or '160gm' in name_lower:
+        elif _has_measure(name, 160, 'gms?'):
             variant = 'MINI_TUB_160GMS'
         else:
-            variant = 'MINI_TUB_160GMS'
+            variant = _unknown_measure_variant(name) or 'MINI_TUB_160GMS'
         name = re.sub(r'\s*\(Mini [Tt]ub\s*\([^)]+\)\)', '', name, flags=re.IGNORECASE)
         name = re.sub(r'\s*\(Mini [Tt]ub\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
@@ -290,18 +323,18 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
         return name.strip(), variant
     
     # Size patterns like "(400gm)" or "(1kg)"
-    if '1kg' in name_lower:
+    if _has_measure(name, 1, 'kg'):
         variant = '1KG'
-        name = re.sub(r'\s*1kg', '', name, flags=re.IGNORECASE)
+        name = _remove_measure(name, 1, 'kg')
         return name.strip(), variant
     
-    if '400gm' in name_lower:
+    if _has_measure(name, 400, 'gms?'):
         variant = '400GMS'
-        name = re.sub(r'\s*400gm', '', name, flags=re.IGNORECASE)
+        name = _remove_measure(name, 400, 'gms?')
         return name.strip(), variant
     
     # Factory visit patterns
-    if 'single' in name_lower:
+    if re.search(r'\(single\)', name, flags=re.IGNORECASE):
         variant = 'SINGLE'
         name = re.sub(r'\s*\(single\)', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
@@ -322,15 +355,28 @@ def extract_variant(raw_name: str) -> Tuple[str, str]:
         return name.strip(), variant
         
     # Standalone weight patterns (often in parens or just at end)
-    if '160gm' in name_lower:
+    if _has_measure(name, 160, 'gms?'):
         variant = 'MINI_TUB_160GMS'
-        name = re.sub(r'\s*\(?160gm\)?', '', name, flags=re.IGNORECASE)
+        name = _remove_measure(name, 160, 'gms?')
         return name.strip(), variant
 
-    if '200ml' in name_lower:
-        variant = 'MINI_TUB_200ML'
-        name = re.sub(r'\s*\(?200ml\)?', '', name, flags=re.IGNORECASE)
+    # Bounded 200ml (word-boundary so "1200ml" is NOT treated as 200ml — that
+    # falls through to the generic UNKNOWN fallback instead of being corrupted).
+    if re.search(r'\b200\s*ml\b', name, flags=re.IGNORECASE):
+        # Bare 200ml with no tub context: honest volume label, not MINI_TUB.
+        variant = '200ML'
+        name = re.sub(r'\s*\(?\b200\s*ml\b\)?', '', name, flags=re.IGNORECASE)
         return name.strip(), variant
+
+    # Generic size fallback: any unrecognized size token becomes a visible
+    # UNKNOWN_<N><UNIT> variant instead of silently collapsing to 1_PIECE
+    # (which undercounts weight/volume analytics).
+    m = _MEASURE_RE.search(name)
+    if m:
+        num = m.group(1)
+        unit = _MEASURE_UNIT[m.group(2).lower()]
+        name = re.sub(r'\s*\(?\s*\d+\s*(?:ml|gms?|kg)\s*\)?', '', name, flags=re.IGNORECASE)
+        return name.strip(), f'UNKNOWN_{num}{unit}'
 
     # Default
     return name.strip(), '1_PIECE'

@@ -13,11 +13,7 @@ from src.core.menu_mutation_commit import (
     extract_conflict_attribution,
 )
 from src.core.menu_sync_quarantine import list_sync_conflicts, quarantine_event
-from src.core.sync_identity import (
-    ensure_sync_identity_tables,
-    set_menu_state_revision,
-    set_menu_strict_mode_enabled,
-)
+from src.core.sync_identity import ensure_sync_identity_tables, set_menu_state_revision
 
 
 class MenuEditHttpMappingTests(unittest.TestCase):
@@ -94,9 +90,8 @@ class MenuEditStrictModeBlockTests(unittest.TestCase):
         ensure_sync_identity_tables(conn)
         return conn
 
-    def test_router_blocks_when_strict_flag_on_but_not_ready(self) -> None:
+    def test_router_blocks_when_not_ready(self) -> None:
         conn = self._conn()
-        set_menu_strict_mode_enabled(conn, True)
         conn.commit()
         try:
             with self.assertRaises(HTTPException) as ctx:
@@ -106,21 +101,11 @@ class MenuEditStrictModeBlockTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_router_allows_when_strict_flag_off(self) -> None:
-        conn = self._conn()
-        set_menu_strict_mode_enabled(conn, False)
-        conn.commit()
-        try:
-            _ensure_menu_edit_allowed(conn)
-        finally:
-            conn.close()
-
-    def test_router_allows_when_strict_flag_on_and_ready(self) -> None:
+    def test_router_allows_when_ready(self) -> None:
         conn = self._conn()
         conn.execute(
             "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
         )
-        set_menu_strict_mode_enabled(conn, True)
         set_menu_state_revision(conn, 10)
         conn.commit()
         try:

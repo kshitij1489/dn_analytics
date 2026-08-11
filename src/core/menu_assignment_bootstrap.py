@@ -8,6 +8,7 @@ picks up with seq > watermark — same fixed point as full replay, without I4.
 import logging
 from typing import Any, Dict, Optional
 
+from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
 from src.core.menu_assignment_apply import apply_assignments, coerce_server_seq
 from src.core.menu_mapping_verification_sync import (
     set_menu_mapping_verification_pull_cursor,
@@ -57,14 +58,15 @@ def _set_config_value(conn, key: str, value: str) -> None:
 
 
 def _fetch_snapshot_page(
+    conn,
     endpoint: str,
     auth: Optional[str],
     after: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if auth:
-        headers["Authorization"] = f"Bearer {auth}"
+    from src.core.central_api import response_error_text, scoped_headers
+
+    headers = scoped_headers(conn, auth_kind="sync", credential=auth)
     params: Dict[str, str] = {"limit": str(limit)}
     if after:
         params["after"] = after
@@ -74,7 +76,7 @@ def _fetch_snapshot_page(
 
         response = requests.get(endpoint, headers=headers, params=params, timeout=60)
         if response.status_code >= 400:
-            return {"error": f"HTTP {response.status_code}"}
+            return {"error": response_error_text(response, conn=conn)}
         data = response.json()
     except Exception as exc:
         return {"error": str(exc)}
@@ -115,7 +117,7 @@ def bootstrap_menu_assignments_if_needed(
     after: Optional[str] = None
 
     while True:
-        page = _fetch_snapshot_page(endpoint, auth, after, page_limit)
+        page = _fetch_snapshot_page(conn, endpoint, auth, after, page_limit)
         if page.get("error"):
             conn.rollback()
             return {"status": "error", "error": page["error"], "rows_applied": rows_applied}
@@ -166,6 +168,9 @@ def bootstrap_menu_assignments_if_needed(
     # verification stream on a fresh install.
     if verification_watermark_cursor:
         set_menu_mapping_verification_pull_cursor(conn, verification_watermark_cursor)
+    # Fresh install: derive the itemcode projection from the just-seeded
+    # authoritative assignments joined to imported POS orders (plan §8).
+    rebuild_itemcode_mappings_best_effort(conn)
     _set_config_value(conn, MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY, "snapshot")
     conn.commit()
 
@@ -221,7 +226,7 @@ def force_reseed_menu_assignments(
     touched_menu_item_ids: set = set()
 
     while True:
-        page = _fetch_snapshot_page(endpoint, auth, after, page_limit)
+        page = _fetch_snapshot_page(conn, endpoint, auth, after, page_limit)
         if page.get("error"):
             conn.rollback()
             return {"status": "error", "error": page["error"], "rows_applied": rows_applied}

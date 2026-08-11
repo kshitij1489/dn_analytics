@@ -19,6 +19,7 @@ from src.core.menu_mapping_verification_sync import (
     pull_and_apply_menu_mapping_verification_events,
 )
 from src.core.menu_merge_sync import (
+    _run_assignment_batch_epilogue,
     apply_remote_menu_merge_event,
     get_menu_merge_pull_endpoint,
     pull_and_apply_menu_merge_events,
@@ -27,10 +28,8 @@ from src.core.sync_identity import (
     apply_menu_scope_state,
     extract_menu_scope_state,
     get_menu_state_revision,
-    get_menu_strict_mode_enabled,
     get_sync_attribution,
     set_menu_state_revision,
-    set_menu_strict_mode_enabled,
     should_apply_pulled_menu_revision,
 )
 
@@ -53,6 +52,8 @@ MUTATION_TYPE_MENU_MERGE_UNDONE = "menu_merge.undone"
 MUTATION_TYPE_RESOLUTION_VARIANT = "resolution_variant"
 MUTATION_TYPE_ORDER_ITEM_REMAP = "order_item_remap"
 MUTATION_TYPE_VERIFY = "verify"
+MUTATION_TYPE_CATALOG_UPDATE = "catalog_update"
+MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC = "derived_assignment.sync"
 
 
 @dataclass
@@ -72,6 +73,7 @@ class CommitResult:
     message: str = ""
     merge_id: Optional[int] = None
     conflict: Optional[Dict[str, Any]] = None
+    skipped_existing: List[str] = field(default_factory=list)
 
 
 class MenuStatePullError(RuntimeError):
@@ -90,13 +92,14 @@ def strict_mode_ready(conn) -> bool:
 
 
 def strict_mode_active(conn) -> bool:
-    """True when the server-advertised strict flag is on and readiness holds."""
-    return get_menu_strict_mode_enabled(conn) and strict_mode_ready(conn)
+    """True when the client is ready for server-authoritative commits. The server is
+    always strict — the only remaining gate is local readiness."""
+    return strict_mode_ready(conn)
 
 
 def strict_mode_editing_blocked(conn) -> bool:
-    """True when the server advertises strict mode but local readiness is missing."""
-    return get_menu_strict_mode_enabled(conn) and not strict_mode_ready(conn)
+    """True when strict mode is required but local readiness is missing."""
+    return not strict_mode_ready(conn)
 
 
 def strict_mode_edit_blocked_response(conn, *, emit_sync_event: bool = True) -> Optional[Dict[str, Any]]:
@@ -222,6 +225,11 @@ def commit_mutation(conn, plan: MutationPlan) -> CommitResult:
                 status="ok",
                 message="accepted",
                 merge_id=apply_result.get("local_merge_id"),
+                skipped_existing=[
+                    str(value)
+                    for value in (body.get("skipped_existing") or [])
+                    if str(value).strip()
+                ],
             )
 
         if status_code == 409 and isinstance(body, dict):
@@ -361,6 +369,23 @@ def apply_accepted(conn, body: Dict[str, Any], plan: MutationPlan) -> Dict[str, 
             remote_event_id = str(plan.event.get("remote_event_id") or "")
             accepted = accepted_by_remote_id.get(remote_event_id, {})
             event = dict(plan.event)
+            if plan.mutation_type == MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC:
+                skipped_existing = {
+                    str(value)
+                    for value in (body.get("skipped_existing") or [])
+                    if str(value).strip()
+                }
+                if skipped_existing:
+                    merge_payload = dict(event.get("merge_payload") or {})
+                    assignments = [
+                        assignment
+                        for assignment in (merge_payload.get("assignments") or [])
+                        if isinstance(assignment, dict)
+                        and str(assignment.get("order_item_id") or "").strip()
+                        not in skipped_existing
+                    ]
+                    merge_payload["assignments"] = assignments
+                    event["merge_payload"] = merge_payload
             if accepted.get("server_seq") is not None:
                 event["server_seq"] = accepted["server_seq"]
             if accepted.get("server_ingested_at") is not None:
@@ -385,6 +410,13 @@ def apply_accepted(conn, body: Dict[str, Any], plan: MutationPlan) -> Dict[str, 
         if catalog_delta is None:
             catalog_delta = plan.catalog_delta
         _apply_catalog_delta(conn, catalog_delta)
+
+        if plan.mutation_type == MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC:
+            touched_menu_item_ids |= _adopt_skipped_assignment_rows(
+                conn,
+                body.get("assignment_rows"),
+                body.get("skipped_existing"),
+            )
 
         # Deliberately leave the pull cursors alone (plan §12.5). The response's
         # merge_cursor/verification_cursor are the post-commit stream heads; if
@@ -413,14 +445,137 @@ def apply_accepted(conn, body: Dict[str, Any], plan: MutationPlan) -> Dict[str, 
         conn.rollback()
         raise
 
-    try:
-        from utils.menu_utils import export_to_backups
-
-        export_to_backups(conn)
-    except Exception:
-        logger.exception("export_to_backups failed after accepted mutation apply")
+    # Same batch epilogue peers run when they pull these events (stats
+    # recompute, resolution-state sync/GC, forecast-cache clears). The capture
+    # transaction that originally did this work was rolled back before the
+    # commit, so the committing install must redo it.
+    if touched_menu_item_ids:
+        _run_assignment_batch_epilogue(conn, touched_menu_item_ids)
 
     return {"local_merge_id": local_merge_id, "touched_menu_item_ids": touched_menu_item_ids}
+
+
+def _adopt_skipped_assignment_rows(
+    conn,
+    assignment_rows: Any,
+    skipped_existing: Any,
+) -> set:
+    """
+    Converge rows the server skipped as already-assigned (derived flush only).
+
+    A skipped_existing key means the server holds an authoritative assignment
+    (usually from a peer's earlier decision) for a row this install still has
+    unstamped (assignment_seq NULL). Left alone, the row is re-selected and
+    re-flushed every Sync DB cycle forever — and if the originating server
+    event is already behind this install's merge cursor, no pull will ever
+    stamp it. The commit response's assignment_rows carry the authoritative
+    server value for every touched key, so adopt it here: take the server
+    mapping and stamp its seq, which drops the row from the pending set.
+
+    Returns the menu_item_ids touched (old and new) for the batch epilogue.
+    """
+    from src.core.menu_assignment_apply import (
+        _menu_item_exists,
+        _normalize_variant_value,
+        coerce_server_seq,
+        ensure_variant_exists,
+    )
+    from src.core.order_item_key import update_local_order_rows_for_assignment_key
+
+    skipped_ids = {
+        str(value).strip()
+        for value in (skipped_existing or [])
+        if str(value or "").strip()
+    }
+    if not skipped_ids:
+        return set()
+
+    rows_by_id = {
+        str(row.get("order_item_id") or "").strip(): row
+        for row in (assignment_rows or [])
+        if isinstance(row, dict) and str(row.get("order_item_id") or "").strip()
+    }
+    touched: set = set()
+    for order_item_id in sorted(skipped_ids):
+        server_row = rows_by_id.get(order_item_id)
+        if server_row is None:
+            logger.warning(
+                "skipped_existing key %s missing from assignment_rows; leaving pending",
+                order_item_id,
+            )
+            continue
+        server_seq = coerce_server_seq(server_row.get("assignment_seq"))
+        if server_seq is None:
+            logger.warning(
+                "skipped_existing key %s has no server assignment_seq; leaving pending",
+                order_item_id,
+            )
+            continue
+        local = conn.execute(
+            """
+            SELECT menu_item_id, variant_id, assignment_seq, pending_local
+            FROM menu_item_variants
+            WHERE order_item_id = ?
+            LIMIT 1
+            """,
+            (order_item_id,),
+        ).fetchone()
+        # Only rows still in the flush pending set are adopted; a stamped or
+        # pending_local row already has an owner (pull applier / outbox echo).
+        if (
+            local is None
+            or local["assignment_seq"] is not None
+            or int(local["pending_local"] or 0)
+        ):
+            continue
+        menu_item_id = str(server_row.get("menu_item_id") or "").strip()
+        if not menu_item_id:
+            continue
+        variant_id = _normalize_variant_value(server_row.get("variant_id"))
+        if variant_id is not None:
+            ensure_variant_exists(conn, variant_id, None)
+        if not _menu_item_exists(conn, menu_item_id):
+            # FK would abort the whole apply; the row stays pending and heals
+            # after the next bootstrap/catalog pull materializes the item.
+            logger.warning(
+                "skipped_existing key %s references unknown menu_item_id %s; leaving pending",
+                order_item_id,
+                menu_item_id,
+            )
+            continue
+        is_verified = server_row.get("is_verified")
+        verification_seq = coerce_server_seq(server_row.get("verification_seq"))
+        conn.execute(
+            """
+            UPDATE menu_item_variants
+            SET menu_item_id = ?,
+                variant_id = ?,
+                is_verified = ?,
+                assignment_seq = ?,
+                verification_seq = COALESCE(?, verification_seq),
+                pending_local = 0,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE order_item_id = ?
+            """,
+            (
+                menu_item_id,
+                variant_id,
+                1 if is_verified else 0,
+                server_seq,
+                verification_seq,
+                order_item_id,
+            ),
+        )
+        update_local_order_rows_for_assignment_key(
+            conn,
+            order_item_id,
+            menu_item_id=menu_item_id,
+            variant_id=variant_id,
+            variant_specified=True,
+        )
+        touched.add(str(local["menu_item_id"]))
+        touched.add(menu_item_id)
+    return touched
 
 
 def _drain_menu_stream(pull_fn, conn, endpoint: str, api_key: str) -> Dict[str, Any]:
@@ -430,12 +585,16 @@ def _drain_menu_stream(pull_fn, conn, endpoint: str, api_key: str) -> Dict[str, 
         last_stats = pull_fn(conn, endpoint, auth=api_key)
         if last_stats.get("error"):
             raise MenuStatePullError(str(last_stats["error"]))
-        if (
-            last_stats.get("events_failed")
-            or last_stats.get("events_quarantined")
-            or last_stats.get("deferred")
-        ):
+        if last_stats.get("events_failed") or last_stats.get("events_quarantined"):
             raise MenuStatePullError("Menu event apply did not complete cleanly.")
+        # `deferred` is NOT fatal: a verification event whose order line this
+        # install has never ingested is persisted to
+        # menu_mapping_verification_deferred and retried by the flush/retry pass
+        # (it applies idempotently once/if the row appears). Some order lines are
+        # from peer installs and will never arrive here, so failing the whole
+        # menu pull on a permanent deferral would wedge every sync ("Sync
+        # Failed") forever. The cursor safely advances past it — the deferred
+        # copy is retained, so nothing is lost.
         if not last_stats.get("has_more"):
             return last_stats
     raise MenuStatePullError("Menu event pull exceeded the page safety limit.")
@@ -654,7 +813,16 @@ def _reconcile_after_timeout(
                 mutation_id=plan.mutation_id,
                 context="Local apply failed during timeout reconcile",
             )
-        return CommitResult(status="ok", message="accepted", merge_id=apply_result.get("local_merge_id"))
+        return CommitResult(
+            status="ok",
+            message="accepted",
+            merge_id=apply_result.get("local_merge_id"),
+            skipped_existing=[
+                str(value)
+                for value in (body.get("skipped_existing") or [])
+                if str(value).strip()
+            ],
+        )
 
     if status_code != 404:
         return None
@@ -671,7 +839,16 @@ def _reconcile_after_timeout(
                 mutation_id=plan.mutation_id,
                 context="Local apply failed after timeout re-POST",
             )
-        return CommitResult(status="ok", message="accepted", merge_id=apply_result.get("local_merge_id"))
+        return CommitResult(
+            status="ok",
+            message="accepted",
+            merge_id=apply_result.get("local_merge_id"),
+            skipped_existing=[
+                str(value)
+                for value in (retry_body.get("skipped_existing") or [])
+                if str(value).strip()
+            ],
+        )
     if retry_code == 409 and isinstance(retry_body, dict):
         try:
             pull_latest_menu_state(conn)
@@ -766,12 +943,12 @@ def _status_url(base_url: str, mutation_id: str) -> str:
     return f"{base_url}/desktop-analytics-sync/menu-mutations/{mutation_id}"
 
 
-def _auth_headers(api_key: str) -> Dict[str, str]:
-    return {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+def _auth_headers(conn, api_key: str) -> Dict[str, str]:
+    from src.core.central_api import scoped_headers
+
+    return scoped_headers(
+        conn, auth_kind="sync", credential=api_key, content_type="application/json"
+    )
 
 
 def _build_commit_request(conn, plan: MutationPlan, *, expected_menu_revision: int) -> Dict[str, Any]:
@@ -809,12 +986,16 @@ def _post_commit(
         response = requests.post(
             _commit_url(base_url),
             json=payload,
-            headers=_auth_headers(api_key),
+            headers=_auth_headers(conn, api_key),
             timeout=60,
         )
         body = response.json() if response.content else None
         if not isinstance(body, dict):
             body = None
+        if response.status_code >= 400:
+            from src.core.central_api import error_from_response
+
+            error_from_response(response, conn=conn)
         return response.status_code, body, False
     except Exception:
         logger.exception("Menu mutation commit POST failed for %s", plan.mutation_id)
@@ -835,12 +1016,16 @@ def _get_mutation_status(
 
         response = requests.get(
             _status_url(base_url, mutation_id),
-            headers=_auth_headers(api_key),
+            headers=_auth_headers(conn, api_key),
             timeout=60,
         )
         body = response.json() if response.content else None
         if not isinstance(body, dict):
             body = None
+        if response.status_code >= 400:
+            from src.core.central_api import error_from_response
+
+            error_from_response(response, conn=conn)
         return response.status_code, body, False
     except Exception:
         logger.exception("Menu mutation status GET failed for %s", mutation_id)
@@ -850,6 +1035,11 @@ def _get_mutation_status(
 def _apply_catalog_delta(conn, catalog_delta: Any) -> None:
     if not isinstance(catalog_delta, dict):
         return
+    variant_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(variants)").fetchall()
+        if len(row) > 1
+    }
     for item in catalog_delta.get("items") or []:
         if not isinstance(item, dict):
             continue
@@ -879,14 +1069,29 @@ def _apply_catalog_delta(conn, catalog_delta: Any) -> None:
             continue
         variant_name = variant.get("variant_name") or variant_id
         is_verified = 1 if variant.get("is_verified", True) else 0
+        insert_columns = ["variant_id", "variant_name", "is_verified"]
+        values = [variant_id, variant_name, is_verified]
+        update_parts = [
+            "variant_name = COALESCE(excluded.variant_name, variants.variant_name)",
+            "is_verified = COALESCE(excluded.is_verified, variants.is_verified)",
+        ]
+        for optional_column in ("description", "unit", "value"):
+            if optional_column not in variant_columns:
+                continue
+            insert_columns.append(optional_column)
+            values.append(variant.get(optional_column))
+            update_parts.append(
+                f"{optional_column} = COALESCE(excluded.{optional_column}, variants.{optional_column})"
+            )
+        if "updated_at" in variant_columns:
+            update_parts.append("updated_at = CURRENT_TIMESTAMP")
+        placeholders = ", ".join("?" for _ in insert_columns)
         conn.execute(
-            """
-            INSERT INTO variants (variant_id, variant_name, is_verified)
-            VALUES (?, ?, ?)
+            f"""
+            INSERT INTO variants ({", ".join(insert_columns)})
+            VALUES ({placeholders})
             ON CONFLICT(variant_id) DO UPDATE SET
-                variant_name = COALESCE(excluded.variant_name, variants.variant_name),
-                is_verified = COALESCE(excluded.is_verified, variants.is_verified),
-                updated_at = CURRENT_TIMESTAMP
+                {", ".join(update_parts)}
             """,
-            (variant_id, variant_name, is_verified),
+            values,
         )

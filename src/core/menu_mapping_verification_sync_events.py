@@ -23,8 +23,8 @@ def extract_verification_entries(event: Any) -> Optional[List[Dict[str, Any]]]:
     Normalize a mapping-verification event to the (order_item_id, is_verified)
     rows it targets — the single derivation shared by the emitter, both client
     apply paths (pull + deferred retry), and the server, pinned by
-    contracts/menu_mapping_verification_event_fixtures.json so the wire shape
-    cannot drift across repos.
+    contracts/fixtures/1/menu_mapping_verification_event_fixtures.json
+    so the wire shape cannot drift across repos.
 
     Returns None when the event is not a verification event (unknown/blank
     event_type), else the list of {"order_item_id", "is_verified"} rows (0/1),

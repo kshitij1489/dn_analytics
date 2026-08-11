@@ -23,7 +23,13 @@ export function NavigationProvider({ children, activeTab, setActiveTab }: { chil
     };
 
     return (
-        <NavigationContext.Provider value={{ activeTab, setActiveTab, pageParams, navigate, clearParams }}>
+        <NavigationContext.Provider value={{
+            activeTab,
+            setActiveTab,
+            pageParams,
+            navigate,
+            clearParams,
+        }}>
             {children}
         </NavigationContext.Provider>
     );

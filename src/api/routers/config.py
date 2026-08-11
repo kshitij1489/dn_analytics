@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Optional
 
@@ -12,7 +12,7 @@ DB_PATH = os.environ.get('DB_URL') or os.path.join(os.getcwd(), 'analytics.db')
 class ConfigUpdate(BaseModel):
     settings: Dict[str, str]
 
-from src.core.db.connection import get_db_connection
+from src.api.dependencies import get_authorized_restaurant_profile, get_db
 from src.core.menu_assignment_bootstrap import MENU_ASSIGNMENTS_BOOTSTRAPPED_KEY
 from src.core.sync_identity import get_sync_attribution
 from utils.api_client import (
@@ -23,27 +23,13 @@ from utils.api_client import (
 @router.get("/")
 def get_config():
     """Get all configuration settings"""
-    conn, _ = get_db_connection()
     try:
-        # First ensure table exists (idempotent for fresh dbs)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS system_config (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        cursor = conn.execute("SELECT key, value FROM system_config")
-        rows = cursor.fetchall()
-        
-        config = {row['key']: row['value'] for row in rows}
-        return config
+        from src.core.db.control import get_global_config
+
+        return get_global_config()
     except Exception as e:
         print(f"Error fetching config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 class ConfigVerification(BaseModel):
     type: str  # 'openai', 'orders'
@@ -77,11 +63,11 @@ def verify_config(data: ConfigVerification):
         try:
             import requests
             base_url = normalize_integration_orders_base_url(url)
-            # Try a lightweight request (limit=1) to check auth
+            # The allowed-list endpoint is the only restaurant-aware discovery
+            # route that intentionally has no selector header.
             resp = requests.get(
-                f"{base_url}/orders/",
+                f"{base_url}/restaurants/",
                 headers=orders_integration_request_headers(key),
-                params={"limit": 1},
                 timeout=10,
             )
             if resp.status_code == 403:
@@ -169,80 +155,96 @@ def verify_config(data: ConfigVerification):
 @router.post("/")
 def update_config(data: ConfigUpdate):
     """Update configuration settings (Upsert)"""
-    conn, _ = get_db_connection()
     try:
-        # Ensure table exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS system_config (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        for key, value in data.settings.items():
-            conn.execute("""
-                INSERT INTO system_config (key, value, updated_at) 
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(key) DO UPDATE SET 
-                    value=excluded.value,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (key, value))
-        
-        conn.commit()
+        from src.core.db.control import set_global_config
+
+        set_global_config(data.settings)
         return {"status": "success", "message": "Configuration updated"}
     except Exception as e:
         print(f"Error updating config: {e}")
-        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 
 @router.get("/sync-identity")
-def get_sync_identity():
+def get_sync_identity(conn=Depends(get_db)):
     """Return the current employee + device/install identity used for cloud sync."""
-    conn, _ = get_db_connection()
     try:
         return get_sync_attribution(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 class PetpoojaSyncRequest(BaseModel):
     api_key: str
 
 @router.post("/petpooja-sync")
-def petpooja_sync(data: PetpoojaSyncRequest):
+def petpooja_sync(data: PetpoojaSyncRequest, profile=Depends(get_authorized_restaurant_profile)):
     """Proxy request to Petpooja to bypass CORS"""
     import requests
     
     url = "https://webhooks.db1-prod-dachnona.store/webhooks/petpooja/sync_petpooja_for_today/"
     headers = {
         "Content-Type": "application/json",
-        "X-API-Key": data.api_key
+        "X-API-Key": data.api_key,
+        "X-Restaurant-ID": profile.restaurant_id,
     }
     
     try:
         resp = requests.post(url, json={}, headers=headers, timeout=30)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            from src.core.central_api import error_from_response
+            from src.core.profiles import mark_profile_unauthorized
+
+            error = error_from_response(resp)
+            if error.code == "restaurant_forbidden":
+                mark_profile_unauthorized(profile.restaurant_id)
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail={"error": error.message, "code": error.code},
+            )
         return resp.json()
-    except requests.exceptions.HTTPError as e:
-        status_code = e.response.status_code if e.response else 500
-        detail = e.response.json() if e.response else str(e)
-        raise HTTPException(status_code=status_code, detail=detail)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/reset-db")
-def reset_db_section(data: Dict[str, str]):
+def reset_db_section(
+    data: Dict[str, str],
+    x_analytics_scope: Optional[str] = Header(None, alias="X-Analytics-Scope"),
+):
     """Placeholder for resetting a specific database section"""
     section = data.get("section", "")
     if not section:
         raise HTTPException(status_code=400, detail="Missing section parameter")
 
-    conn, _ = get_db_connection()
+    if section == "integrations":
+        from src.core.db.control import delete_global_config_matching
+
+        delete_global_config_matching(("integration_%",))
+        return {"status": "success", "message": "Successfully reset all integration settings."}
+
+    if section == "ai_models":
+        from src.core.db.control import delete_global_config_matching
+
+        delete_global_config_matching(("openai_%", "anthropic_%", "gemini_%"))
+        return {"status": "success", "message": "Successfully reset all AI Model settings."}
+
+    try:
+        from src.core.db.connection import get_profile_connection
+        from src.core.profiles import ProfileError, get_profile, validate_restaurant_id
+
+        profile = get_profile(validate_restaurant_id(x_analytics_scope))
+        if not profile.is_bound:
+            raise ProfileError(f"Restaurant profile is not initialized: {profile.restaurant_id}")
+        if profile.authorization_state != "authorized":
+            raise ProfileError(f"Restaurant profile is not authorized: {profile.restaurant_id}")
+        conn, _ = get_profile_connection(profile)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": str(exc), "code": getattr(exc, "code", "profile_error")},
+        ) from exc
+
     try:
         if section == "orders":
             # 1. Reset Orders Section
@@ -269,6 +271,7 @@ def reset_db_section(data: Dict[str, str]):
                 "menu_mapping_verification_sync_events",
                 "menu_merge_remote_events",
                 "menu_merge_sync_events",
+                "menu_sync_event_quarantine",
                 "merge_history",
                 "menu_item_variants",
                 "menu_items",
@@ -318,24 +321,6 @@ def reset_db_section(data: Dict[str, str]):
             }
 
 
-        elif section == "integrations":
-            # 3. Reset Integrations Section
-            # Clears all keys starting with 'integration_' from system_config
-            
-            conn.execute("DELETE FROM system_config WHERE key LIKE 'integration_%'")
-            conn.commit()
-            return {"status": "success", "message": "Successfully reset all integration settings."}
-
-        elif section == "ai_models":
-            # 4. Reset AI Models Section
-            # Clears keys for OpenAI, Anthropic, Gemini
-            # Keys: openai_api_key, openai_model, anthropic_api_key, anthropic_model, gemini_api_key, gemini_model
-            # Pattern: openai_%, anthropic_%, gemini_%
-            
-            conn.execute("DELETE FROM system_config WHERE key LIKE 'openai_%' OR key LIKE 'anthropic_%' OR key LIKE 'gemini_%'")
-            conn.commit()
-            return {"status": "success", "message": "Successfully reset all AI Model settings."}
-
         elif section == "ai mode":
             # 5. Reset AI Mode Section (Database)
             # Tables: ai_logs, ai_feedback, ai_conversations, ai_messages
@@ -356,77 +341,59 @@ def reset_db_section(data: Dict[str, str]):
             return {"status": "success", "message": "Successfully reset 'AI Mode' database (Logs & Conversations)."}
 
         elif section == "item_demand":
-            # 6. Reset Item Demand (Forecasts & Models)
-            # Tables: item_forecast_cache, item_backtest_cache
-            # Also deletes trained models to force full retraining
             try:
-                # Clear DB tables
+                from src.core.central_forecast_cache import clear_central_forecast_cache, FAMILY_ITEMS
+                from src.core.forecast_cache import ensure_tables_exist
+
+                ensure_tables_exist(conn)
                 conn.execute("DELETE FROM item_forecast_cache")
                 conn.execute("DELETE FROM item_backtest_cache")
-                conn.execute("DELETE FROM sqlite_sequence WHERE name='item_forecast_cache'")
-                conn.execute("DELETE FROM sqlite_sequence WHERE name='item_backtest_cache'")
+                clear_central_forecast_cache(conn, family=FAMILY_ITEMS)
                 conn.commit()
-
-                # Delete Models from Disk to force retraining
-                try:
-                    from src.core.learning.revenue_forecasting.item_demand_ml.model_io import delete_models
-                    delete_models()
-                    model_status = "Models deleted from disk. Full retraining will occur on next request."
-                except ImportError:
-                    model_status = "ML module not active (skipping disk clean)."
-                except Exception as e:
-                    model_status = f"Failed to delete models: {str(e)}"
-                
-                return {"status": "success", "message": f"Item Demand cache cleared. {model_status}"}
+                return {
+                    "status": "success",
+                    "message": "Item demand central + legacy cache cleared. Run Sync DB to re-pull.",
+                }
             except Exception as e:
                 conn.rollback()
                 raise e
 
         elif section == "volume_forecast":
-            # 6b. Reset Volume Forecast (menu items)
-            # Tables: volume_forecast_cache, volume_backtest_cache (may not exist in older DBs)
             try:
+                from src.core.central_forecast_cache import clear_central_forecast_cache, FAMILY_VOLUME
+                from src.core.forecast_cache import ensure_tables_exist
+
+                ensure_tables_exist(conn)
                 for tbl in ["volume_forecast_cache", "volume_backtest_cache"]:
                     cur = conn.execute(
                         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
                     )
                     if cur.fetchone():
                         conn.execute(f"DELETE FROM {tbl}")
-                        conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (tbl,))
+                clear_central_forecast_cache(conn, family=FAMILY_VOLUME)
                 conn.commit()
-
-                try:
-                    from src.core.learning.revenue_forecasting.volume_demand_ml.model_io import delete_models
-                    delete_models()
-                    model_status = "Models deleted. Full retraining will occur on next request."
-                except ImportError:
-                    model_status = "ML module not active (skipping disk clean)."
-                except Exception as e:
-                    model_status = f"Failed to delete models: {str(e)}"
-
-                return {"status": "success", "message": f"Volume Forecast cache cleared. {model_status}"}
+                return {
+                    "status": "success",
+                    "message": "Volume forecast central + legacy cache cleared. Run Sync DB to re-pull.",
+                }
             except Exception as e:
                 conn.rollback()
                 raise e
 
         elif section == "sales_forecast":
-            # 7. Reset Sales Forecast (Revenue Models)
-            # Tables: forecast_cache, revenue_backtest_cache
             try:
+                from src.core.central_forecast_cache import clear_central_forecast_cache
+                from src.core.forecast_cache import ensure_tables_exist
+
+                ensure_tables_exist(conn)
                 conn.execute("DELETE FROM forecast_cache")
                 conn.execute("DELETE FROM revenue_backtest_cache")
-                conn.execute("DELETE FROM sqlite_sequence WHERE name='forecast_cache'")
-                conn.execute("DELETE FROM sqlite_sequence WHERE name='revenue_backtest_cache'")
+                clear_central_forecast_cache(conn, family="revenue")
                 conn.commit()
-
-                # Delete GP Model from Disk
-                try:
-                    from src.core.learning.revenue_forecasting.gaussianprocess import delete_gp_model
-                    delete_gp_model()
-                except (ImportError, Exception) as e:
-                    print(f"Warning: Failed to delete GP model: {e}")
-
-                return {"status": "success", "message": "Sales Forecast: Cache & Models deleted. Full retraining triggered."}
+                return {
+                    "status": "success",
+                    "message": "Sales forecast central + legacy cache cleared. Run Sync DB to re-pull.",
+                }
             except Exception as e:
                 conn.rollback()
                 raise e
@@ -451,22 +418,18 @@ class User(BaseModel):
     is_active: bool = True
 
 @router.get("/users")
-def get_users():
+def get_users(conn=Depends(get_db)):
     """Get list of application users (Singleton). Migration runs at startup in main.py."""
-    conn, _ = get_db_connection()
     try:
         cursor = conn.execute("SELECT name, employee_id, is_active, created_at FROM app_users LIMIT 1")
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 @router.post("/users")
-def save_user(user: User):
+def save_user(user: User, conn=Depends(get_db)):
     """Update current user profile (Singleton: Wipes and Replaces)"""
-    conn, _ = get_db_connection()
     try:
         # Strict Singleton: Reset table and insert new profile
         # Transaction ensures we don't end up with 0 rows if insert fails
@@ -484,5 +447,3 @@ def save_user(user: User):
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()

@@ -16,6 +16,8 @@ This script will automatically:
 
 **Time required**: ~2-3 minutes.
 
+The packaged backend receives Electron's `userData` root explicitly. Back up the whole app-data folder when collecting/restoring a Phase 1 installation: it now contains `analytics-control.db`, the preserved `analytics.db`, zero or more hashed `profiles/*.db` files, and per-profile `data/restaurant-<hash>/` export folders. Do not restore one profile file under another profile's registry path; the embedded identity guard will reject it.
+
 ---
 
 ## 2. Locate the Output
@@ -39,7 +41,7 @@ If you are building locally and want to run from **Applications** with correct s
 open "/Applications/D&N Analytics.app"
 ```
 
-The script copies the app to `/Applications`, signs the backend executable and then the app bundle (without `--deep`), and clears quarantine. See `docs/TROUBLESHOOTING.md` if the app still won’t open.
+The script copies the app to `/Applications`, signs the backend executable and then the app bundle (without `--deep`), and clears quarantine. See **§5** if the app still won’t open.
 
 ---
 
@@ -72,8 +74,6 @@ When you copy the `.dmg` to a different Mac and want to run the app there:
      ```
      Then try opening again.
 
-For more help, see `docs/TROUBLESHOOTING.md`.
-
 ---
 
 ## 6. How to Fully Uninstall
@@ -85,4 +85,4 @@ To **completely remove** the app and all its data:
 1.  **Delete the app**: Drag `D&N Analytics` from Applications to Trash.
 2.  **Delete data**: In Finder, press `Cmd + Shift + G`, go to `~/Library/Application Support/`, and delete the folder **`dn-analytics`**.
 
-That folder contains `analytics.db`, `backend.log`, and `logs/errors.jsonl`.
+That folder contains `analytics-control.db`, `analytics.db`, optional `profiles/*.db`, `backend.log`, and `logs/errors.jsonl`.

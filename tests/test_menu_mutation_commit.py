@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import unittest
+from tests.profile_test_helpers import bind_test_profile
 from unittest.mock import Mock, patch
 
 from src.core.menu_assignment_schema import ensure_assignment_sync_schema
@@ -23,6 +24,8 @@ from src.core.menu_mapping_verification_sync_events import ensure_menu_mapping_v
 from src.core.menu_mutation_commit import (
     CommitResult,
     LOCAL_APPLY_FAILED_MESSAGE,
+    MUTATION_TYPE_CATALOG_UPDATE,
+    MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC,
     MUTATION_TYPE_VERIFY,
     MenuStatePullError,
     MutationPlan,
@@ -34,11 +37,7 @@ from src.core.menu_mutation_commit import (
     strict_mode_active,
     strict_mode_ready,
 )
-from src.core.sync_identity import (
-    get_menu_state_revision,
-    set_menu_state_revision,
-    set_menu_strict_mode_enabled,
-)
+from src.core.sync_identity import get_menu_state_revision, set_menu_state_revision
 from src.core.sync_cursor import pull_cursor_is_ahead
 from utils import menu_utils
 
@@ -79,19 +78,15 @@ class MenuMutationCommitReadinessTests(unittest.TestCase):
         ):
             self.assertTrue(strict_mode_ready(self.conn))
 
-    def test_strict_mode_active_false_when_flag_off(self) -> None:
-        set_menu_state_revision(self.conn, 5)
-        set_menu_strict_mode_enabled(self.conn, False)
+    def test_strict_mode_active_false_when_not_ready(self) -> None:
         with patch(
             "src.core.menu_mutation_commit.get_cloud_sync_config",
-            return_value=("https://cloud.example", "secret"),
+            return_value=(None, None),
         ):
-            self.assertTrue(strict_mode_ready(self.conn))
             self.assertFalse(strict_mode_active(self.conn))
 
-    def test_strict_mode_active_true_when_flag_on_and_ready(self) -> None:
+    def test_strict_mode_active_true_when_ready(self) -> None:
         set_menu_state_revision(self.conn, 5)
-        set_menu_strict_mode_enabled(self.conn, True)
         with patch(
             "src.core.menu_mutation_commit.get_cloud_sync_config",
             return_value=("https://cloud.example", "secret"),
@@ -104,10 +99,12 @@ class MenuMutationBuildingBlocksTests(unittest.TestCase):
     def _create_db() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        bind_test_profile(conn)
         conn.executescript(
             """
             CREATE TABLE menu_items (
                 menu_item_id TEXT PRIMARY KEY,
+                suggestion_id TEXT REFERENCES menu_items(menu_item_id),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
@@ -234,6 +231,7 @@ class MenuMutationCommitFlowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
+        bind_test_profile(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE system_config (
@@ -243,6 +241,7 @@ class MenuMutationCommitFlowTests(unittest.TestCase):
             );
             CREATE TABLE menu_items (
                 menu_item_id TEXT PRIMARY KEY,
+                suggestion_id TEXT REFERENCES menu_items(menu_item_id),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
@@ -364,6 +363,192 @@ class MenuMutationCommitFlowTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["menu_item_id"], "item_target")
         self.assertEqual(self.conn.execute("SELECT value FROM system_config WHERE key = 'menu_state_revision'").fetchone()[0], "11")
+
+    def test_derived_commit_skipped_existing_is_not_self_applied(self) -> None:
+        event = {
+            "remote_event_id": "evt-derived-skip",
+            "schema_version": 2,
+            "event_type": EVENT_TYPE_APPLIED,
+            "occurred_at": "2026-07-06T10:00:00Z",
+            "merge_payload": {
+                "kind": "derived_assignment_v1",
+                "assignments": [
+                    {
+                        "order_item_id": "1",
+                        "menu_item_id": "item_target",
+                        "variant_id": None,
+                        "is_verified": 0,
+                    }
+                ],
+            },
+        }
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC,
+            event=event,
+            order_item_ids=["1"],
+            mutation_id="mut-derived-skip",
+        )
+        body = self._accepted_body(event, mutation_id="mut-derived-skip")
+        body["skipped_existing"] = ["1"]
+
+        apply_accepted(self.conn, body, plan)
+
+        row = self.conn.execute(
+            "SELECT menu_item_id, assignment_seq FROM menu_item_variants WHERE order_item_id = '1'"
+        ).fetchone()
+        self.assertEqual(row["menu_item_id"], "item_source")
+        self.assertIsNone(row["assignment_seq"])
+
+    def test_derived_commit_skipped_existing_adopts_server_row(self) -> None:
+        # The server's commit response carries the authoritative row for every
+        # touched key. A skipped_existing key must adopt it: stamp its seq so
+        # the row leaves the flush pending set, and take the server mapping so
+        # this install converges even when the originating event is already
+        # behind the local merge cursor.
+        self.conn.execute("INSERT INTO order_items (order_item_id, menu_item_id) VALUES (1, 'item_source')")
+        self.conn.commit()
+        event = {
+            "remote_event_id": "evt-derived-adopt",
+            "schema_version": 2,
+            "event_type": EVENT_TYPE_APPLIED,
+            "occurred_at": "2026-07-06T10:00:00Z",
+            "merge_payload": {
+                "kind": "derived_assignment_v1",
+                "assignments": [
+                    {
+                        "order_item_id": "1",
+                        "menu_item_id": "item_source",
+                        "variant_id": None,
+                        "is_verified": 0,
+                    }
+                ],
+            },
+        }
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC,
+            event=event,
+            order_item_ids=["1"],
+            mutation_id="mut-derived-adopt",
+        )
+        body = self._accepted_body(event, mutation_id="mut-derived-adopt")
+        body["skipped_existing"] = ["1"]
+        body["assignment_rows"] = [
+            {
+                "order_item_id": "1",
+                "menu_item_id": "item_target",
+                "variant_id": None,
+                "is_verified": 1,
+                "assignment_seq": 42,
+                "verification_seq": 7,
+            }
+        ]
+
+        apply_accepted(self.conn, body, plan)
+
+        row = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, is_verified, assignment_seq,
+                   verification_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id = '1'
+            """
+        ).fetchone()
+        self.assertEqual(row["menu_item_id"], "item_target")
+        self.assertIsNone(row["variant_id"])
+        self.assertEqual(int(row["is_verified"]), 1)
+        self.assertEqual(int(row["assignment_seq"]), 42)
+        self.assertEqual(int(row["verification_seq"]), 7)
+        self.assertEqual(int(row["pending_local"]), 0)
+        order_row = self.conn.execute(
+            "SELECT menu_item_id FROM order_items WHERE order_item_id = 1"
+        ).fetchone()
+        self.assertEqual(order_row["menu_item_id"], "item_target")
+
+    def test_derived_commit_adoption_skips_unknown_menu_item(self) -> None:
+        # FK safety: server row referencing an item this install has not
+        # materialized yet is left pending (heals after the catalog pull).
+        event = {
+            "remote_event_id": "evt-derived-fk",
+            "schema_version": 2,
+            "event_type": EVENT_TYPE_APPLIED,
+            "occurred_at": "2026-07-06T10:00:00Z",
+            "merge_payload": {
+                "kind": "derived_assignment_v1",
+                "assignments": [
+                    {
+                        "order_item_id": "1",
+                        "menu_item_id": "item_source",
+                        "variant_id": None,
+                        "is_verified": 0,
+                    }
+                ],
+            },
+        }
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_DERIVED_ASSIGNMENT_SYNC,
+            event=event,
+            order_item_ids=["1"],
+            mutation_id="mut-derived-fk",
+        )
+        body = self._accepted_body(event, mutation_id="mut-derived-fk")
+        body["skipped_existing"] = ["1"]
+        body["assignment_rows"] = [
+            {
+                "order_item_id": "1",
+                "menu_item_id": "item_never_seen",
+                "variant_id": None,
+                "is_verified": 1,
+                "assignment_seq": 42,
+                "verification_seq": None,
+            }
+        ]
+
+        apply_accepted(self.conn, body, plan)
+
+        row = self.conn.execute(
+            "SELECT menu_item_id, assignment_seq FROM menu_item_variants WHERE order_item_id = '1'"
+        ).fetchone()
+        self.assertEqual(row["menu_item_id"], "item_source")
+        self.assertIsNone(row["assignment_seq"])
+
+    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
+    @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
+    @patch("requests.post")
+    def test_commit_200_runs_batch_epilogue(self, mock_post, _mock_cfg, _mock_models) -> None:
+        # The committing install must run the same batch epilogue peers run on
+        # pull: stats recompute + resolution-state sync, which GCs a source
+        # item left with zero mappings and zero usage.
+        self.conn.executescript(
+            """
+            CREATE TABLE orders (order_id INTEGER PRIMARY KEY, order_status TEXT);
+            ALTER TABLE order_items ADD COLUMN order_id INTEGER;
+            ALTER TABLE order_items ADD COLUMN quantity INTEGER DEFAULT 0;
+            ALTER TABLE order_items ADD COLUMN total_price REAL DEFAULT 0;
+            ALTER TABLE order_item_addons ADD COLUMN quantity INTEGER DEFAULT 0;
+            ALTER TABLE order_item_addons ADD COLUMN price REAL DEFAULT 0;
+            """
+        )
+        self.conn.commit()
+
+        event = self._sample_event()
+        plan = build_plan(
+            mutation_type="menu_merge.applied",
+            event=event,
+            order_item_ids=["1"],
+            mutation_id="mut-1",
+        )
+        accepted = self._accepted_body(event)
+        mock_post.return_value = Mock(status_code=200, content=json.dumps(accepted), json=lambda: accepted)
+
+        result = commit_mutation(self.conn, plan)
+        self.assertEqual(result.status, "ok")
+        self.assertIsNone(
+            self.conn.execute("SELECT 1 FROM menu_items WHERE menu_item_id = 'item_source'").fetchone()
+        )
+        row = self.conn.execute(
+            "SELECT is_verified, total_sold FROM menu_items WHERE menu_item_id = 'item_target'"
+        ).fetchone()
+        self.assertEqual(int(row["is_verified"]), 1)
+        self.assertEqual(int(row["total_sold"]), 0)
 
     @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
     @patch("requests.post")
@@ -713,6 +898,23 @@ class MenuMutationCommitFlowTests(unittest.TestCase):
         self.assertTrue(plan_overlaps_pulled_changes(plan, []))
         self.assertTrue(plan_overlaps_pulled_changes(plan, [{}]))
 
+    def test_catalog_update_conflict_detection_fails_closed(self) -> None:
+        plan = build_plan(
+            mutation_type=MUTATION_TYPE_CATALOG_UPDATE,
+            catalog_delta={
+                "items": [
+                    {
+                        "menu_item_id": "item_catalog",
+                        "name": "Catalog Item",
+                        "type": "Dessert",
+                        "is_verified": True,
+                    }
+                ],
+                "variants": [],
+            },
+        )
+        self.assertTrue(plan_overlaps_pulled_changes(plan, [{"order_item_ids": ["unrelated"]}]))
+
     def test_opaque_cursor_order_uses_decoded_server_order(self) -> None:
         earlier = (
             "eyJ2IjoyLCJpbmdlc3RlZF9hdCI6IjIwMjYtMDctMDZUMTA6MDA6"
@@ -812,12 +1014,60 @@ class MenuMutationCommitFlowTests(unittest.TestCase):
 
         self.assertEqual(get_menu_state_revision(self.conn), 10)
 
+    @patch(
+        "src.core.menu_mutation_commit.get_cloud_sync_config",
+        return_value=("https://cloud.example", "secret"),
+    )
+    @patch(
+        "src.core.menu_mutation_commit.get_menu_merge_pull_endpoint",
+        return_value="https://cloud.example/menu-merges",
+    )
+    @patch(
+        "src.core.menu_mutation_commit.get_menu_mapping_verification_pull_endpoint",
+        return_value="https://cloud.example/menu-mapping-verifications",
+    )
+    @patch("src.core.menu_mutation_commit.pull_and_apply_menu_mapping_verification_events")
+    @patch("src.core.menu_mutation_commit.pull_and_apply_menu_merge_events")
+    def test_pull_latest_tolerates_deferred_verifications(
+        self,
+        merge_pull,
+        verification_pull,
+        _verification_endpoint,
+        _merge_endpoint,
+        _cloud_config,
+    ) -> None:
+        # A verification event for an order line this install never ingested is
+        # deferred (persisted + retried by the flush pass), not failed. A
+        # permanent deferral must NOT wedge the whole menu pull, else every sync
+        # reports "Sync Failed" forever.
+        merge_pull.return_value = {
+            "error": None,
+            "has_more": False,
+            "events_failed": 0,
+            "events_quarantined": 0,
+            "advertised_menu_revision": 12,
+        }
+        verification_pull.return_value = {
+            "error": None,
+            "has_more": False,
+            "events_failed": 0,
+            "events_quarantined": 0,
+            "deferred": 65,
+            "advertised_menu_revision": 12,
+        }
+
+        result = pull_latest_menu_state(self.conn)
+
+        self.assertEqual(result["menu_revision"], 12)
+        self.assertEqual(get_menu_state_revision(self.conn), 12)
+
 
 class StrictModeMergeTests(unittest.TestCase):
     @staticmethod
     def _create_db() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        bind_test_profile(conn)
         conn.executescript(
             """
             CREATE TABLE system_config (
@@ -828,6 +1078,7 @@ class StrictModeMergeTests(unittest.TestCase):
             CREATE TABLE orders (order_id INTEGER PRIMARY KEY, order_status TEXT NOT NULL);
             CREATE TABLE menu_items (
                 menu_item_id TEXT PRIMARY KEY,
+                suggestion_id TEXT REFERENCES menu_items(menu_item_id),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
@@ -900,7 +1151,6 @@ class StrictModeMergeTests(unittest.TestCase):
             "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant-large', 'Large', 1)"
         )
         set_menu_state_revision(conn, 3)
-        set_menu_strict_mode_enabled(conn, True)
         conn.commit()
         return conn
 
@@ -937,11 +1187,10 @@ class StrictModeMergeTests(unittest.TestCase):
         finally:
             conn.close()
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
     @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
     @patch("requests.post")
-    def test_strict_plain_verify_emits_unverified_mappings(self, mock_post, _cfg, _models, _export) -> None:
+    def test_strict_plain_verify_emits_unverified_mappings(self, mock_post, _cfg, _models) -> None:
         conn = self._create_db()
         get_menu_mapping_verification_pull_cursor(conn)
         ensure_menu_mapping_verification_sync_tables(conn)
@@ -1001,44 +1250,10 @@ class StrictModeMergeTests(unittest.TestCase):
         finally:
             conn.close()
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
-    def test_legacy_plain_verify_emits_only_locally_verified_mappings(self, _models, _export) -> None:
-        # Legacy outbox events never update local rows, so a plain verify must
-        # not broadcast is_verified=1 for mappings that stay unverified locally.
-        conn = self._create_db()
-        set_menu_strict_mode_enabled(conn, False)
-        ensure_menu_mapping_verification_sync_tables(conn)
-        conn.execute(
-            "INSERT INTO menu_item_variants (order_item_id, menu_item_id, is_verified) VALUES ('2', 'item_source', 0)"
-        )
-        conn.commit()
-
-        try:
-            result = menu_utils.verify_item(conn, "item_source")
-
-            self.assertEqual(result["status"], "success", result)
-            payloads = [
-                json.loads(row[0])
-                for row in conn.execute(
-                    "SELECT payload FROM menu_mapping_verification_sync_events"
-                ).fetchall()
-            ]
-            emitted_ids = set()
-            for payload in payloads:
-                if payload.get("mappings"):
-                    emitted_ids.update(str(m["order_item_id"]) for m in payload["mappings"])
-                else:
-                    emitted_ids.add(str(payload["order_item_id"]))
-            self.assertEqual(emitted_ids, {"1"})
-        finally:
-            conn.close()
-
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
     @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
     @patch("requests.post")
-    def test_strict_merge_applies_after_mocked_200_without_outbox(self, mock_post, _cfg, _models, _export) -> None:
+    def test_strict_merge_applies_after_mocked_200_without_outbox(self, mock_post, _cfg, _models) -> None:
         conn = self._create_db()
         ensure_menu_merge_sync_tables(conn)
         ensure_assignment_sync_schema(conn)
@@ -1082,13 +1297,12 @@ class StrictModeMergeTests(unittest.TestCase):
         finally:
             conn.close()
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
     @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
     @patch("src.core.menu_mutation_commit.pull_latest_menu_state")
     @patch("requests.get")
     @patch("requests.post")
-    def test_forced_retry_reuses_same_mutation_id(self, mock_post, mock_get, mock_pull, _cfg, _models, _export) -> None:
+    def test_forced_retry_reuses_same_mutation_id(self, mock_post, mock_get, mock_pull, _cfg, _models) -> None:
         conn = self._create_db()
         ensure_menu_merge_sync_tables(conn)
         ensure_assignment_sync_schema(conn)
@@ -1143,6 +1357,7 @@ class ResolveItemRenameTests(unittest.TestCase):
     def _create_db() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        bind_test_profile(conn)
         conn.executescript(
             """
             CREATE TABLE system_config (
@@ -1152,6 +1367,7 @@ class ResolveItemRenameTests(unittest.TestCase):
             );
             CREATE TABLE menu_items (
                 menu_item_id TEXT PRIMARY KEY,
+                suggestion_id TEXT REFERENCES menu_items(menu_item_id),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
@@ -1219,15 +1435,13 @@ class ResolveItemRenameTests(unittest.TestCase):
             "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
         )
         set_menu_state_revision(conn, 4)
-        set_menu_strict_mode_enabled(conn, True)
         conn.commit()
         return conn
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
     @patch("src.core.menu_mutation_commit.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
     def test_resolve_item_rename_failed_merge_does_not_leave_orphan_target(
-        self, _cfg, _models, _export
+        self, _cfg, _models
     ) -> None:
         from utils.id_generator import generate_deterministic_id
 

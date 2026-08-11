@@ -29,9 +29,8 @@ from src.core.customer_mutation_commit import (
     build_plan,
     commit_mutation,
 )
-from src.core.customer_outbox_drain import drain_customer_outbox, get_customer_outbox_status
 from src.core.services.sync_service import SyncStatus
-from src.core.sync_identity import set_customer_state_revision, set_customer_strict_mode_enabled
+from src.core.sync_identity import set_customer_state_revision
 from tests.test_customer_mutation_commit import _customer_merge_db
 
 
@@ -45,7 +44,6 @@ def _strict_mode_customer_db() -> sqlite3.Connection:
         "INSERT INTO system_config (key, value) VALUES ('cloud_sync_api_key', 'secret')"
     )
     set_customer_state_revision(conn, 10)
-    set_customer_strict_mode_enabled(conn, True)
     conn.commit()
     return conn
 
@@ -301,46 +299,6 @@ class CustomerPhase7ValidationTests(unittest.TestCase):
             conn.close()
 
     # ------------------------------------------------------------------
-    # 7.6 Legacy outbox drain during rollout
-    # ------------------------------------------------------------------
-
-    @patch("src.core.customer_outbox_drain.upload_customer_merge_events")
-    @patch("src.core.customer_outbox_drain.get_cloud_sync_config", return_value=("https://cloud.example", "secret"))
-    def test_phase7_06_legacy_outbox_drain_does_not_touch_strict_state(self, _cfg, mock_upload) -> None:
-        conn = _strict_mode_customer_db()
-        try:
-            conn.execute(
-                """
-                INSERT INTO customer_merge_sync_events (event_id, merge_id, event_type, payload, occurred_at)
-                VALUES ('evt-legacy', 1, 'customer_merge.applied', '{"remote_event_id":"evt-legacy"}', '2026-07-06T10:00:00Z')
-                """
-            )
-            conn.commit()
-            self.assertFalse(get_customer_outbox_status(conn)["outbox_drained"])
-
-            def _upload(conn, **kwargs):
-                conn.execute(
-                    """
-                    UPDATE customer_merge_sync_events
-                    SET uploaded_at = '2026-07-06T11:00:00Z'
-                    WHERE event_id = 'evt-legacy'
-                    """
-                )
-                conn.commit()
-                return {"events_sent": 1, "backfilled_applied": 0, "backfilled_undone": 0, "error": None}
-
-            mock_upload.side_effect = _upload
-            result = drain_customer_outbox(conn)
-            self.assertEqual(result["status"], "ok")
-            self.assertTrue(result["outbox_drained"])
-            self.assertEqual(
-                conn.execute("SELECT customer_id FROM orders WHERE order_id = 101").fetchone()[0],
-                1,
-            )
-        finally:
-            conn.close()
-
-    # ------------------------------------------------------------------
     # 7.7 Fresh install / reset convergence
     # ------------------------------------------------------------------
 
@@ -382,7 +340,6 @@ class CustomerPhase7ValidationTests(unittest.TestCase):
                 "events": [remote_event],
                 "next_cursor": "cursor-77",
                 "customer_revision": 77,
-                "strict_mode_enabled": True,
             }
             with patch("requests.get", return_value=mock_response):
                 pull_result = pull_and_apply_customer_merge_events(
@@ -530,7 +487,6 @@ class CustomerPhase7ValidationTests(unittest.TestCase):
                 "events": [remote_event],
                 "next_cursor": "cursor-88",
                 "customer_revision": 12,
-                "strict_mode_enabled": True,
             }
             with patch("requests.get", return_value=mock_response):
                 pull_result = pull_and_apply_customer_merge_events(

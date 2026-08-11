@@ -5,6 +5,7 @@ import {
     ErrorPopup,
     KPICard,
     PaginatedDataTable,
+    SingleStoreOnly,
     TabButton,
     type PopupMessage,
 } from '../components';
@@ -219,15 +220,18 @@ export default function Customers({
             )}
 
             {activeSection === 'profiles' && (
+                <SingleStoreOnly what="Customer profiles">
                 <CustomerProfile
                     initialCustomerId={linkedCustomerId}
                     headerActions={<div className="customers-profile-actions">Search by name, phone, or customer ID.</div>}
                 />
+                </SingleStoreOnly>
             )}
 
             {activeSection === 'analytics' && <CustomerAnalyticsSection lastDbSync={lastDbSync} />}
 
             {activeSection === 'similar' && (
+                <SingleStoreOnly what="Customer merging">
                 <CustomerSimilaritySection
                     activeMergeRequest={activeMergeRequest}
                     executingMerge={executingMerge}
@@ -248,16 +252,19 @@ export default function Customers({
                     onCompareTargetCustomerIdChange={setCompareTargetCustomerId}
                     onSelectSuggestion={setSelectedSuggestion}
                 />
+                </SingleStoreOnly>
             )}
 
             {activeSection === 'merge' && (
-                <CustomerMergeHistorySection
-                    loadingHistory={loadingHistory}
-                    mergeHistory={mergeHistory}
-                    undoingMergeId={undoingMergeId}
-                    onRefresh={loadMergeHistory}
-                    onUndoMerge={handleUndoMerge}
-                />
+                <SingleStoreOnly what="Merge history">
+                    <CustomerMergeHistorySection
+                        loadingHistory={loadingHistory}
+                        mergeHistory={mergeHistory}
+                        undoingMergeId={undoingMergeId}
+                        onRefresh={loadMergeHistory}
+                        onUndoMerge={handleUndoMerge}
+                    />
+                </SingleStoreOnly>
             )}
 
             {activeSection === 'biometric' && <CustomerBiometricMatchingPlaceholder />}

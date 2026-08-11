@@ -1,7 +1,7 @@
 {
   "name": "dn-analytics",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.13",
   "description": "D&N Analytics desktop app",
   "author": "D&N Analytics",
   "main": "main.js",
@@ -10,6 +10,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
     "build": "npx tsc -b && npx vite build",
+    "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview",
     "package": "electron-builder",
@@ -42,6 +43,7 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
+    "vitest": "^4.1.10",
     "wait-on": "^9.0.3"
   },
   "build": {

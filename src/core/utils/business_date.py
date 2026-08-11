@@ -6,7 +6,11 @@ The cafe operates until 5:00 AM IST, so a "business day" runs from
 
 All analytics should use these utilities for consistent date handling.
 """
+import contextvars
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta
+from typing import Iterator, Optional
 
 try:
     from zoneinfo import ZoneInfo
@@ -14,25 +18,78 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
-BUSINESS_DAY_START_HOUR = 5  # 5:00 AM IST
+DEFAULT_TIMEZONE = "Asia/Kolkata"
+BUSINESS_DAY_START_HOUR = 5  # 5:00 AM local restaurant time
 
 # SQL fragment for SQLite to calculate business date
-# Subtracts 5 hours from IST timestamp to align with business day
+# Subtracts 5 hours from the stored local timestamp to align with the business day
 # e.g., '2023-01-01 02:00:00' -> '2022-12-31 21:00:00' -> DATE(...) -> '2022-12-31'
+# Order rows are stored in the restaurant's own local time, so the 5-hour cutoff
+# is timezone-independent here; only "what is today" needs the profile timezone.
 BUSINESS_DATE_SQL = "DATE(created_on, '-5 hours')"
 
 
-def get_current_business_date() -> str:
+@dataclass(frozen=True)
+class BusinessDateContext:
+    """The profile timezone and the one instant a request treats as "now".
+
+    An All Stores request captures a single instant and evaluates each profile's
+    business date in that profile's own timezone, so two stores can never
+    disagree about which moment "today" was computed from.
     """
-    Get the current business date in YYYY-MM-DD format (IST).
-    
-    If current time in IST is before 5 AM, returns yesterday's date.
+
+    timezone: str = DEFAULT_TIMEZONE
+    as_of: Optional[datetime] = None
+
+    def zone(self) -> ZoneInfo:
+        try:
+            return ZoneInfo(self.timezone or DEFAULT_TIMEZONE)
+        except Exception:
+            return IST
+
+    def now(self) -> datetime:
+        if self.as_of is not None:
+            return self.as_of.astimezone(self.zone())
+        return datetime.now(self.zone())
+
+
+_BUSINESS_DATE_CONTEXT: contextvars.ContextVar[Optional[BusinessDateContext]] = (
+    contextvars.ContextVar("business_date_context", default=None)
+)
+
+
+def current_business_date_context() -> BusinessDateContext:
+    return _BUSINESS_DATE_CONTEXT.get() or BusinessDateContext()
+
+
+@contextmanager
+def business_date_context(
+    timezone: Optional[str] = None, as_of: Optional[datetime] = None
+) -> Iterator[BusinessDateContext]:
+    """Bind the profile timezone (and optionally one captured instant)."""
+    inherited = _BUSINESS_DATE_CONTEXT.get()
+    context = BusinessDateContext(
+        timezone=timezone or (inherited.timezone if inherited else DEFAULT_TIMEZONE),
+        as_of=as_of if as_of is not None else (inherited.as_of if inherited else None),
+    )
+    token = _BUSINESS_DATE_CONTEXT.set(context)
+    try:
+        yield context
+    finally:
+        _BUSINESS_DATE_CONTEXT.reset(token)
+
+
+def get_current_business_date(now: Optional[datetime] = None) -> str:
+    """
+    Get the current business date in YYYY-MM-DD format for the active profile.
+
+    If the local time is before 5 AM, returns yesterday's date.
     Else returns today's date.
     """
-    now = datetime.now(IST)
-    if now.hour < BUSINESS_DAY_START_HOUR:
-        return (now.date() - timedelta(days=1)).isoformat()
-    return now.date().isoformat()
+    local_now = now.astimezone(current_business_date_context().zone()) if now else current_business_date_context().now()
+    if local_now.hour < BUSINESS_DAY_START_HOUR:
+        return (local_now.date() - timedelta(days=1)).isoformat()
+    return local_now.date().isoformat()
 
 
 def get_last_complete_business_date() -> str:

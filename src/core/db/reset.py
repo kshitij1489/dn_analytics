@@ -1,8 +1,11 @@
 import os
 import sqlite3
-from src.core.db.connection import get_db_connection, DB_PATH
-from src.core.utils.path_helper import get_resource_path
-def reset_database():
+from pathlib import Path
+from src.core.db.connection import apply_analytics_schema
+from src.core.profiles import PROFILE_SCHEMA_VERSION
+
+
+def reset_database(profile):
     """
     Resets the database by:
     1. Removing the analytics.db file (if exists)
@@ -11,26 +14,23 @@ def reset_database():
     4. Leaves catalog empty — next Sync DB pulls from cloud when configured
     """
     try:
-        # 1. Delete existing DB file
-        # 1. Delete existing DB file
-        target_db = os.environ.get("DB_URL") or DB_PATH
-        if os.path.exists(target_db):
+        # Delete exactly the captured profile database, then recreate its identity.
+        target_db = Path(profile.database_path).resolve()
+        if target_db.exists():
             os.remove(target_db)
             print(f"Deleted database at {target_db}")
             
         # 2. Create new connection
-        conn, _ = get_db_connection()
-        if not conn:
-            raise Exception("Failed to connect/create database")
-            
-        # 3. Apply Schema
-        schema_path = get_resource_path(os.path.join("database", "schema_sqlite.sql"))
-        
-        if os.path.exists(schema_path):
-            with open(schema_path, "r") as f:
-                conn.executescript(f.read())
-        else:
-             raise Exception(f"Schema file not found at {schema_path}")
+        conn = sqlite3.connect(str(target_db), check_same_thread=False, timeout=30.0)
+        apply_analytics_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO restaurant_profile_identity
+                (singleton_id, restaurant_id, bound_at, profile_schema_version)
+            VALUES (1, ?, CURRENT_TIMESTAMP, ?)
+            """,
+            (profile.restaurant_id, PROFILE_SCHEMA_VERSION),
+        )
              
         conn.commit()
         conn.close()
@@ -39,4 +39,3 @@ def reset_database():
 
     except Exception as e:
         return False, str(e)
-

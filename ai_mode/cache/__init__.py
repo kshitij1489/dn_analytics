@@ -7,8 +7,10 @@ from ai_mode.cache.cache_config import (
 )
 from ai_mode.cache.llm_cache import (
     build_key,
+    bump_cache_counter,
     clear_cache,
     get,
+    get_cache_counters,
     get_or_call,
     get_or_call_diversity,
     list_entries,
@@ -22,8 +24,10 @@ __all__ = [
     "DIVERSITY_CACHE_SIZE",
     "MAX_ENTRIES",
     "build_key",
+    "bump_cache_counter",
     "clear_cache",
     "get",
+    "get_cache_counters",
     "get_or_call",
     "get_or_call_diversity",
     "list_entries",

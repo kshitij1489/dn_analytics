@@ -1,0 +1,349 @@
+{
+  "description": "Menu merge sync payload fixtures. Strict-only (2026-07-09): the `menu_merge_ingest_request_*` / `menu_merge_ingest_response` fixtures are HISTORICAL — the batched `POST menu-merges/ingest` endpoint was removed (returns 404); merges now land via the commit endpoint (§19), which persists the same event shape. The `menu_merge_pull_response` fixture remains authoritative for `GET menu-merges`. Covers basic_merge_v1 applied, variant_merge_v1 applied, undo, delta pull with both applied + undo, and (historical) duplicate re-upload.",
+  "fixtures": [
+    {
+      "name": "menu_merge_ingest_request_basic",
+      "description": "Ingest a basic_merge_v1 applied event with explicit assignments (schema v2, §10.3).",
+      "endpoint": "POST /desktop-analytics-sync/menu-merges/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "remote-menu-merge-1",
+            "schema_version": 2,
+            "event_type": "menu_merge.applied",
+            "occurred_at": "2026-04-14T10:00:00Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            },
+            "source_item": {
+              "menu_item_id": "item_source",
+              "name": "Iced Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "target_item": {
+              "menu_item_id": "item_target",
+              "name": "Cold Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "merge_payload": {
+              "kind": "basic_merge_v1",
+              "assignments": [
+                {
+                  "order_item_id": "101",
+                  "menu_item_id": "item_target",
+                  "variant_id": "variant_large",
+                  "is_verified": 1
+                }
+              ]
+            },
+            "local_refs": {
+              "merge_id": 123
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "menu_merge_ingest_request_variant",
+      "description": "Ingest a variant_merge_v1 applied event with variant_mappings (§10.4).",
+      "endpoint": "POST /desktop-analytics-sync/menu-merges/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "remote-menu-merge-variant-1",
+            "schema_version": 2,
+            "event_type": "menu_merge.applied",
+            "occurred_at": "2026-04-14T11:00:00Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            },
+            "source_item": {
+              "menu_item_id": "item_momo",
+              "name": "Momo",
+              "type": "Food",
+              "is_verified": true
+            },
+            "target_item": {
+              "menu_item_id": "item_momos",
+              "name": "Momos",
+              "type": "Food",
+              "is_verified": true
+            },
+            "merge_payload": {
+              "kind": "variant_merge_v1",
+              "variant_mappings": [
+                {
+                  "source_variant_id": "__NULL_VARIANT__",
+                  "source_variant_name": "UNASSIGNED",
+                  "target_variant_id": "variant_8_piece",
+                  "target_variant_name": "8_PIECE"
+                }
+              ],
+              "assignments": [
+                {
+                  "order_item_id": "301",
+                  "menu_item_id": "item_momos",
+                  "variant_id": "variant_8_piece",
+                  "is_verified": 1
+                }
+              ]
+            },
+            "local_refs": {
+              "merge_id": 124
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "menu_merge_ingest_request_undo",
+      "description": "Ingest a menu_merge.undone event with reverts_remote_event_id (§10.5).",
+      "endpoint": "POST /desktop-analytics-sync/menu-merges/ingest",
+      "payload": {
+        "schema_version": 1,
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro",
+          "platform": "Darwin",
+          "platform_release": "24.5.0",
+          "machine": "arm64"
+        },
+        "events": [
+          {
+            "remote_event_id": "remote-menu-merge-undo-1",
+            "schema_version": 2,
+            "event_type": "menu_merge.undone",
+            "occurred_at": "2026-04-14T10:05:00Z",
+            "reverts_remote_event_id": "remote-menu-merge-1",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            },
+            "source_item": {
+              "menu_item_id": "item_source",
+              "name": "Iced Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "target_item": {
+              "menu_item_id": "item_target",
+              "name": "Cold Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "merge_payload": {
+              "kind": "basic_merge_v1",
+              "assignments": [
+                {
+                  "order_item_id": "101",
+                  "menu_item_id": "item_source",
+                  "variant_id": "variant_large",
+                  "is_verified": 1
+                }
+              ]
+            },
+            "undo_metadata": {
+              "original_merged_at": "2026-04-14T10:00:00Z"
+            },
+            "local_refs": {
+              "merge_id": 123
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "menu_merge_ingest_response",
+      "description": "Successful ingest of a fresh menu merge event (§10.6).",
+      "endpoint": "POST /desktop-analytics-sync/menu-merges/ingest",
+      "http_status": 200,
+      "payload": {
+        "status": "ok",
+        "schema_version": 1,
+        "ingested_count": 1,
+        "duplicate_count": 0,
+        "accepted": [
+          "remote-menu-merge-1"
+        ],
+        "rejected": []
+      }
+    },
+    {
+      "name": "menu_merge_pull_response",
+      "description": "Delta pull returning both an applied and its undo event with server-injected fields (§11.4).",
+      "endpoint": "GET /desktop-analytics-sync/menu-merges",
+      "http_status": 200,
+      "payload": {
+        "events": [
+          {
+            "remote_event_id": "remote-menu-merge-1",
+            "schema_version": 2,
+            "event_type": "menu_merge.applied",
+            "occurred_at": "2026-04-14T10:00:00Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            },
+            "source_item": {
+              "menu_item_id": "item_source",
+              "name": "Iced Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "target_item": {
+              "menu_item_id": "item_target",
+              "name": "Cold Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "merge_payload": {
+              "kind": "basic_merge_v1",
+              "assignments": [
+                {
+                  "order_item_id": "101",
+                  "menu_item_id": "item_target",
+                  "variant_id": "variant_large",
+                  "is_verified": 1
+                }
+              ]
+            },
+            "local_refs": {
+              "merge_id": 123
+            },
+            "server_seq": 100,
+            "server_ingested_at": "2026-04-14T10:00:02Z"
+          },
+          {
+            "remote_event_id": "remote-menu-merge-undo-1",
+            "schema_version": 2,
+            "event_type": "menu_merge.undone",
+            "occurred_at": "2026-04-14T10:05:00Z",
+            "reverts_remote_event_id": "remote-menu-merge-1",
+            "attribution": {
+              "employee": {
+                "employee_id": "0001",
+                "name": "Owner"
+              },
+              "device": {
+                "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+                "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+                "device_label": "MacBook-Pro",
+                "platform": "Darwin",
+                "platform_release": "24.5.0",
+                "machine": "arm64"
+              }
+            },
+            "source_item": {
+              "menu_item_id": "item_source",
+              "name": "Iced Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "target_item": {
+              "menu_item_id": "item_target",
+              "name": "Cold Coffee",
+              "type": "Beverage",
+              "is_verified": true
+            },
+            "merge_payload": {
+              "kind": "basic_merge_v1",
+              "assignments": [
+                {
+                  "order_item_id": "101",
+                  "menu_item_id": "item_source",
+                  "variant_id": "variant_large",
+                  "is_verified": 1
+                }
+              ]
+            },
+            "undo_metadata": {
+              "original_merged_at": "2026-04-14T10:00:00Z"
+            },
+            "local_refs": {
+              "merge_id": 123
+            },
+            "server_seq": 101,
+            "server_ingested_at": "2026-04-14T10:05:02Z"
+          }
+        ],
+        "next_cursor": "menu-merge-cursor-000002",
+        "menu_revision": 42
+      }
+    }
+  ]
+}

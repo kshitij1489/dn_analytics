@@ -8,6 +8,7 @@ from src.core.customer_merge_sync import (
     list_unresolved_customer_merge_events,
     pull_and_apply_customer_merge_events,
 )
+from tests.profile_test_helpers import bind_test_profile
 
 
 def _sha(value: str) -> str:
@@ -94,6 +95,7 @@ class CustomerUnresolvedQuarantineTests(unittest.TestCase):
             );
             """
         )
+        bind_test_profile(self.conn)
         self.conn.executemany(
             """
             INSERT INTO customers (customer_id, customer_identity_key, name, name_normalized, phone, address)
@@ -171,7 +173,6 @@ class CustomerUnresolvedQuarantineTests(unittest.TestCase):
         body = {"events": events, "next_cursor": next_cursor}
         if scope_state:
             body["customer_revision"] = 58
-            body["strict_mode_enabled"] = True
         with patch("requests.get", return_value=Mock(status_code=200, json=Mock(return_value=body))):
             return pull_and_apply_customer_merge_events(
                 self.conn,
@@ -192,10 +193,9 @@ class CustomerUnresolvedQuarantineTests(unittest.TestCase):
         self.assertEqual(result["unresolved_pending"], 1)
         self.assertEqual(result["cursor_after"], "cursor-1")
 
-        # Scope state mirrors despite the quarantined event — strict mode must not
-        # stay blocked behind an unresolvable historical event.
+        # Scope state mirrors despite the quarantined event — a quarantined
+        # historical event must not block the revision from advancing.
         self.assertEqual(self._config_value("customer_state_revision"), "58")
-        self.assertEqual(self._config_value("customer_strict_mode_enabled"), "1")
 
         quarantined = list_unresolved_customer_merge_events(self.conn)
         self.assertEqual(len(quarantined), 1)
@@ -273,6 +273,195 @@ class CustomerUnresolvedQuarantineTests(unittest.TestCase):
         self.assertEqual(count_unresolved_customer_merge_events(self.conn), 0)
         # Scope state must not apply on a failed pull.
         self.assertIsNone(self._config_value("customer_state_revision"))
+
+    def _local_install_id(self) -> str:
+        from src.core.customer_merge_sync import ensure_customer_merge_pull_tables
+        from src.core.sync_identity import get_device_identity
+
+        ensure_customer_merge_pull_tables(self.conn)
+        install_id = get_device_identity(self.conn)["install_id"]
+        self.conn.commit()
+        return install_id
+
+    def _self_origin_ambiguous_event(self, remote_event_id: str = "remote-self-1") -> dict:
+        """Same-name anonymous pair the origin install can resolve via local_refs.
+        Carries the moved order of customer 3 — callers must insert the anon
+        pair orders so the hint corroboration finds its owner."""
+        event = self._ambiguous_event(remote_event_id)
+        event["source_customer"]["snapshot"] = {"name": "Nirupam Das"}
+        event["target_customer"]["snapshot"] = {"name": "Nirupam Das"}
+        event["attribution"] = {"device": {"install_id": self._local_install_id()}}
+        event["local_refs"] = {"source_customer_id": 3, "target_customer_id": 4}
+        event["moved_orders"] = {"count": 1, "portable_refs": [self._order_ref(301, 3)]}
+        return event
+
+    def test_self_origin_local_refs_resolve_same_name_anonymous_pair(self) -> None:
+        self._insert_anon_pair_orders()
+        result = self._pull([self._self_origin_ambiguous_event()])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        self.assertEqual(result["events_unresolved"], 0)
+        merge_row = self.conn.execute(
+            "SELECT source_customer_id, target_customer_id FROM customer_merge_history"
+        ).fetchone()
+        self.assertEqual(int(merge_row["source_customer_id"]), 3)
+        self.assertEqual(int(merge_row["target_customer_id"]), 4)
+
+    def test_self_origin_local_refs_rejected_on_moved_order_owner_mismatch(self) -> None:
+        # Reseeded-database guard: ids under the same install_id now point at
+        # different rows (hints say 1→2). The moved order belongs to customer
+        # 3, so the stale hints must be discarded; resolution then proceeds
+        # from order evidence alone and applies the true pair 3→4 — customers
+        # 1 and 2 stay untouched.
+        self._insert_anon_pair_orders()
+        event = self._self_origin_ambiguous_event("remote-self-2")
+        event["local_refs"] = {"source_customer_id": 1, "target_customer_id": 2}
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        merge_row = self.conn.execute(
+            "SELECT source_customer_id, target_customer_id FROM customer_merge_history"
+        ).fetchone()
+        self.assertEqual(int(merge_row["source_customer_id"]), 3)
+        self.assertEqual(int(merge_row["target_customer_id"]), 4)
+
+    def test_self_origin_duplicate_replay_corroborates_via_target_ownership(self) -> None:
+        # A second server event for an already-applied pair arrives (the user
+        # retried the merge while the first attempt sat quarantined). The
+        # moved orders now sit with the target — still within the hinted pair,
+        # so the hints hold and the dedupe path records a duplicate instead of
+        # quarantining or double-applying.
+        self._insert_anon_pair_orders()
+        first = self._pull([self._self_origin_ambiguous_event("remote-dup-1")])
+        self.assertEqual(first["merge_events_applied"], 1)
+
+        second = self._pull([self._self_origin_ambiguous_event("remote-dup-2")], next_cursor="cursor-2")
+
+        self.assertIsNone(second["error"])
+        self.assertEqual(second["events_unresolved"], 0)
+        self.assertEqual(count_unresolved_customer_merge_events(self.conn), 0)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM customer_merge_history").fetchone()[0], 1
+        )
+
+    def test_self_origin_local_refs_rejected_without_moved_order_evidence(self) -> None:
+        # The moved orders have not reached this install: no independent
+        # evidence backs the local ids, so they must not be trusted even
+        # though the snapshot names match. Quarantine and retry instead.
+        event = self._self_origin_ambiguous_event("remote-self-3")
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_unresolved"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM customer_merge_history").fetchone()[0], 0)
+
+    def test_foreign_local_refs_are_ignored(self) -> None:
+        event = self._ambiguous_event("remote-foreign-1")
+        event["attribution"] = {"device": {"install_id": "install-someone-else"}}
+        event["local_refs"] = {"source_customer_id": 3, "target_customer_id": 4}
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_unresolved"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM customer_merge_history").fetchone()[0], 0)
+
+    def _insert_anon_pair_orders(self) -> None:
+        self.conn.executemany(
+            """
+            INSERT INTO orders (order_id, customer_id, petpooja_order_id, stream_id, event_id, aggregate_id, total, created_on)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (301, 3, "PP-301", 6001, "evt-301", "agg-301", 50.0, "2024-02-01 10:00:00"),
+                (401, 4, "PP-401", 6002, "evt-401", "agg-401", 75.0, "2024-02-02 10:00:00"),
+            ],
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _order_ref(order_id: int, customer_hint: int) -> dict:
+        return {
+            "petpooja_order_id": f"PP-{order_id}",
+            "stream_id": 6001 if customer_hint == 3 else 6002,
+            "event_id": f"evt-{order_id}",
+            "aggregate_id": f"agg-{order_id}",
+            "created_on": "2024-02-01 10:00:00",
+            "total": 50.0,
+            "local_order_id": order_id,
+        }
+
+    def test_foreign_event_order_ref_locators_resolve_anonymous_pair(self) -> None:
+        self._insert_anon_pair_orders()
+        event = self._ambiguous_event("remote-orders-1")
+        event["source_customer"]["portable_locators"]["order_refs"] = [self._order_ref(301, 3)]
+        event["target_customer"]["portable_locators"]["order_refs"] = [self._order_ref(401, 4)]
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        merge_row = self.conn.execute(
+            "SELECT source_customer_id, target_customer_id FROM customer_merge_history"
+        ).fetchone()
+        self.assertEqual(int(merge_row["source_customer_id"]), 3)
+        self.assertEqual(int(merge_row["target_customer_id"]), 4)
+        moved = self.conn.execute("SELECT customer_id FROM orders WHERE order_id = 301").fetchone()
+        self.assertEqual(int(moved["customer_id"]), 4)
+
+    def test_legacy_event_moved_orders_fallback_and_target_elimination(self) -> None:
+        # Legacy payloads carry no descriptor order_refs; the moved-orders list
+        # identifies the source, and with exactly two same-name candidates the
+        # target can only be the remaining one.
+        self._insert_anon_pair_orders()
+        event = self._ambiguous_event("remote-legacy-1")
+        event["moved_orders"] = {"count": 1, "portable_refs": [self._order_ref(301, 3)]}
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        merge_row = self.conn.execute(
+            "SELECT source_customer_id, target_customer_id FROM customer_merge_history"
+        ).fetchone()
+        self.assertEqual(int(merge_row["source_customer_id"]), 3)
+        self.assertEqual(int(merge_row["target_customer_id"]), 4)
+
+    def test_target_elimination_skipped_when_target_has_unmatched_strong_locators(self) -> None:
+        # Target carries order_refs pointing at an order this install has not
+        # synced yet: the referenced data is merely late, so the event must
+        # quarantine and retry — not fall through to name-based elimination.
+        self._insert_anon_pair_orders()
+        event = self._ambiguous_event("remote-gated-1")
+        event["moved_orders"] = {"count": 1, "portable_refs": [self._order_ref(301, 3)]}
+        event["target_customer"]["portable_locators"]["order_refs"] = [
+            {"petpooja_order_id": "PP-999", "stream_id": 9999, "event_id": "evt-999"}
+        ]
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_unresolved"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM customer_merge_history").fetchone()[0], 0)
+
+    def test_target_elimination_fails_closed_with_three_candidates(self) -> None:
+        self._insert_anon_pair_orders()
+        self.conn.execute(
+            "INSERT INTO customers (customer_id, name, name_normalized) VALUES (5, 'Nirupam Das', 'nirupam das')"
+        )
+        self.conn.commit()
+        event = self._ambiguous_event("remote-legacy-2")
+        event["moved_orders"] = {"count": 1, "portable_refs": [self._order_ref(301, 3)]}
+
+        result = self._pull([event])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["events_unresolved"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM customer_merge_history").fetchone()[0], 0)
 
 
 class CustomerPullWarningSurfacingTests(unittest.TestCase):

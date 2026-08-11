@@ -1,8 +1,9 @@
 """
 Cloud Sync Config — Single source for cloud_sync_url and cloud_sync_api_key.
 
-Reads from the system_config DB table. All modules that need the cloud sync
-URL or API key should import from here instead of duplicating the SQL lookup.
+These are app-global settings, so they live in the control database and fall
+back to a profile's legacy `system_config` rows. All modules that need the cloud
+sync URL or API key should import from here instead of duplicating the lookup.
 """
 
 import logging
@@ -13,32 +14,33 @@ logger = logging.getLogger(__name__)
 
 def get_cloud_sync_config(conn) -> Tuple[Optional[str], Optional[str]]:
     """
-    Read cloud sync URL and API key from system_config table.
+    Read cloud sync URL and API key.
 
     Returns:
         (base_url, api_key) — either may be None if not configured or DB unavailable.
         base_url is stripped of trailing slashes.
     """
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-
-    if not conn:
-        return base_url, api_key
-
     try:
-        cur = conn.execute("SELECT value FROM system_config WHERE key='cloud_sync_url'")
-        row = cur.fetchone()
-        if row and row[0]:
-            base_url = row[0].strip().rstrip("/") or None
-    except Exception:
-        pass
+        from src.core.db.control import resolve_config_values
 
+        values = resolve_config_values(conn, ("cloud_sync_url", "cloud_sync_api_key"))
+    except Exception:
+        logger.debug("Cloud sync config lookup failed", exc_info=True)
+        return None, None
+
+    raw_url = str(values.get("cloud_sync_url") or "").strip().rstrip("/")
+    raw_key = str(values.get("cloud_sync_api_key") or "").strip()
+    return (raw_url or None), (raw_key or None)
+
+
+def get_global_menu_editor_key(conn) -> Optional[str]:
+    """Read the separate credential required for menu-group mutations."""
     try:
-        cur = conn.execute("SELECT value FROM system_config WHERE key='cloud_sync_api_key'")
-        row = cur.fetchone()
-        if row and row[0]:
-            api_key = row[0].strip() or None
-    except Exception:
-        pass
+        from src.core.db.control import resolve_config_values
 
-    return base_url, api_key
+        values = resolve_config_values(conn, ("global_menu_editor_key",))
+    except Exception:
+        logger.debug("Global menu editor credential lookup failed", exc_info=True)
+        return None
+    raw_key = str(values.get("global_menu_editor_key") or "").strip()
+    return raw_key or None

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { endpoints } from '../api';
 import { ClientSideDataTable } from '../components/ClientSideDataTable';
-import { LLM_PROMPT_TEXT } from '../constants/prompts';
 
 type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
@@ -19,10 +18,34 @@ export default function SQLConsole() {
 
     // Prompt Tab State
     const [copyFeedback, setCopyFeedback] = useState('');
+    const [promptText, setPromptText] = useState('');
+    const [promptLoading, setPromptLoading] = useState(false);
+    const [promptError, setPromptError] = useState('');
 
     useEffect(() => {
         checkConnection();
     }, []);
+
+    // Fetch the LLM prompt from the backend the first time the Prompt tab is opened.
+    // Backend generates it from the live schema + AI Mode rules (single source of truth).
+    useEffect(() => {
+        if (activeTab === 'prompt' && !promptText && !promptLoading && !promptError) {
+            loadPrompt();
+        }
+    }, [activeTab]);
+
+    const loadPrompt = async () => {
+        setPromptLoading(true);
+        setPromptError('');
+        try {
+            const res = await endpoints.ai.promptContext();
+            setPromptText(res.data.prompt || '');
+        } catch (err: any) {
+            setPromptError(err.response?.data?.detail || 'Failed to load prompt from backend.');
+        } finally {
+            setPromptLoading(false);
+        }
+    };
 
     const checkConnection = async (attempt = 1) => {
         const maxAttempts = 3;
@@ -71,7 +94,8 @@ export default function SQLConsole() {
 
 
     const handleCopy = () => {
-        navigator.clipboard.writeText(LLM_PROMPT_TEXT).then(() => {
+        if (!promptText) return;
+        navigator.clipboard.writeText(promptText).then(() => {
             setCopyFeedback('Copied!');
             setTimeout(() => setCopyFeedback(''), 2000);
         });
@@ -198,13 +222,15 @@ export default function SQLConsole() {
                         <h3 style={{ margin: 0, color: '#333' }}>Schema Context Prompt</h3>
                         <button
                             onClick={handleCopy}
+                            disabled={promptLoading || !promptText}
                             style={{
                                 padding: '4px 8px',
                                 background: copyFeedback ? '#10B981' : '#E5E7EB', // Green if copied, otherwise Light Grey
                                 color: copyFeedback ? 'white' : '#374151', // Dark grey text on light grey bg
                                 border: '1px solid #D1D5DB', // Subtle border
                                 borderRadius: '4px',
-                                cursor: 'pointer',
+                                cursor: (promptLoading || !promptText) ? 'not-allowed' : 'pointer',
+                                opacity: (promptLoading || !promptText) ? 0.5 : 1,
                                 fontWeight: '500',
                                 transition: 'all 0.2s',
                                 fontSize: '0.8em',
@@ -217,22 +243,40 @@ export default function SQLConsole() {
                         </button>
                     </div>
 
-                    <pre style={{
-                        background: '#f5f5f5', // Light Grey
-                        padding: '20px',
-                        borderRadius: '8px',
-                        border: '1px solid #ddd',
-                        overflowX: 'auto',
-                        whiteSpace: 'pre-wrap',
-                        fontFamily: 'monospace',
-                        fontSize: '0.9em',
-                        color: '#333',
-                        maxHeight: '70vh',
-                        overflowY: 'auto',
-                        lineHeight: '1.5'
-                    }}>
-                        {LLM_PROMPT_TEXT}
-                    </pre>
+                    {promptError ? (
+                        <div style={{
+                            padding: '15px',
+                            backgroundColor: '#fee2e2',
+                            border: '1px solid #ef4444',
+                            borderRadius: '8px',
+                            color: '#b91c1c'
+                        }}>
+                            <strong>Error:</strong> {promptError}{' '}
+                            <button
+                                onClick={loadPrompt}
+                                style={{ marginLeft: '8px', padding: '2px 8px', cursor: 'pointer' }}
+                            >
+                                Retry
+                            </button>
+                        </div>
+                    ) : (
+                        <pre style={{
+                            background: '#f5f5f5', // Light Grey
+                            padding: '20px',
+                            borderRadius: '8px',
+                            border: '1px solid #ddd',
+                            overflowX: 'auto',
+                            whiteSpace: 'pre-wrap',
+                            fontFamily: 'monospace',
+                            fontSize: '0.9em',
+                            color: '#333',
+                            maxHeight: '70vh',
+                            overflowY: 'auto',
+                            lineHeight: '1.5'
+                        }}>
+                            {promptLoading ? 'Loading prompt…' : promptText}
+                        </pre>
+                    )}
                 </div>
             )}
         </div>

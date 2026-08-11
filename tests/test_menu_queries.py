@@ -28,7 +28,20 @@ class MenuQueriesTests(unittest.TestCase):
                 price REAL DEFAULT 0,
                 is_active BOOLEAN DEFAULT 1,
                 addon_eligible BOOLEAN DEFAULT 0,
-                delivery_eligible BOOLEAN DEFAULT 1
+                delivery_eligible BOOLEAN DEFAULT 1,
+                is_verified BOOLEAN DEFAULT 0
+            );
+
+            CREATE TABLE order_items (
+                order_item_id INTEGER PRIMARY KEY,
+                menu_item_id TEXT,
+                variant_id TEXT
+            );
+
+            CREATE TABLE order_item_addons (
+                order_item_addon_id INTEGER PRIMARY KEY,
+                menu_item_id TEXT,
+                variant_id TEXT
             );
             """
         )
@@ -60,6 +73,13 @@ class MenuQueriesTests(unittest.TestCase):
                 ("1282581599", "variant_regular"),
             ],
         )
+        self.conn.executemany(
+            "INSERT INTO order_items (menu_item_id, variant_id) VALUES ('item_1', ?)",
+            [("variant_mini",), ("variant_mini",)],
+        )
+        self.conn.execute(
+            "INSERT INTO order_item_addons (menu_item_id, variant_id) VALUES ('item_1', 'variant_mini')"
+        )
         self.conn.commit()
 
         df = menu_queries.fetch_menu_matrix(self.conn)
@@ -72,6 +92,8 @@ class MenuQueriesTests(unittest.TestCase):
         self.assertEqual(mini_row["name"], "Bean-to-Bar Dark Chocolate Ice Cream")
         self.assertEqual(mini_row["mapping_count"], 3)
         self.assertEqual(regular_row["mapping_count"], 1)
+        self.assertEqual(mini_row["order_count"], 3)
+        self.assertEqual(regular_row["order_count"], 0)
 
 
 if __name__ == "__main__":

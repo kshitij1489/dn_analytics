@@ -1,11 +1,12 @@
 import json
+import io
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.seed_from_backups import export_to_backups, perform_seeding
+from scripts.seed_from_backups import export_to_backups, main, perform_seeding
 
 
 class SeedFromBackupsExportTests(unittest.TestCase):
@@ -64,8 +65,7 @@ class SeedFromBackupsExportTests(unittest.TestCase):
     def test_export_to_backups_persists_variant_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             data_dir = Path(tmp_dir)
-            with patch("scripts.seed_from_backups.get_resource_path", return_value=str(data_dir)):
-                exported = export_to_backups(self.conn)
+            exported = export_to_backups(self.conn, out_dir=data_dir)
 
             self.assertTrue(exported)
 
@@ -75,12 +75,13 @@ class SeedFromBackupsExportTests(unittest.TestCase):
                 {"unit": "GMS", "value": 500},
             )
 
-    def test_perform_seeding_skips_id_maps_items_without_cluster_state_key(self) -> None:
+    def test_perform_seeding_returns_false_when_backup_files_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self.assertFalse(perform_seeding(self.conn, archive_dir=tmp_dir))
+
+    def test_perform_seeding_loads_json_and_delegates_to_seed_catalog(self) -> None:
         id_maps = {
-            "menu_id_to_str": {
-                "item_family_tub": "Family Tub",
-                "item_legacy_vanilla": "Old Fashioned Vanilla Ice Cream ( Recommended )",
-            },
+            "menu_id_to_str": {"item_family_tub": "Family Tub"},
             "variant_id_to_str": {"variant_family_tub": "FAMILY_TUB_500GMS"},
             "type_id_to_str": {"type_ice_cream": "Ice Cream"},
         }
@@ -92,15 +93,72 @@ class SeedFromBackupsExportTests(unittest.TestCase):
             data_dir = Path(tmp_dir)
             (data_dir / "id_maps_backup.json").write_text(json.dumps(id_maps))
             (data_dir / "cluster_state_backup.json").write_text(json.dumps(cluster_state))
-            with patch("scripts.seed_from_backups.get_resource_path", return_value=str(data_dir)):
-                seeded = perform_seeding(self.conn)
+            with patch(
+                "scripts.seed_from_backups.seed_catalog",
+                return_value={
+                    "items_seeded": 1,
+                    "variants_seeded": 1,
+                    "mappings_seeded": 0,
+                    "stub_count": 0,
+                    "skipped_unmapped": 0,
+                },
+            ) as seed_catalog:
+                seeded = perform_seeding(self.conn, archive_dir=data_dir)
 
         self.assertTrue(seeded)
+        seed_catalog.assert_called_once_with(
+            self.conn,
+            id_maps,
+            cluster_state,
+            seed_mappings=False,
+        )
 
-        rows = self.conn.execute("SELECT menu_item_id, type FROM menu_items").fetchall()
-        types_by_id = {row["menu_item_id"]: row["type"] for row in rows}
-        self.assertEqual(types_by_id, {"item_family_tub": "Ice Cream"})
-        self.assertNotIn("item_legacy_vanilla", types_by_id)
+    def test_full_restore_rebuilds_itemcode_projection(self) -> None:
+        id_maps = {
+            "menu_id_to_str": {"item_family_tub": "Family Tub"},
+            "variant_id_to_str": {"variant_family_tub": "FAMILY_TUB_500GMS"},
+            "type_id_to_str": {"type_ice_cream": "Ice Cream"},
+        }
+        cluster_state = {
+            "item_family_tub:type_ice_cream": {"101": [["101", "variant_family_tub"]]},
+        }
+
+        class RebuildResult:
+            def summary(self) -> str:
+                return "restaurants=0 codes=0 active=0 conflicts=0 stale_removed=0"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            (data_dir / "id_maps_backup.json").write_text(json.dumps(id_maps))
+            (data_dir / "cluster_state_backup.json").write_text(json.dumps(cluster_state))
+            with patch(
+                "scripts.seed_from_backups.seed_catalog",
+                return_value={
+                    "items_seeded": 1,
+                    "variants_seeded": 1,
+                    "mappings_seeded": 1,
+                    "stub_count": 0,
+                    "skipped_unmapped": 0,
+                },
+            ), patch(
+                "src.core.itemcode_mapping.rebuild_itemcode_mappings_best_effort",
+                return_value=RebuildResult(),
+            ) as rebuild:
+                seeded = perform_seeding(
+                    self.conn,
+                    seed_mappings=True,
+                    archive_dir=data_dir,
+                )
+
+        self.assertTrue(seeded)
+        rebuild.assert_called_once_with(self.conn)
+
+    def test_cli_no_args_is_not_an_implicit_restore(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as raised:
+                main([])
+
+        self.assertNotEqual(raised.exception.code, 0)
 
 
 if __name__ == "__main__":

@@ -117,15 +117,16 @@ The menu clustering sync work shipped and was signed off 2026-07-06 (architectur
 
 Three flavor families — **Strawberry Cream Cheese, Coffee Mascarpone, Alphonso Mango** (~51 of 32 074 order-line groups) — place on a different menu item on a fresh install than on the golden install. Their April-2026 clustering decisions are recorded under mapping keys the current ingest no longer derives, so no sync mechanism can transfer them. **Fix:** re-do those merges/remaps once through the current UI (which emits modern-keyed v2 events); both installs then converge, historical lines included on the install where the remap is done. See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §10.
 
-- [ ] Redo the 3 flavor-family merges/remaps in the UI on the golden install
-- [ ] Confirm the emitted v2 events carry the affected `order_item_id`s in `assignments`
+- [x] Redo the 3 flavor-family merges/remaps in the UI on the golden install — Alphonso Mango 2026-07-10 (server seq 435–437); Coffee Mascarpone + Strawberry Cream Cheese 2026-07-10 evening (merge_history 7–21, husk cleanup 39/43, assignment_seq 470/475)
+- [x] Confirm the emitted v2 events carry the affected `order_item_id`s in `assignments` — verified in golden DB: husk items deleted, keys re-homed on verified targets, `pending_local = 0` fleet-wide, quarantine has only historical resolved rows
 - [ ] Re-run the fresh-install convergence check; expect 0 divergent line-groups
+- [ ] (optional, cosmetic) `Strawberry Cream Cheese Ice Cream` (`a69e1017…`) is the **egg** product and legitimately separate from eggless `bb65ae9b…`; consider renaming it "Egg Strawberry Cream Cheese Ice Cream", and decide whether its 6 pre-Dec-2025 plain-named lines (May–Oct 2025, before the POS added the "Egg" prefix) belong on egg or eggless
 
 ### 2b. Golden-install duplicate `order_items` *(orders pipeline)*
 
 The golden DB carries ~705 duplicate order-line rows (same order re-processed historically; `process_order` re-INSERTs items on re-delivery). A fresh install does not reproduce them — its counts are the correct ones. This is an orders-pipeline dedupe, separate from menu sync.
 
-- [ ] Add a re-delivery guard / upsert key to `process_order` in `services/load_orders.py`
+- [x] Add a re-delivery guard / upsert key to `process_order` in `services/load_orders.py` — shipped in 60e9d2e1 ("atomic ingest and safe order replay"): re-ingest deletes and rebuilds child rows (`DELETE FROM order_items WHERE order_id = ?`)
 - [ ] One-time cleanup of the existing duplicates on the golden DB (with backup)
 
 ### 2c. Convergence digest (C6 / S3) — deferred *(sync)*
@@ -148,10 +149,17 @@ Customer merges have no assignment applier and no quarantine parity with the men
 - [ ] **Promote stable keys** — prefer non-anonymous `customer_identity_key` where business rules allow (policy)
 - [ ] **Customer-stream quarantine** — mirror the menu per-event dead-letter + cursor advance (needs Dachnona backend work)
 
-### 2f. Writable seed path bug *(latent)*
+### 2f. Writable seed path bug *(resolved by JSON-layer removal Phase 3)*
 
-`export_to_backups` uses `get_resource_path("data")` → under PyInstaller this is `_internal/data` inside the `.app` and can **mutate the bundled seed** after install. Move writable exports to `get_data_path("data")` next to `analytics.db` so reset + seed always reads pristine packaged JSON. Ref: `src/core/utils/path_helper.py`.
+Runtime menu edits and sync epilogues no longer call `export_to_backups`, so the app no longer mutates packaged seed JSON. Packaged builds no longer include the seed JSON, bootstrap payloads are SQLite-derived, and remaining JSON export/restore behavior is explicit CLI/dev-disaster-recovery flow only (`scripts/seed_from_backups.py --export/--restore`).
 
-### 2g. Merge branch to main *(release)*
+### 2g. Server catalog orphan pruning *(server, low priority)*
 
-Client branch `sync-conflict-phase-2` (assignment applier, fresh-install fast path, background pull, I5 single-owner `is_verified`, same-item no-op fix) is committed but **not merged to `main`**; the server half is already on live prod. Merge when ready.
+Rekeying ops (retype/merge) leave the old `menu_item_id` behind in `MenuCatalogItem` — ~69 stale rows on prod (2026-07-10), ~50 with empty `item_type` (no client truth left). They are inert for clients (`seed_catalog` skips id_maps entries with no `cluster_state` key — live-proven `skipped_unmapped=139`), but they pad the §20 catalog snapshot and id_maps. Decide a pruning policy (e.g. drop catalog rows absent from the latest client bootstrap push, or a management command with a dry run).
+
+- [ ] Pruning policy + management command on `db.dachnona`
+- [ ] Re-check `verify_catalog_parity_with_bootstrap` after pruning
+
+### 2h. Zero-backed item retype edge *(client, cosmetic)*
+
+Retyping an item with zero mappings and zero orders deletes the rekeyed target row locally (epilogue GC), so an immediate revert 404s ("Menu item was not found"). Found during 2026-07-10 Part B live validation (restored manually). Guard the retype epilogue against GC-ing the just-created target, or block retype on zero-backed rows with a clear message.

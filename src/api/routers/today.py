@@ -5,18 +5,22 @@ Provides real-time daily metrics for the Today dashboard.
 from datetime import date as DateType
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
-from src.api.dependencies import get_db
+from src.api.dependencies import ScopedReader, get_reader
+from src.core.queries.multi_store_reducers import (
+    Ignore,
+    Max,
+    Sum,
+    group_rows,
+    reduce_mapping,
+    union_rows,
+)
 from src.core.utils.reorder_utils import get_returning_customer_ids, get_reorder_item_counts
 from src.core.utils.business_date import get_current_business_date, get_business_date_range
 
 router = APIRouter(prefix="/api/today", tags=["today"])
 
 
-@router.get("/summary")
-def get_today_summary(
-    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
-    conn=Depends(get_db)
-):
+def build_today_summary(conn, date: Optional[DateType]):
     """
     Get today's summary: revenue, orders by source, reorder customer count.
     If date is provided, returns summary for that specific date.
@@ -80,11 +84,7 @@ def get_today_summary(
     }
 
 
-@router.get("/menu-items")
-def get_today_menu_items(
-    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
-    conn=Depends(get_db)
-):
+def build_today_menu_items(conn, date: Optional[DateType]):
     """
     Get menu items sold today with quantities and reorder counts.
     If date is provided, returns items for that specific date.
@@ -128,11 +128,7 @@ def get_today_menu_items(
     return {"date": today_str, "items": items}
 
 
-@router.get("/customers")
-def get_today_customers(
-    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
-    conn=Depends(get_db)
-):
+def build_today_customers(conn, date: Optional[DateType]):
     """
     Get customer list for today with order details.
     Sorted: verified customers first, then by order value descending.
@@ -201,11 +197,7 @@ def get_today_customers(
     return {"date": today_str, "customers": customers}
 
 
-@router.get("/orders")
-def get_today_orders(
-    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
-    conn=Depends(get_db)
-):
+def build_today_orders(conn, date: Optional[DateType]):
     """
     Get all orders for today with customer name, item details, and order info.
     Items include quantity and '-Repeat' label if customer ordered this item before.
@@ -327,3 +319,126 @@ def get_today_orders(
     
     return {"date": today_str, "orders": orders}
 
+
+@router.get("/summary")
+def get_today_summary(
+    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
+    reader: ScopedReader = Depends(get_reader),
+):
+    """Today's revenue, orders by source, and reorder customer count."""
+
+    def query(conn, _profile):
+        return build_today_summary(conn, date)
+
+    def reduce(pairs):
+        combined = reduce_mapping(
+            [value for _, value in pairs],
+            {
+                "total_revenue": Sum(),
+                "total_orders": Sum(),
+                # Customers are store-customer records in All Stores mode.
+                "total_customers": Sum(),
+                "returning_customer_count": Sum(),
+                # Each store resolves its own business date from its own
+                # timezone; the label shown is the furthest ahead.
+                "date": Max(),
+                # Rebuilt below by its own reducer.
+                "sources": Ignore(),
+            },
+        )
+        combined["sources"] = group_rows(
+            pairs,
+            group_by=("source",),
+            spec={"orders": Sum(), "revenue": Sum()},
+            sort_by="revenue",
+            descending=True,
+            rows_of=lambda value: value["sources"],
+        )
+        return combined
+
+    return reader.read(query, reduce)
+
+
+@router.get("/menu-items")
+def get_today_menu_items(
+    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
+    reader: ScopedReader = Depends(get_reader),
+):
+    """Menu items sold today with quantities and reorder counts."""
+
+    def query(conn, _profile):
+        return build_today_menu_items(conn, date)
+
+    def reduce(pairs):
+        return {
+            "date": max((value["date"] for _, value in pairs), default=None),
+            "items": group_rows(
+                pairs,
+                group_by=("item_name", "cluster_name"),
+                spec={"qty_sold": Sum(), "revenue": Sum(), "reorder_count": Sum()},
+                sort_by="qty_sold",
+                descending=True,
+                # Transient menu_item_id never groups across stores; it is kept
+                # per contributor so a combined row can still be drilled down.
+                contributor_fields=("menu_item_id", "qty_sold", "revenue"),
+                rows_of=lambda value: value["items"],
+            ),
+        }
+
+    return reader.read(query, reduce)
+
+
+@router.get("/customers")
+def get_today_customers(
+    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
+    reader: ScopedReader = Depends(get_reader),
+):
+    """Customer list for today with order details."""
+
+    def query(conn, _profile):
+        return build_today_customers(conn, date)
+
+    def reduce(pairs):
+        rows = union_rows(
+            pairs,
+            key_fields=("customer_id",),
+            rows_of=lambda value: value["customers"],
+        )
+        rows.sort(
+            key=lambda row: (
+                0 if row.get("is_verified") else 1,
+                -float(row.get("order_value") or 0),
+                str(row.get("restaurant_id")),
+            )
+        )
+        return {
+            "date": max((value["date"] for _, value in pairs), default=None),
+            "customers": rows,
+        }
+
+    return reader.read(query, reduce)
+
+
+@router.get("/orders")
+def get_today_orders(
+    date: Optional[DateType] = Query(None, description="Date in YYYY-MM-DD format"),
+    reader: ScopedReader = Depends(get_reader),
+):
+    """All orders for today with customer name, item details, and order info."""
+
+    def query(conn, _profile):
+        return build_today_orders(conn, date)
+
+    def reduce(pairs):
+        return {
+            "date": max((value["date"] for _, value in pairs), default=None),
+            "orders": union_rows(
+                pairs,
+                key_fields=("order_id",),
+                sort_by="time",
+                descending=True,
+                rows_of=lambda value: value["orders"],
+            ),
+        }
+
+    return reader.read(query, reduce)

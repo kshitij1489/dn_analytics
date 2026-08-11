@@ -1,9 +1,9 @@
 import json
 import sqlite3
 import unittest
+from tests.profile_test_helpers import bind_test_profile
 from unittest.mock import Mock, patch
 
-from src.core.menu_merge_shipper import upload_pending
 from src.core.menu_merge_sync import (
     get_menu_merge_pull_cursor,
     pull_and_apply_menu_merge_events,
@@ -19,6 +19,7 @@ from src.core.sync_cursor_migration import (
     SYNC_CURSOR_SCHEMA_VERSION,
     SYNC_CURSOR_SCHEMA_VERSION_KEY,
 )
+from tests.strict_commit_test_helpers import make_capturing_menu_commit, make_fake_menu_commit
 from utils import menu_utils
 
 
@@ -30,6 +31,7 @@ class MenuMergeSyncTests(unittest.TestCase):
     def _create_db() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
+        bind_test_profile(conn)
         conn.executescript(
             """
             CREATE TABLE orders (
@@ -39,6 +41,7 @@ class MenuMergeSyncTests(unittest.TestCase):
 
             CREATE TABLE menu_items (
                 menu_item_id TEXT PRIMARY KEY,
+                suggestion_id TEXT REFERENCES menu_items(menu_item_id),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
@@ -53,6 +56,7 @@ class MenuMergeSyncTests(unittest.TestCase):
                 variant_id TEXT PRIMARY KEY,
                 variant_name TEXT NOT NULL,
                 is_verified BOOLEAN DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT
             );
 
@@ -136,61 +140,52 @@ class MenuMergeSyncTests(unittest.TestCase):
             """
         )
         conn.commit()
+
+        from src.core.sync_identity import set_menu_state_revision
+
+        set_menu_state_revision(conn, 1)
+        conn.execute(
+            "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
+        )
+        conn.commit()
         return conn
+
+    def _seed_strict_apply_tables(self) -> None:
+        # A strict commit self-applies its own merge + verification events through
+        # the pull appliers, which read menu_merge_remote_events and
+        # menu_mapping_verification_remote_events (production creates these via
+        # migration; the plain pull tests get them lazily on first pull).
+        from src.core.menu_mapping_verification_sync import _ensure_tables as _ensure_verification_tables
+
+        ensure_menu_merge_sync_tables(self.conn)
+        _ensure_verification_tables(self.conn)
+        self.conn.commit()
 
     def tearDown(self) -> None:
         self.conn.close()
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_local_merge_and_undo_record_menu_sync_events(self, _mock_export) -> None:
-        merge_result = menu_utils.merge_menu_items(self.conn, "item_source", "item_target")
-        self.assertEqual(merge_result["status"], "success")
-        self.assertIsNotNone(merge_result["merge_id"])
-
-        applied_event = self.conn.execute(
-            """
-            SELECT event_type, payload
-            FROM menu_merge_sync_events
-            WHERE merge_id = ?
-            """,
-            (merge_result["merge_id"],),
-        ).fetchone()
-        self.assertEqual(applied_event["event_type"], "menu_merge.applied")
-        applied_payload = json.loads(applied_event["payload"])
-        self.assertEqual(applied_payload["source_item"]["menu_item_id"], "item_source")
-        self.assertTrue(applied_payload["attribution"]["device"]["install_id"].startswith("install-"))
-
-        undo_result = menu_utils.undo_merge(self.conn, merge_result["merge_id"])
-        self.assertEqual(undo_result["status"], "success")
-
-        rows = self.conn.execute(
-            "SELECT event_type, payload FROM menu_merge_sync_events ORDER BY created_at ASC"
-        ).fetchall()
-        self.assertEqual([row["event_type"] for row in rows], ["menu_merge.applied", "menu_merge.undone"])
-        undo_payload = json.loads(rows[1]["payload"])
-        self.assertEqual(undo_payload["reverts_remote_event_id"], applied_payload["remote_event_id"])
-
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
-    def test_remap_rides_merge_stream_and_applies_on_peer(self, _mock_models, _mock_export) -> None:
+    def test_remap_rides_merge_stream_and_applies_on_peer(self, _mock_models) -> None:
         # A per-order-item remap emits a merge-stream event whose assignments
         # carry the new menu/variant, so peers receive the full mapping and the
         # echo of our own event clears pending_local. The is_verified flag rides
         # the SEPARATE verification stream (its sole owner) via a companion
         # verification event — merge apply only reassigns the mapping and seeds
         # the flag on brand-new rows, never on an existing one.
-        result = menu_utils.remap_order_item_cluster(
-            self.conn, "1", "item_target", "variant_1_piece"
-        )
-        self.assertEqual(result["status"], "success")
-        merge_id = result["merge_id"]
+        self._seed_strict_apply_tables()
+        captured: dict = {}
+        with patch(
+            "src.core.menu_mutation_commit.commit_mutation",
+            side_effect=make_capturing_menu_commit(captured),
+        ):
+            result = menu_utils.remap_order_item_cluster(
+                self.conn, "1", "item_target", "variant_1_piece"
+            )
+        self.assertEqual(result["status"], "success", result.get("message"))
 
-        outbox = self.conn.execute(
-            "SELECT payload FROM menu_merge_sync_events WHERE merge_id = ?",
-            (merge_id,),
-        ).fetchone()
-        self.assertIsNotNone(outbox)
-        payload = json.loads(outbox["payload"])
+        # The strict path carries the merge-stream event in the mutation plan (not
+        # the legacy outbox), so read it from the captured commit.
+        payload = captured["merge_event"]
         self.assertEqual(payload["merge_payload"]["kind"], "order_item_remap_v1")
         self.assertEqual(
             payload["merge_payload"]["assignments"],
@@ -206,12 +201,7 @@ class MenuMergeSyncTests(unittest.TestCase):
 
         # A companion verification event carries the is_verified=1 decision on
         # the verification stream (the flag's single owner).
-        verification_payloads = [
-            json.loads(row["payload"])
-            for row in self.conn.execute(
-                "SELECT payload FROM menu_mapping_verification_sync_events"
-            ).fetchall()
-        ]
+        verification_payloads = captured["verification_events"]
         self.assertEqual(len(verification_payloads), 1)
         self.assertEqual(verification_payloads[0]["order_item_id"], "1")
         self.assertEqual(verification_payloads[0]["menu_item_id"], "item_target")
@@ -279,84 +269,53 @@ class MenuMergeSyncTests(unittest.TestCase):
         self.assertEqual(int(own_row["pending_local"] or 0), 0)
         self.assertEqual(int(own_row["assignment_seq"]), 41)
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
     @patch("utils.menu_utils._clear_impacted_models", return_value=None)
-    def test_remap_undo_restores_order_items_after_echo(self, _mock_models, _mock_export) -> None:
-        # Regression: the remap must relink order_items / order_item_addons
-        # locally and record their prior rows, so that after the cloud echo has
-        # moved them to the target, an undo restores all three tables. Before
-        # the fix, undo reverted only menu_item_variants and left order_items
-        # stranded on the target.
-        result = menu_utils.remap_order_item_cluster(
-            self.conn, "1", "item_target", "variant_1_piece"
-        )
-        self.assertEqual(result["status"], "success")
-        merge_id = result["merge_id"]
-
-        # Local relink is immediate (not deferred to the echo).
-        order_row = self.conn.execute(
-            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
-        ).fetchone()
-        self.assertEqual(order_row["menu_item_id"], "item_target")
-        self.assertEqual(order_row["variant_id"], "variant_1_piece")
-
-        # Echo our own event back so the merge stream also lands on the target.
-        payload = json.loads(
-            self.conn.execute(
-                "SELECT payload FROM menu_merge_sync_events WHERE merge_id = ?",
-                (merge_id,),
-            ).fetchone()["payload"]
-        )
-        echo_event = dict(payload, server_seq=41)
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"events": [echo_event], "next_cursor": "cursor-echo"}
-        with patch("requests.get", return_value=mock_response):
-            pull_and_apply_menu_merge_events(
-                self.conn,
-                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+    def test_remap_undo_restores_order_items_after_commit(self, _mock_models) -> None:
+        # Regression: the remap must relink order_items / order_item_addons and
+        # record their prior rows, so that once the merge stream has moved them to
+        # the target, an undo restores all three tables. Before the fix, undo
+        # reverted only menu_item_variants and left order_items stranded on the
+        # target. Both the remap and its undo run through the strict commit path,
+        # which self-applies the merge stream as it lands (no separate echo).
+        self._seed_strict_apply_tables()
+        captured: dict = {}
+        with patch(
+            "src.core.menu_mutation_commit.commit_mutation",
+            side_effect=make_capturing_menu_commit(captured),
+        ):
+            result = menu_utils.remap_order_item_cluster(
+                self.conn, "1", "item_target", "variant_1_piece"
             )
+            self.assertEqual(result["status"], "success", result.get("message"))
+            merge_id = result["merge_id"]
 
-        # Undo: every table returns to the pre-remap source mapping.
-        undo = menu_utils.undo_merge(self.conn, merge_id)
+            # The commit self-applied the merge stream, so the relink has landed.
+            order_row = self.conn.execute(
+                "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
+            ).fetchone()
+            self.assertEqual(order_row["menu_item_id"], "item_target")
+            self.assertEqual(order_row["variant_id"], "variant_1_piece")
+
+            # Undo: the parent returns to the pre-remap source mapping. The
+            # pre-remap variant was NULL, which the applier treats as
+            # "variant unspecified" (menu_item_variants.variant_id is NOT NULL
+            # on the live schema), so the remapped variant is kept.
+            undo = menu_utils.undo_merge(self.conn, merge_id)
         self.assertEqual(undo["status"], "success", undo.get("message"))
 
         mapping_row = self.conn.execute(
             "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id = '1'"
         ).fetchone()
         self.assertEqual(mapping_row["menu_item_id"], "item_source")
-        self.assertIsNone(mapping_row["variant_id"])
+        self.assertEqual(mapping_row["variant_id"], "variant_1_piece")
 
         order_row = self.conn.execute(
             "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
         ).fetchone()
         self.assertEqual(order_row["menu_item_id"], "item_source")
-        self.assertIsNone(order_row["variant_id"])
+        self.assertEqual(order_row["variant_id"], "variant_1_piece")
 
-    def test_backfill_skips_remote_origin_history_rows(self) -> None:
-        from src.core.menu_merge_sync_events import backfill_menu_merge_sync_events
-
-        ensure_menu_merge_sync_tables(self.conn)
-        self.conn.execute(
-            """
-            INSERT INTO merge_history (
-                source_id, target_id, source_name, source_type,
-                affected_order_items, origin
-            )
-            VALUES ('item_source', 'item_target', 'Iced Coffee', 'Beverage', '[]', 'remote')
-            """
-        )
-        self.conn.commit()
-
-        counts = backfill_menu_merge_sync_events(self.conn)
-        self.assertEqual(counts["applied"], 0)
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM menu_merge_sync_events").fetchone()[0],
-            0,
-        )
-
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_pull_applies_and_undoes_remote_menu_merge_events(self, _mock_export) -> None:
+    def test_pull_applies_and_undoes_remote_menu_merge_events(self) -> None:
         remote_events = [
             {
                 "remote_event_id": "remote-menu-merge-1",
@@ -436,9 +395,166 @@ class MenuMergeSyncTests(unittest.TestCase):
             2,
         )
 
+    def test_repeat_resolution_of_same_pair_gets_its_own_history_row(self) -> None:
+        # Regression: a strict-mode resolution rolls its local merge_history row
+        # back and re-materializes it from the server's accepted response. When the
+        # same item + variant pair is resolved again later (new orders keep landing
+        # on the old mapping), the new event's content signature is identical to the
+        # first resolution's history row, so the apply used to claim that months-old
+        # row as "duplicate": no new row, nothing in Resolution History, no undo.
+        self._seed_strict_apply_tables()
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant_unknown', 'UNKNOWN', 0)"
+        )
+        earlier_history_id = self.conn.execute(
+            """
+            INSERT INTO merge_history (
+                source_id, target_id, source_name, source_type, affected_order_items, merged_at, origin
+            )
+            VALUES ('item_source', 'item_target', 'Iced Coffee', 'Beverage', ?, '2026-07-10 17:50:27', 'remote')
+            """,
+            (
+                json.dumps(
+                    {
+                        "kind": "resolution_variant_v1",
+                        "source_variant_id": "variant_unknown",
+                        "target_variant_id": "variant_1_piece",
+                    }
+                ),
+            ),
+        ).lastrowid
+        self.conn.execute(
+            """
+            INSERT INTO menu_merge_remote_events (
+                remote_event_id, event_type, local_merge_id, payload, occurred_at
+            )
+            VALUES ('remote-resolution-july', 'menu_merge.applied', ?, '{}', '2026-07-10T17:50:27Z')
+            """,
+            (earlier_history_id,),
+        )
+        self.conn.commit()
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_pull_skips_unappliable_event_and_keeps_going(self, _mock_export) -> None:
+        repeat_event = {
+            "remote_event_id": "remote-resolution-august",
+            "schema_version": 2,
+            "event_type": "menu_merge.applied",
+            "occurred_at": "2026-08-09T05:41:20Z",
+            "server_seq": 668,
+            "source_item": {
+                "menu_item_id": "item_source",
+                "name": "Iced Coffee",
+                "type": "Beverage",
+                "is_verified": True,
+            },
+            "target_item": {
+                "menu_item_id": "item_target",
+                "name": "Cold Coffee",
+                "type": "Beverage",
+                "is_verified": True,
+            },
+            "merge_payload": {
+                "kind": "resolution_variant_v1",
+                "resolution": {
+                    "source_variant_id": "variant_unknown",
+                    "target_variant_id": "variant_1_piece",
+                },
+                "assignments": [
+                    {
+                        "order_item_id": "1",
+                        "menu_item_id": "item_target",
+                        "variant_id": "variant_1_piece",
+                        "is_verified": 1,
+                    }
+                ],
+            },
+        }
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "events": [repeat_event],
+            "next_cursor": "cursor-repeat",
+        }
+
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM merge_history").fetchone()[0],
+            2,
+        )
+        claimed_id = self.conn.execute(
+            "SELECT local_merge_id FROM menu_merge_remote_events WHERE remote_event_id = 'remote-resolution-august'"
+        ).fetchone()["local_merge_id"]
+        self.assertIsNotNone(claimed_id)
+        self.assertNotEqual(int(claimed_id), int(earlier_history_id))
+
+    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
+    def test_strict_resolution_records_history_beside_identical_older_merge(self, _mock_models) -> None:
+        # Same regression from the commit side: the strict path rolls its local
+        # merge_history row back and re-materializes it by self-applying the
+        # server's accepted event, so an identical older resolution must not
+        # absorb it.
+        self._seed_strict_apply_tables()
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant_unknown', 'UNKNOWN', 0)"
+        )
+        self.conn.execute(
+            "UPDATE menu_item_variants SET variant_id = 'variant_unknown', is_verified = 0 WHERE order_item_id = '1'"
+        )
+        earlier_history_id = self.conn.execute(
+            """
+            INSERT INTO merge_history (
+                source_id, target_id, source_name, source_type, affected_order_items, merged_at, origin
+            )
+            VALUES ('item_source', 'item_target', 'Iced Coffee', 'Beverage', ?, '2026-07-10 17:50:27', 'remote')
+            """,
+            (
+                json.dumps(
+                    {
+                        "kind": "resolution_variant_v1",
+                        "source_variant_id": "variant_unknown",
+                        "target_variant_id": "variant_1_piece",
+                    }
+                ),
+            ),
+        ).lastrowid
+        self.conn.execute(
+            """
+            INSERT INTO menu_merge_remote_events (
+                remote_event_id, event_type, local_merge_id, payload, occurred_at
+            )
+            VALUES ('remote-resolution-july', 'menu_merge.applied', ?, '{}', '2026-07-10T17:50:27Z')
+            """,
+            (earlier_history_id,),
+        )
+        self.conn.commit()
+
+        with patch(
+            "src.core.menu_mutation_commit.commit_mutation",
+            side_effect=make_fake_menu_commit(),
+        ):
+            result = menu_utils.resolve_menu_item_variant(
+                self.conn,
+                source_menu_item_id="item_source",
+                source_variant_id="variant_unknown",
+                target_menu_item_id="item_target",
+                target_variant_id="variant_1_piece",
+            )
+
+        self.assertEqual(result["status"], "success", result.get("message"))
+        history_ids = [
+            int(row["merge_id"])
+            for row in self.conn.execute("SELECT merge_id FROM merge_history ORDER BY merge_id").fetchall()
+        ]
+        self.assertEqual(len(history_ids), 2, history_ids)
+        self.assertNotEqual(history_ids[-1], int(earlier_history_id))
+
+    def test_pull_skips_unappliable_event_and_keeps_going(self) -> None:
         # First event is un-appliable (no derivable assignments and a source item
         # whose snapshot is too bare to resurrect); the pull must not halt on it.
         # The second, valid event should still apply and the cursor should
@@ -529,8 +645,7 @@ class MenuMergeSyncTests(unittest.TestCase):
             0,
         )
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_retry_drains_quarantine_on_next_pull(self, _mock_export) -> None:
+    def test_retry_drains_quarantine_on_next_pull(self) -> None:
         # A quarantined event that has since become appliable is retried at the
         # start of the next pull, applied, and marked resolved.
         event = {
@@ -613,8 +728,7 @@ class MenuMergeSyncTests(unittest.TestCase):
             },
         }
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_same_item_audit_event_applies_as_noop(self, _mock_export) -> None:
+    def test_same_item_audit_event_applies_as_noop(self) -> None:
         # A same-item event with no derivable assignments must be recorded and
         # skipped, not replayed through the cluster path (which would raise
         # "Cannot merge item into itself" and quarantine it forever).
@@ -651,8 +765,7 @@ class MenuMergeSyncTests(unittest.TestCase):
             "item_source",
         )
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_quarantined_self_merge_event_drains_as_noop(self, _mock_export) -> None:
+    def test_quarantined_self_merge_event_drains_as_noop(self) -> None:
         # Events quarantined by the old behavior resolve on the next pull's
         # retry pass once the no-op path recognizes them.
         event = self._self_merge_audit_event("remote-audit-stuck-1")
@@ -752,8 +865,7 @@ class MenuMergeSyncTests(unittest.TestCase):
         # Dismissing an unknown/already-resolved conflict reports failure.
         self.assertFalse(dismiss_sync_conflict(self.conn, "remote-conflict-1"))
 
-    @patch("utils.menu_utils.export_to_backups", return_value=True)
-    def test_pull_backfills_missing_source_item(self, _mock_export) -> None:
+    def test_pull_backfills_missing_source_item(self) -> None:
         # Source item is absent locally (already merged away on this device); the
         # pull should recreate it from the event snapshot and apply the merge.
         self.conn.execute("DELETE FROM order_items WHERE menu_item_id = 'item_source'")
@@ -803,137 +915,222 @@ class MenuMergeSyncTests(unittest.TestCase):
             1,
         )
 
+    # --- State-scoped husk sweep (sweep_orphan_menu_entities) ---
 
-class MenuMergeShipperTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
-        self.conn.row_factory = sqlite3.Row
-        # upload_pending backfills from merge_history before selecting events.
+    def _seed_husks(self) -> None:
+        # Husk item: no mapping row, no order rows — an event batch moved its
+        # last reference away without GC'ing it (the touched-set leak).
         self.conn.execute(
-            """
-            CREATE TABLE merge_history (
-                merge_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id TEXT NOT NULL,
-                target_id TEXT NOT NULL,
-                source_name TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                affected_order_items TEXT NOT NULL,
-                merged_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            """
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) VALUES ('item_husk', 'Legacy Flavor', 'Ice Cream', 1)"
         )
-        ensure_menu_merge_sync_tables(self.conn)
-        self.conn.commit()
-
-    def tearDown(self) -> None:
-        self.conn.close()
-
-    def _insert_event(self, event_id: str, payload: str, occurred_at: str) -> None:
+        # A stale merge suggestion pointing at the husk (suggestion_id self-FK
+        # must be cleared before the DELETE).
         self.conn.execute(
-            """
-            INSERT INTO menu_merge_sync_events (event_id, merge_id, event_type, payload, occurred_at)
-            VALUES (?, NULL, 'menu_merge.applied', ?, ?)
-            """,
-            (event_id, payload, occurred_at),
+            "UPDATE menu_items SET suggestion_id = 'item_husk' WHERE menu_item_id = 'item_target'"
+        )
+        # Husk variant: nothing maps to it, no order row references it, and it
+        # is past the 7-day creation grace window.
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified, created_at) VALUES ('variant_husk', 'UNKNOWN_80GMS', 1, '2020-01-01 00:00:00')"
+        )
+        # Keep item_target live (in the base fixture it has no mapping or
+        # order rows and would itself be swept).
+        self.conn.execute(
+            "INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified) VALUES ('target-key', 'item_target', 'variant_1_piece', 1)"
         )
         self.conn.commit()
 
-    def _event_row(self, event_id: str):
-        return self.conn.execute(
-            "SELECT uploaded_at, last_error FROM menu_merge_sync_events WHERE event_id = ?",
-            (event_id,),
-        ).fetchone()
+    def test_sweep_deletes_unreferenced_items_and_variants(self) -> None:
+        self._seed_husks()
+        # Referenced-by-order-row-only variant must survive (usage counts even
+        # without a mapping row).
+        self.conn.execute(
+            "UPDATE order_items SET variant_id = 'variant_1_piece' WHERE order_item_id = 1"
+        )
+        self.conn.commit()
 
-    def test_upload_pending_mixed_accepted_rejected_batch(self) -> None:
-        self._insert_event(
-            "event-ok",
-            json.dumps({"remote_event_id": "event-ok", "event_type": "menu_merge.applied"}),
-            "2026-04-14T10:00:00Z",
+        cursor = self.conn.cursor()
+        swept = menu_utils.sweep_orphan_menu_entities(cursor)
+        self.conn.commit()
+
+        self.assertEqual(swept["menu_item_ids"], ["item_husk"])
+        self.assertEqual(swept["variant_ids"], ["variant_husk"])
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_husk'"
+            ).fetchone()
         )
-        self._insert_event(
-            "event-bad",
-            json.dumps({"remote_event_id": "event-bad", "event_type": "menu_merge.applied"}),
-            "2026-04-14T10:01:00Z",
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM variants WHERE variant_id = 'variant_husk'"
+            ).fetchone()
         )
+        # The stale suggestion pointer was cleared, not left dangling.
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT suggestion_id FROM menu_items WHERE menu_item_id = 'item_target'"
+            ).fetchone()["suggestion_id"]
+        )
+        # Live rows survive: item_source has a mapping + an order row,
+        # item_target exists with the seeded mapping's owner intact.
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_source'"
+            ).fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM variants WHERE variant_id = 'variant_1_piece'"
+            ).fetchone()
+        )
+
+    def test_fresh_unreferenced_variant_survives_sweep(self) -> None:
+        # POST /menu/variants/create inserts a bare variant row before any
+        # mapping references it; the 7-day grace window must keep it alive.
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES ('variant_fresh', 'NEW_TUB_250GMS', 1)"
+        )
+        self.conn.commit()
+
+        cursor = self.conn.cursor()
+        swept = menu_utils.sweep_orphan_menu_entities(cursor)
+        self.conn.commit()
+
+        self.assertNotIn("variant_fresh", swept["variant_ids"])
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM variants WHERE variant_id = 'variant_fresh'"
+            ).fetchone()
+        )
+
+    def test_zero_sales_item_with_mapping_survives_sweep(self) -> None:
+        # A manually created item that has a mapping row but no sales yet must
+        # NOT be swept — liveness is any reference, not sales.
+        self.conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) VALUES ('item_new', 'Brand New Flavor', 'Ice Cream', 1)"
+        )
+        self.conn.execute(
+            "INSERT INTO menu_item_variants (order_item_id, menu_item_id, variant_id, is_verified) VALUES ('new-key', 'item_new', 'variant_1_piece', 1)"
+        )
+        self.conn.commit()
+
+        cursor = self.conn.cursor()
+        swept = menu_utils.sweep_orphan_menu_entities(cursor)
+        self.conn.commit()
+
+        self.assertNotIn("item_new", swept["menu_item_ids"])
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_new'"
+            ).fetchone()
+        )
+
+    def test_eventless_pull_sweeps_husks(self) -> None:
+        # A pull that applies no events must still repair husks left by older
+        # builds or missed batches (the pull-end invariant).
+        self._seed_husks()
 
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "status": "ok",
-            "ingested_count": 1,
-            "duplicate_count": 0,
-            "accepted": ["event-ok"],
-            "rejected": [{"remote_event_id": "event-bad", "error": "Use a valid datetime value."}],
-        }
+        mock_response.json.return_value = {"events": [], "next_cursor": None}
 
-        with patch("requests.post", return_value=mock_response):
-            result = upload_pending(self.conn, endpoint="https://cloud.example.com/ingest")
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
 
         self.assertIsNone(result["error"])
-        self.assertEqual(result["events_sent"], 1)
-        self.assertEqual(result["events_rejected"], 1)
-
-        accepted_row = self._event_row("event-ok")
-        self.assertIsNotNone(accepted_row["uploaded_at"])
-        self.assertIsNone(accepted_row["last_error"])
-
-        # The rejected event leaves the push queue (uploaded_at set) but keeps
-        # the server error and lands in quarantine for surfacing.
-        rejected_row = self._event_row("event-bad")
-        self.assertIsNotNone(rejected_row["uploaded_at"])
-        self.assertEqual(rejected_row["last_error"], "Use a valid datetime value.")
-        quarantine_row = self.conn.execute(
-            "SELECT stream, error, resolved_at FROM menu_sync_event_quarantine WHERE remote_event_id = 'event-bad'"
-        ).fetchone()
-        self.assertIsNotNone(quarantine_row)
-        self.assertEqual(quarantine_row["stream"], "menu_merge_push")
-        self.assertEqual(quarantine_row["error"], "Use a valid datetime value.")
-        self.assertIsNone(quarantine_row["resolved_at"])
-
-    def test_upload_pending_old_server_response_marks_all_uploaded(self) -> None:
-        self._insert_event(
-            "event-1",
-            json.dumps({"remote_event_id": "event-1", "event_type": "menu_merge.applied"}),
-            "2026-04-14T10:00:00Z",
+        self.assertEqual(result["events_fetched"], 0)
+        self.assertEqual(result["husks_swept"], 1)
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_husk'"
+            ).fetchone()
         )
-        self._insert_event(
-            "event-2",
-            json.dumps({"remote_event_id": "event-2", "event_type": "menu_merge.applied"}),
-            "2026-04-14T10:01:00Z",
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM variants WHERE variant_id = 'variant_husk'"
+            ).fetchone()
         )
+
+    @patch("utils.menu_utils._clear_impacted_models", return_value=None)
+    def test_merge_pull_sweeps_order_row_old_owner_husk(self, _mock_models) -> None:
+        # Leak-A regression: the mapping row for the assignment key already
+        # points at the target, but the order rows still reference a third
+        # item ('item_husk_owner'). Applying the assignment moves the order
+        # rows; the touched set only ever sees the mapping row's owners, so
+        # without the sweep 'item_husk_owner' would linger forever.
+        self.conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) VALUES ('item_husk_owner', 'Divergent Owner', 'Ice Cream', 1)"
+        )
+        self.conn.execute(
+            "UPDATE order_items SET menu_item_id = 'item_husk_owner' WHERE order_item_id = 1"
+        )
+        # Mapping row for key '1' points at item_target already (diverged).
+        self.conn.execute(
+            "UPDATE menu_item_variants SET menu_item_id = 'item_target' WHERE order_item_id = '1'"
+        )
+        self.conn.commit()
+
+        remote_events = [
+            {
+                "remote_event_id": "remote-leak-a-1",
+                "schema_version": 1,
+                "event_type": "menu_merge.applied",
+                "occurred_at": "2026-04-14T10:00:00Z",
+                "source_item": {
+                    "menu_item_id": "item_source",
+                    "name": "Iced Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "target_item": {
+                    "menu_item_id": "item_target",
+                    "name": "Cold Coffee",
+                    "type": "Beverage",
+                    "is_verified": True,
+                },
+                "merge_payload": {
+                    "kind": "basic_merge_v1",
+                    "assignments": [
+                        {
+                            "order_item_id": "1",
+                            "menu_item_id": "item_target",
+                            "variant_id": "variant_1_piece",
+                            "is_verified": 1,
+                        }
+                    ],
+                },
+                "server_seq": 10,
+            }
+        ]
 
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "ok", "ingested_count": 2, "duplicate_count": 0}
+        mock_response.json.return_value = {"events": remote_events, "next_cursor": "cursor-4"}
 
-        with patch("requests.post", return_value=mock_response):
-            result = upload_pending(self.conn, endpoint="https://cloud.example.com/ingest")
+        with patch("requests.get", return_value=mock_response):
+            result = pull_and_apply_menu_merge_events(
+                self.conn,
+                endpoint="https://cloud.example.com/desktop-analytics-sync/menu-merges",
+            )
 
         self.assertIsNone(result["error"])
-        self.assertEqual(result["events_sent"], 2)
-        for event_id in ("event-1", "event-2"):
-            row = self._event_row(event_id)
-            self.assertIsNotNone(row["uploaded_at"])
-            self.assertIsNone(row["last_error"])
+        self.assertEqual(result["merge_events_applied"], 1)
+        # Order row moved to the target...
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM menu_sync_event_quarantine").fetchone()[0],
-            0,
+            self.conn.execute(
+                "SELECT menu_item_id FROM order_items WHERE order_item_id = 1"
+            ).fetchone()["menu_item_id"],
+            "item_target",
         )
-
-    def test_upload_pending_marks_unparseable_local_payload_errored(self) -> None:
-        self._insert_event("event-corrupt", "{not-valid-json", "2026-04-14T10:00:00Z")
-
-        with patch("requests.post") as mock_post:
-            result = upload_pending(self.conn, endpoint="https://cloud.example.com/ingest")
-
-        # Nothing shippable, so no request goes out — but the corrupt row is
-        # marked errored so it stops blocking the queue.
-        mock_post.assert_not_called()
-        self.assertIsNone(result["error"])
-        self.assertEqual(result["events_sent"], 0)
-        row = self._event_row("event-corrupt")
-        self.assertIsNotNone(row["uploaded_at"])
-        self.assertIn("not valid JSON", row["last_error"])
+        # ...and its previous owner (never in the touched set) was swept.
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'item_husk_owner'"
+            ).fetchone()
+        )
 
 
 if __name__ == "__main__":

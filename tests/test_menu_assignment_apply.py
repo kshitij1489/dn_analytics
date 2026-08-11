@@ -3,33 +3,40 @@ Phase C3 conflict matrix: two simulated installs (two SQLite DBs) resolving the
 same order items differently against a fake event server must converge to the
 higher server_seq, with a supersede notice for the loser.
 
-Also covers: v1 legacy derivation parity via contracts/menu_merge_event_fixtures.json,
+Also covers: v1 legacy derivation parity via
+contracts/fixtures/1/menu_merge_event_fixtures.json,
 echo/ack, stale-event no-op, undo-after-conflict, and orphan GC + stats.
 """
 
+import itertools
 import json
 import sqlite3
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from tests.profile_test_helpers import bind_test_profile
 
 from src.core.menu_assignment_apply import (
     apply_assignments,
     extract_assignments,
     list_supersede_notices,
 )
+from src.core.order_item_key import normalized_generated_name_key
 from src.core.menu_mapping_verification_sync_events import extract_verification_entries
 from src.core.menu_merge_sync import pull_and_apply_menu_merge_events
 from src.core.menu_merge_sync_events import ensure_menu_merge_sync_tables
 from utils import menu_utils
+from utils.id_generator import generate_deterministic_id
 
 
-FIXTURES_PATH = Path(__file__).resolve().parent.parent / "contracts" / "menu_merge_event_fixtures.json"
-VERIFICATION_FIXTURES_PATH = (
+_FIXTURES_DIR = (
     Path(__file__).resolve().parent.parent
     / "contracts"
-    / "menu_mapping_verification_event_fixtures.json"
+    / "fixtures"
+    / "1"
 )
+FIXTURES_PATH = _FIXTURES_DIR / "menu_merge_event_fixtures.json"
+VERIFICATION_FIXTURES_PATH = _FIXTURES_DIR / "menu_mapping_verification_event_fixtures.json"
 
 BASE_SCHEMA = """
     CREATE TABLE orders (
@@ -39,6 +46,7 @@ BASE_SCHEMA = """
 
     CREATE TABLE menu_items (
         menu_item_id TEXT PRIMARY KEY,
+        suggestion_id TEXT REFERENCES menu_items(menu_item_id),
         name TEXT NOT NULL,
         type TEXT NOT NULL,
         is_verified BOOLEAN DEFAULT 0,
@@ -143,6 +151,29 @@ def make_install_db() -> sqlite3.Connection:
     )
     conn.commit()
     ensure_menu_merge_sync_tables(conn)
+    # A strict commit self-applies its verification events through the pull
+    # applier, which reads menu_mapping_verification_remote_events; production
+    # creates it via migration, so seed it here too.
+    from src.core.menu_mapping_verification_sync import _ensure_tables as _ensure_verification_tables
+
+    _ensure_verification_tables(conn)
+
+    # Strict mode is always on: an edit is only allowed once the install has cloud
+    # config and a seen menu-state revision. Every simulated install is a
+    # cloud-connected peer, so seed both here.
+    from src.core.sync_identity import get_device_identity, set_menu_state_revision
+
+    set_menu_state_revision(conn, 1)
+    conn.execute(
+        "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
+    )
+    # Persist this install's identity now (production establishes it at startup).
+    # A strict commit builds the event's attribution inside the capture txn that
+    # _commit_strict_plan rolls back, so a lazily-generated install_id would be
+    # discarded and never match the persisted one — pre-committing it keeps
+    # self-authorship detectable.
+    get_device_identity(conn)
+    bind_test_profile(conn)
     conn.commit()
     return conn
 
@@ -153,6 +184,8 @@ class FakeEventServer:
     def __init__(self) -> None:
         self.rows = []  # list of (server_seq, event_dict)
         self.seen_ids = set()
+        self._verification_seq = itertools.count(1000)
+        self._revision = itertools.count(2)
 
     def ingest(self, event: dict) -> int:
         remote_event_id = str(event.get("remote_event_id"))
@@ -165,26 +198,13 @@ class FakeEventServer:
         self.seen_ids.add(remote_event_id)
         return seq
 
-    def ingest_outbox(self, conn) -> int:
-        """Push this install's unsent events, in emit order."""
-        rows = conn.execute(
-            """
-            SELECT event_id, payload
-            FROM menu_merge_sync_events
-            WHERE uploaded_at IS NULL
-            ORDER BY occurred_at ASC, created_at ASC
-            """
-        ).fetchall()
-        count = 0
-        for row in rows:
-            self.ingest(json.loads(row["payload"]))
-            conn.execute(
-                "UPDATE menu_merge_sync_events SET uploaded_at = CURRENT_TIMESTAMP WHERE event_id = ?",
-                (row["event_id"],),
-            )
-            count += 1
-        conn.commit()
-        return count
+    def next_verification_seq(self) -> int:
+        # Verification events ride a separate stream; keep them off the merge log
+        # so merge server_seq stays a dense 1..N used by the conflict assertions.
+        return next(self._verification_seq)
+
+    def next_revision(self) -> int:
+        return next(self._revision)
 
     def fetch(self, cursor, limit) -> dict:
         start = int(cursor) if cursor else 0
@@ -197,12 +217,61 @@ class FakeEventServer:
         return {"events": events, "next_cursor": next_cursor, "error": None}
 
 
+def route_commits_through_server(server: FakeEventServer):
+    """
+    Patch the strict commit path so every menu edit feeds `server` and self-applies.
+
+    Production always commits to the central server (see utils/menu_utils.py's
+    _commit_strict_plan). This stand-in ingests the plan's merge event into the fake
+    server to obtain its server_seq, then drives apply_accepted() — the same pull
+    appliers a peer runs — so the committing install ends up acked immediately
+    (assignment_seq stamped, pending_local cleared, origin='remote'), exactly like a
+    real strict commit. Returns an unstarted patcher.
+    """
+    from src.core.menu_mutation_commit import CommitResult, apply_accepted
+
+    def _commit(conn, plan):
+        accepted_events = []
+        if plan.event:
+            seq = server.ingest(plan.event)
+            accepted_events.append(
+                {
+                    "remote_event_id": plan.event["remote_event_id"],
+                    "server_seq": seq,
+                    "server_ingested_at": f"2026-07-05T00:00:{seq % 60:02d}+00:00",
+                }
+            )
+        for event in plan.verification_events:
+            vseq = server.next_verification_seq()
+            accepted_events.append(
+                {
+                    "remote_event_id": event["remote_event_id"],
+                    "server_seq": vseq,
+                    "server_ingested_at": f"2026-07-05T00:01:{vseq % 60:02d}+00:00",
+                }
+            )
+        body = {
+            "status": "accepted",
+            "mutation_id": plan.mutation_id,
+            "menu_revision": server.next_revision(),
+            "accepted_events": accepted_events,
+            "assignment_rows": [],
+            "catalog_delta": plan.catalog_delta,
+            "merge_cursor": "0",
+            "verification_cursor": "0",
+        }
+        apply_result = apply_accepted(conn, body, plan)
+        return CommitResult(status="ok", message="accepted", merge_id=apply_result.get("local_merge_id"))
+
+    return patch("src.core.menu_mutation_commit.commit_mutation", side_effect=_commit)
+
+
 def pull_install(conn, server: FakeEventServer) -> dict:
     """Pull to the end of the fake stream; returns the merged stats."""
     combined = {"merge_events_applied": 0, "undo_events_applied": 0, "events_skipped": 0, "events_failed": 0}
     with patch(
         "src.core.menu_merge_sync._fetch_remote_events",
-        side_effect=lambda endpoint, auth, cursor, limit: server.fetch(cursor, limit),
+        side_effect=lambda conn, endpoint, auth, cursor, limit: server.fetch(cursor, limit),
     ):
         while True:
             stats = pull_and_apply_menu_merge_events(conn, "http://fake", auth=None)
@@ -228,7 +297,6 @@ def mapping_state(conn, order_item_id: str) -> tuple:
 class MenuAssignmentApplyTests(unittest.TestCase):
     def setUp(self) -> None:
         patches = [
-            patch("utils.menu_utils.export_to_backups", return_value=True),
             patch("utils.menu_utils._clear_impacted_models", return_value=None),
         ]
         for p in patches:
@@ -240,6 +308,12 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         self.addCleanup(self.install1.close)
         self.addCleanup(self.install2.close)
         self.server = FakeEventServer()
+
+        # Every edit on either install commits to the shared fake server and
+        # self-applies (strict-mode is always on now).
+        router = route_commits_through_server(self.server)
+        router.start()
+        self.addCleanup(router.stop)
 
     # --- fixture parity -----------------------------------------------------
 
@@ -283,15 +357,16 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         )
         self.assertEqual(r2["status"], "success", r2.get("message"))
 
-        # Local rows are provisional until the echo acks them.
+        # A strict commit is acked as it lands: install1's own row is stamped
+        # (server_seq 1) and no longer provisional, unlike the old local-first flow.
         row = self.install1.execute(
             "SELECT pending_local, assignment_seq FROM menu_item_variants WHERE order_item_id = '1'"
         ).fetchone()
-        self.assertEqual(int(row["pending_local"]), 1)
-        self.assertIsNone(row["assignment_seq"])
+        self.assertEqual(int(row["pending_local"]), 0)
+        self.assertEqual(int(row["assignment_seq"]), 1)
 
-        self.server.ingest_outbox(self.install1)  # seq 1
-        self.server.ingest_outbox(self.install2)  # seq 2 (wins)
+        # install1 committed seq 1, install2 seq 2 (wins). Each now pulls the
+        # other's event from the shared stream.
         pull_install(self.install1, self.server)
         pull_install(self.install2, self.server)
 
@@ -320,8 +395,7 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         m2 = menu_utils.merge_menu_items(self.install2, "item_a", "item_c")
         self.assertEqual(m2["status"], "success", m2.get("message"))
 
-        self.server.ingest_outbox(self.install1)  # seq 1
-        self.server.ingest_outbox(self.install2)  # seq 2 (wins)
+        # install1 committed seq 1, install2 seq 2 (wins); cross-pull to converge.
         pull_install(self.install1, self.server)
         pull_install(self.install2, self.server)
 
@@ -349,8 +423,7 @@ class MenuAssignmentApplyTests(unittest.TestCase):
 
     def test_undo_after_conflicting_merge_restores_prior_assignments(self) -> None:
         m1 = menu_utils.merge_menu_items(self.install1, "item_a", "item_b")
-        self.assertEqual(m1["status"], "success")
-        self.server.ingest_outbox(self.install1)  # seq 1
+        self.assertEqual(m1["status"], "success")  # commit seq 1, self-applied
         pull_install(self.install2, self.server)
         self.assertEqual(mapping_state(self.install2, "1")[0], "item_b")
 
@@ -361,8 +434,7 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         self.assertEqual(remote_history["origin"], "remote")
 
         undo = menu_utils.undo_merge(self.install1, int(m1["merge_id"]))
-        self.assertEqual(undo["status"], "success", undo.get("message"))
-        self.server.ingest_outbox(self.install1)  # seq 2 = undo event
+        self.assertEqual(undo["status"], "success", undo.get("message"))  # commit seq 2 = undo event
 
         pull_install(self.install1, self.server)
         pull_install(self.install2, self.server)
@@ -383,9 +455,10 @@ class MenuAssignmentApplyTests(unittest.TestCase):
 
     def test_echo_ack_stamps_seq_clears_pending_without_duplicate_history(self) -> None:
         m1 = menu_utils.merge_menu_items(self.install1, "item_a", "item_b")
-        self.assertEqual(m1["status"], "success")
-        self.server.ingest_outbox(self.install1)
+        self.assertEqual(m1["status"], "success")  # commit seq 1, self-applied
 
+        # The commit already applied the merge locally, so pulling our own echo
+        # is a dedupe no-op rather than a fresh apply.
         stats = pull_install(self.install1, self.server)
         self.assertEqual(stats["events_skipped"], 1)
         self.assertEqual(stats["merge_events_applied"], 0)
@@ -434,6 +507,154 @@ class MenuAssignmentApplyTests(unittest.TestCase):
         self.assertEqual(result["rows_applied"], 0)
         self.assertEqual(len(result["stale_rows"]), 1)
         self.assertEqual(mapping_state(self.install1, "1"), ("item_b", "variant_x", 0))
+
+    def test_missing_assignment_inserts_when_pos_itemid_has_local_backing(self) -> None:
+        self.install1.execute("ALTER TABLE order_items ADD COLUMN petpooja_itemid INTEGER")
+        self.install1.execute("UPDATE order_items SET petpooja_itemid = 101 WHERE order_item_id = 1")
+        event = {
+            "remote_event_id": "ev-pos-backed",
+            "event_type": "menu_merge.applied",
+            "merge_payload": {"kind": "derived_assignment_v1"},
+        }
+
+        result = apply_assignments(
+            self.install1,
+            [{"order_item_id": "101", "menu_item_id": "item_b", "variant_id": None, "is_verified": 0}],
+            77,
+            event,
+        )
+
+        self.assertEqual(result["rows_applied"], 1)
+        expected_variant = generate_deterministic_id("UNKNOWN")
+        row = self.install1.execute(
+            "SELECT menu_item_id, variant_id, is_verified, assignment_seq FROM menu_item_variants WHERE order_item_id = '101'"
+        ).fetchone()
+        self.assertEqual(row["menu_item_id"], "item_b")
+        self.assertEqual(row["variant_id"], expected_variant)
+        self.assertEqual(int(row["is_verified"]), 0)
+        self.assertEqual(int(row["assignment_seq"]), 77)
+        self.assertIsNotNone(
+            self.install1.execute(
+                "SELECT 1 FROM variants WHERE variant_id = ? AND variant_name = 'UNKNOWN'",
+                (expected_variant,),
+            ).fetchone()
+        )
+        order_row = self.install1.execute(
+            "SELECT menu_item_id, variant_id FROM order_items WHERE order_item_id = 1"
+        ).fetchone()
+        self.assertEqual(order_row["menu_item_id"], "item_b")
+        self.assertEqual(order_row["variant_id"], expected_variant)
+
+    def test_numeric_assignment_key_does_not_match_unrelated_local_pk(self) -> None:
+        self.install1.execute("ALTER TABLE order_items ADD COLUMN petpooja_itemid INTEGER")
+        self.install1.execute("UPDATE order_items SET petpooja_itemid = 999 WHERE order_item_id = 1")
+        self.install1.execute("DELETE FROM menu_item_variants WHERE order_item_id = '1'")
+        event = {
+            "remote_event_id": "ev-no-pos-backing",
+            "event_type": "menu_merge.applied",
+            "merge_payload": {"kind": "derived_assignment_v1"},
+        }
+
+        result = apply_assignments(
+            self.install1,
+            [{"order_item_id": "1", "menu_item_id": "item_b", "variant_id": None, "is_verified": 0}],
+            78,
+            event,
+        )
+
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(result["rows_missing"], 1)
+        self.assertIsNone(
+            self.install1.execute(
+                "SELECT 1 FROM menu_item_variants WHERE order_item_id = '1'"
+            ).fetchone()
+        )
+
+    def test_name_derived_assignment_key_has_local_backing(self) -> None:
+        self.install1.execute("ALTER TABLE order_items ADD COLUMN petpooja_itemid INTEGER")
+        self.install1.execute(
+            """
+            INSERT INTO order_items (
+                order_item_id, order_id, menu_item_id, quantity, total_price, name_raw, petpooja_itemid
+            )
+            VALUES (4, 1, 'item_a', 1, 99.0, 'Custom Sundae!!', NULL)
+            """
+        )
+        key = normalized_generated_name_key("custom sundae")
+        event = {
+            "remote_event_id": "ev-name-backed",
+            "event_type": "menu_merge.applied",
+            "merge_payload": {"kind": "derived_assignment_v1"},
+        }
+
+        result = apply_assignments(
+            self.install1,
+            [{"order_item_id": key, "menu_item_id": "item_b", "variant_id": None, "is_verified": 0}],
+            79,
+            event,
+        )
+
+        self.assertEqual(result["rows_applied"], 1)
+        row = self.install1.execute(
+            "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = ?",
+            (key,),
+        ).fetchone()
+        self.assertEqual(row["menu_item_id"], "item_b")
+
+    def test_pulled_derived_assignment_does_not_overwrite_server_stamped_row(self) -> None:
+        self.install1.execute(
+            "UPDATE menu_item_variants SET assignment_seq = 50 WHERE order_item_id = '1'"
+        )
+        event = {
+            "remote_event_id": "ev-derived-skip",
+            "event_type": "menu_merge.applied",
+            "merge_payload": {"kind": "derived_assignment_v1"},
+        }
+
+        result = apply_assignments(
+            self.install1,
+            [{"order_item_id": "1", "menu_item_id": "item_c", "variant_id": None, "is_verified": 0}],
+            80,
+            event,
+        )
+
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(len(result["derived_rows_skipped_existing"]), 1)
+        self.assertEqual(mapping_state(self.install1, "1")[0], "item_a")
+
+    # --- missing menu_item parent (never FK-fail the whole pull) -------------
+
+    def test_assignment_onto_missing_menu_item_is_skipped(self) -> None:
+        # A server stream can reference a legacy/collapsed menu_item_id this
+        # install never materialized, with no item snapshot to self-heal from.
+        # Applying it must skip the row (reported in menu_items_missing), never
+        # write a dangling FK that aborts the entire menu pull.
+        event = {
+            "remote_event_id": "ev-ghost",
+            "event_type": "menu_merge.applied",
+            "merge_payload": {"kind": "basic_merge_v1"},
+        }
+        result = apply_assignments(
+            self.install1,
+            [{"order_item_id": "1", "menu_item_id": "ghost_item", "variant_id": "variant_x"}],
+            50,
+            event,
+        )
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(result["menu_items_missing"], 1)
+        # No ghost catalog row was fabricated, and the order line kept its prior
+        # mapping instead of being repointed at a non-existent item.
+        self.assertIsNone(
+            self.install1.execute(
+                "SELECT 1 FROM menu_items WHERE menu_item_id = 'ghost_item'"
+            ).fetchone()
+        )
+        self.assertEqual(
+            self.install1.execute(
+                "SELECT menu_item_id FROM menu_item_variants WHERE order_item_id = '1'"
+            ).fetchone()["menu_item_id"],
+            "item_a",
+        )
 
     # --- is_verified single-owner convergence (I5) --------------------------
 

@@ -2,10 +2,10 @@ import hashlib
 import json
 import sqlite3
 import unittest
+from tests.profile_test_helpers import bind_test_profile
 from unittest.mock import Mock, patch
 
 from src.core.customer_merge_sync import pull_and_apply_customer_merge_events
-from src.core.customer_merge_sync_events import backfill_customer_merge_sync_events
 
 
 def _sha(value: str) -> str:
@@ -16,6 +16,7 @@ class CustomerMergePullTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
+        bind_test_profile(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE customers (
@@ -327,11 +328,6 @@ class CustomerMergePullTests(unittest.TestCase):
             self.conn.execute("SELECT COUNT(*) FROM customer_merge_sync_events").fetchone()[0],
             0,
         )
-        self.assertEqual(backfill_customer_merge_sync_events(self.conn), {"applied": 0, "undone": 0})
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM customer_merge_sync_events").fetchone()[0],
-            0,
-        )
 
     @patch("requests.get")
     def test_pull_applies_remote_merge_then_remote_undo_without_echoing(self, mock_get: Mock) -> None:
@@ -372,7 +368,6 @@ class CustomerMergePullTests(unittest.TestCase):
             self.conn.execute("SELECT COUNT(*) FROM customer_merge_sync_events").fetchone()[0],
             0,
         )
-        self.assertEqual(backfill_customer_merge_sync_events(self.conn), {"applied": 0, "undone": 0})
 
     @patch("requests.get")
     def test_pull_skips_duplicate_remote_event(self, mock_get: Mock) -> None:

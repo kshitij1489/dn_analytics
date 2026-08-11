@@ -47,6 +47,7 @@ const DISPLAY_COLUMNS: Record<string, string[]> = {
 const SEARCH_PLACEHOLDERS: Record<string, string> = {
     Orders: 'Search orders...',
     'Order Items': 'Search order items...',
+    AddOns: 'Search addons...',
     Customers: 'Search customers...',
     Taxes: 'Search taxes...',
     Discounts: 'Search discounts...',
@@ -117,7 +118,13 @@ export function PaginatedDataTable({
     };
 
     const displayColumns = DISPLAY_COLUMNS[title] || (data.length > 0 ? Object.keys(data[0]) : []);
-    const finalColumns = displayColumns.filter((col) => data.length === 0 || Object.prototype.hasOwnProperty.call(data[0], col));
+    // All Stores rows carry their restaurant; show it first so every row is
+    // attributable and a detail drilldown knows which profile it belongs to.
+    const hasStoreColumn = data.length > 0 && Object.prototype.hasOwnProperty.call(data[0], 'restaurant_name');
+    const finalColumns = [
+        ...(hasStoreColumn ? ['restaurant_name'] : []),
+        ...displayColumns.filter((col) => data.length === 0 || Object.prototype.hasOwnProperty.call(data[0], col)),
+    ];
     const searchPlaceholder = SEARCH_PLACEHOLDERS[title];
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const startRow = total > 0 ? (page - 1) * pageSize + 1 : 0;
@@ -152,7 +159,14 @@ export function PaginatedDataTable({
         }
 
         if (title === 'Customers' && col === 'name' && row.customer_id && value) {
-            return <CustomerLink customerId={row.customer_id} name={String(value)} />;
+            return (
+                <CustomerLink
+                    customerId={row.customer_id}
+                    name={String(value)}
+                    restaurantId={row.restaurant_id}
+                    restaurantName={row.restaurant_name}
+                />
+            );
         }
 
         if (value === null || value === undefined || value === '') {
@@ -184,7 +198,7 @@ export function PaginatedDataTable({
                         </thead>
                         <tbody>
                             {data.map((row, index) => (
-                                <tr key={index}>
+                                <tr key={row.row_key ?? index}>
                                     {finalColumns.map((col) => (
                                         <td key={col}>{renderCell(row, col)}</td>
                                     ))}

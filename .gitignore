@@ -36,6 +36,12 @@ data/gp_model.pkl
 *.sqlite
 sample_payloads/*.json
 raw_data/
+temp_folder/
+# Regenerated weather export. Written per restaurant profile under
+# data/restaurant-<hash>/; the legacy shared path is ignored too so an old
+# working copy cannot re-enter a commit.
+data/weather_history.csv
+data/restaurant-*/
 
 # Build artifacts
 dist-backend/

@@ -9,27 +9,14 @@ from contextvars import ContextVar
 from typing import Any, List, Optional
 
 # Request-scoped list of debug entries. Set by orchestrator; read by cache/LLM layers.
+# ContextVar only — no module-global fallback. A global was cross-request racy (§3.7);
+# to_thread offloaded steps copy the context, so the ContextVar reaches worker threads.
 _debug_log_ctx: ContextVar[Optional[List[dict]]] = ContextVar(
     "ai_debug_log", default=None
 )
 
-# Fallback when context var is not available (e.g. sync code run in a different thread).
-# Set by the router at request start; cleared at request end. Single-request-at-a-time.
-_current_request_log: Optional[List[dict]] = None
-
 # Max length for input/output previews in log entries
 PREVIEW_MAX = 800
-
-
-def set_current_request_log(log: Optional[List[dict]]) -> None:
-    """Set the fallback log for the current request (called by router). Use when context var is lost."""
-    global _current_request_log
-    _current_request_log = log
-
-
-def get_current_request_log() -> Optional[List[dict]]:
-    """Return the fallback log. Used by append_entry when context var is None."""
-    return _current_request_log
 
 
 def preview_value(value: Any) -> str:
@@ -68,7 +55,7 @@ def append_entry(
     output_preview: short preview of the response (truncated)
     input_preview: optional short preview of the input (e.g. prompt)
     """
-    log = get_debug_log() or get_current_request_log()
+    log = get_debug_log()
     if log is None:
         return
     log.append({

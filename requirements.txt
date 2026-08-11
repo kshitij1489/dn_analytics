@@ -6,9 +6,3 @@ requests
 pyinstaller
 openai
 python-dotenv
-prophet
-statsmodels
-scikit-learn
-joblib
-lightgbm
-xgboost

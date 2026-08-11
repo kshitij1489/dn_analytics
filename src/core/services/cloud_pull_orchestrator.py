@@ -2,11 +2,15 @@
 Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
 
 Pull order (keep in sync with docs/MENU_SYNC_ARCHITECTURE.md §4):
-1. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
-2. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
+1. Global menu catalog/event state, assignments, and unified audit history when
+   global mode is active. Audit-history failure is warning-only.
+2. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
+3. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
    after the catalog exists, before event tails)
-3. Menu merge + mapping-verification event streams, drained to one stable revision
-5. Customer merges
+4. Menu merge + mapping-verification event streams, drained to one stable revision
+5. Derived assignment flush (POS-backed machine assignments; best-effort)
+6. Customer merges
+7. Forecast deltas (central server-authored rows; best-effort, non-fatal on failure)
 
 Used after POS sync when cloud endpoints are configured. Menu and customer ground-truth
 pull failures are surfaced to Sync DB callers.
@@ -49,6 +53,12 @@ def collect_menu_pull_errors(summary: Dict[str, Any]) -> List[Tuple[str, str]]:
     """Return (stream_key, error_message) for each failed menu ground-truth pull."""
     failures: List[Tuple[str, str]] = []
     for key in MENU_GROUND_TRUTH_PULL_KEYS:
+        message = _block_error_message(summary.get(key))
+        if message:
+            failures.append((key, message))
+    for key in ("global_menu", "global_menu_assignments"):
+        if key not in summary or summary.get(key) is None:
+            continue
         message = _block_error_message(summary.get(key))
         if message:
             failures.append((key, message))
@@ -96,12 +106,38 @@ def collect_customer_pull_warnings(summary: Dict[str, Any]) -> List[Tuple[str, s
     return warnings
 
 
+def collect_forecast_pull_warnings(summary: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Non-fatal forecast pull failures (OQ-3: must not fail Sync DB)."""
+    warnings: List[Tuple[str, str]] = []
+    block = summary.get("forecasts")
+    if not isinstance(block, dict):
+        return warnings
+    message = _block_error_message(block)
+    if message:
+        warnings.append(("forecasts", message))
+    elif block.get("status") == "error" and isinstance(block.get("error"), str):
+        warnings.append(("forecasts", block["error"]))
+    return warnings
+
+
+def collect_global_menu_history_warnings(
+    summary: Dict[str, Any],
+) -> List[Tuple[str, str]]:
+    """History is a read-only audit view; its failure must not fail catalog sync."""
+    block = summary.get("global_menu_history")
+    message = _block_error_message(block)
+    if not message:
+        return []
+    return [("global_menu_history", message)]
+
+
 def run_best_effort_cloud_pulls(
     conn,
     *,
     merge_events_limit: int = MERGE_EVENTS_LIMIT,
     blocking: bool = True,
     skip_menu_bootstrap: bool = False,
+    already_locked: bool = False,
 ) -> Dict[str, Any]:
     """
     Run cloud pull steps when their pull URLs are configured.
@@ -109,17 +145,33 @@ def run_best_effort_cloud_pulls(
 
     blocking=False (the scheduler) skips the cycle when another pull holds the
     lock instead of queueing behind it.
+
+    already_locked=True is for the All Stores coordinator, which holds the
+    process-wide lock across its whole store loop so a scheduler cycle cannot
+    interleave between two stores. The lock is not reentrant.
     """
+    from src.core.central_api import restaurant_id_from_connection
+
+    restaurant_id = restaurant_id_from_connection(conn)
+    if already_locked:
+        result = _run_best_effort_cloud_pulls_locked(
+            conn, merge_events_limit=merge_events_limit, skip_menu_bootstrap=skip_menu_bootstrap
+        )
+        result["restaurant_id"] = restaurant_id
+        return result
     if not CLOUD_PULL_LOCK.acquire(blocking=blocking):
         return {
             "attempted": False,
             "skipped": True,
-            "reason": "another cloud pull is in progress",
+            "reason": f"another cloud pull is in progress (requested {restaurant_id})",
+            "restaurant_id": restaurant_id,
         }
     try:
-        return _run_best_effort_cloud_pulls_locked(
+        result = _run_best_effort_cloud_pulls_locked(
             conn, merge_events_limit=merge_events_limit, skip_menu_bootstrap=skip_menu_bootstrap
         )
+        result["restaurant_id"] = restaurant_id
+        return result
     finally:
         CLOUD_PULL_LOCK.release()
 
@@ -151,16 +203,68 @@ def _run_best_effort_cloud_pulls_locked(
     summary: Dict[str, Any] = {
         "attempted": False,
         "customer_merges": None,
+        "derived_assignment_flush": None,
         "menu_assignments_bootstrap": None,
         "menu_bootstrap": None,
         "menu_mapping_verifications": None,
         "menu_merges": None,
+        "global_menu": None,
+        "global_menu_assignments": None,
+        "global_menu_history": None,
+        "forecasts": None,
     }
 
     _, auth_key = get_cloud_sync_config(conn)
 
+    try:
+        from src.core.global_menu_schema import resolve_global_menu_capability
+
+        global_capability = resolve_global_menu_capability(
+            conn, allow_profile_sync=True
+        )
+    except Exception:
+        global_capability = None
+
+    if global_capability is not None and global_capability.active:
+        from src.core.global_menu_sync import (
+            pull_global_assignment_snapshot,
+            pull_global_menu_state,
+        )
+
+        summary["attempted"] = True
+        try:
+            summary["global_menu"] = pull_global_menu_state(
+                conn, auth=auth_key, allow_profile_sync=True
+            )
+        except Exception as e:
+            logger.exception("Global menu pull failed")
+            summary["global_menu"] = {"status": "error", "error": str(e)}
+        if not _block_error_message(summary["global_menu"]):
+            try:
+                summary["global_menu_assignments"] = pull_global_assignment_snapshot(
+                    conn, auth=auth_key, allow_profile_sync=True
+                )
+            except Exception as e:
+                logger.exception("Global menu assignment pull failed")
+                summary["global_menu_assignments"] = {
+                    "status": "error",
+                    "error": str(e),
+                }
+        try:
+            from src.core.global_menu_history import pull_global_menu_history
+
+            summary["global_menu_history"] = pull_global_menu_history(
+                conn, auth=auth_key, allow_profile_sync=True
+            )
+        except Exception as e:
+            logger.exception("Global menu history pull failed")
+            summary["global_menu_history"] = {
+                "status": "error",
+                "error": str(e),
+            }
+
     ep_boot = get_menu_bootstrap_pull_endpoint(conn)
-    if ep_boot and not skip_menu_bootstrap:
+    if not (global_capability is not None and global_capability.active) and ep_boot and not skip_menu_bootstrap:
         summary["attempted"] = True
         try:
             summary["menu_bootstrap"] = fetch_and_apply_menu_bootstrap_snapshot(
@@ -174,7 +278,7 @@ def _run_best_effort_cloud_pulls_locked(
             summary["menu_bootstrap"] = {"error": str(e)}
 
     ep_assignments = get_menu_assignments_snapshot_endpoint(conn)
-    if ep_assignments:
+    if not (global_capability is not None and global_capability.active) and ep_assignments:
         summary["attempted"] = True
         try:
             summary["menu_assignments_bootstrap"] = bootstrap_menu_assignments_if_needed(
@@ -188,7 +292,7 @@ def _run_best_effort_cloud_pulls_locked(
 
     ep_mapping = get_menu_mapping_verification_pull_endpoint(conn)
     ep_menu_merge = get_menu_merge_pull_endpoint(conn)
-    if ep_mapping or ep_menu_merge:
+    if not (global_capability is not None and global_capability.active) and (ep_mapping or ep_menu_merge):
         summary["attempted"] = True
         try:
             if not ep_mapping or not ep_menu_merge:
@@ -206,6 +310,20 @@ def _run_best_effort_cloud_pulls_locked(
             summary["menu_mapping_verifications"] = {"error": str(e)}
             summary["menu_merges"] = {"error": str(e)}
 
+    if (
+        isinstance(summary.get("menu_mapping_verifications"), dict)
+        and isinstance(summary.get("menu_merges"), dict)
+        and not _block_error_message(summary["menu_mapping_verifications"])
+        and not _block_error_message(summary["menu_merges"])
+    ):
+        try:
+            from src.core.derived_assignment_flush import flush_pending_derived_assignments
+
+            summary["derived_assignment_flush"] = flush_pending_derived_assignments(conn)
+        except Exception as e:
+            logger.exception("Derived assignment flush failed")
+            summary["derived_assignment_flush"] = {"error": str(e)}
+
     ep_cust = get_customer_merge_pull_endpoint(conn)
     if ep_cust:
         summary["attempted"] = True
@@ -218,12 +336,26 @@ def _run_best_effort_cloud_pulls_locked(
             logger.exception("Best-effort customer merge pull failed")
             summary["customer_merges"] = {"error": str(e)}
 
+    from src.core.forecast_sync import get_forecast_delta_endpoint, pull_and_apply_forecast_deltas
+
+    ep_forecast = get_forecast_delta_endpoint(conn)
+    if ep_forecast:
+        summary["attempted"] = True
+        try:
+            summary["forecasts"] = pull_and_apply_forecast_deltas(conn)
+        except Exception as e:
+            logger.exception("Best-effort forecast pull failed")
+            summary["forecasts"] = {"status": "error", "error": str(e)}
+
     if not summary["attempted"]:
         summary["skipped"] = True
         summary["reason"] = "no cloud pull endpoints configured"
         return summary
 
     for key in (
+        "global_menu",
+        "global_menu_assignments",
+        "global_menu_history",
         "menu_assignments_bootstrap",
         "menu_bootstrap",
         "menu_mapping_verifications",
@@ -252,6 +384,22 @@ def _run_best_effort_cloud_pulls_locked(
             {"stream": key, "warning": message} for key, message in customer_warnings
         ]
         for key, message in customer_warnings:
+            logger.warning("Cloud pull %s reported warning: %s", key, message)
+
+    forecast_warnings = collect_forecast_pull_warnings(summary)
+    if forecast_warnings:
+        summary["forecast_pull_warnings"] = [
+            {"stream": key, "warning": message} for key, message in forecast_warnings
+        ]
+        for key, message in forecast_warnings:
+            logger.warning("Cloud pull %s reported warning: %s", key, message)
+
+    history_warnings = collect_global_menu_history_warnings(summary)
+    if history_warnings:
+        summary["global_menu_history_warnings"] = [
+            {"stream": key, "warning": message} for key, message in history_warnings
+        ]
+        for key, message in history_warnings:
             logger.warning("Cloud pull %s reported warning: %s", key, message)
 
     return summary

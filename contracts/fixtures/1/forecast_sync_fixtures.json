@@ -1,0 +1,279 @@
+{
+  "description": "Forecast sync payload fixtures for 100% coverage of request/response payloads (contract v1.2). Forecasting is server-authored and downstream-only (§22); the legacy desktop-upload path (§18.4) is removed and the legacy six-array bootstrap body (§18.5) no longer exists on any route.",
+  "fixtures": [
+    {
+      "name": "forecast_legacy_ingest_removed",
+      "description": "HISTORICAL. POST forecasts/ingest (§18.4) is removed — the route, serializer, service, and the six Ingest*Forecast / Ingest*Backtest models are gone. The path is unrouted, so Django resolves it to a plain 404 with no guaranteed JSON body; do not pin a response payload. Clients pull server-authored rows via §22 instead.",
+      "endpoint": "POST /desktop-analytics-sync/forecasts/ingest",
+      "http_status": 404,
+      "payload": null
+    },
+    {
+      "name": "forecast_bootstrap_alias_removed",
+      "description": "HISTORICAL. GET forecasts/bootstrap (§18.5) was an unconditional route alias for forecasts/central-bootstrap. Removed in revision 1.2 (§24): the path is unrouted, not redirected, so Django resolves it to a plain 404 with no guaranteed JSON body; do not pin a response payload. forecasts/central-bootstrap is the only name.",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/bootstrap",
+      "http_status": 404,
+      "payload": null
+    },
+    {
+      "name": "forecast_bootstrap_empty_scope_response",
+      "description": "Bootstrap (either path) when no successful run exists for the scope: empty arrays and next_cursor \"0\" (§22.6).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/central-bootstrap",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "next_cursor": "0",
+        "runs": [],
+        "rows": [],
+        "weather_rows": []
+      }
+    },
+    {
+      "name": "forecast_status_response",
+      "description": "Latest server-authored forecast run metadata (§22.5).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/status",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "latest_run": {
+          "run_id": "d7a8b9c0-1e2f-4a3b-8c5d-6e7f0a1b2c3d",
+          "generated_on": "2026-07-08",
+          "training_window_start": "2026-03-10",
+          "training_window_end": "2026-07-07",
+          "status": "success",
+          "completed_at": "2026-07-08T02:58:10Z",
+          "families": [
+            "revenue",
+            "items",
+            "volume"
+          ],
+          "metrics": {
+            "active_items": 60,
+            "assignment_coverage_pct": 99.2
+          }
+        }
+      }
+    },
+    {
+      "name": "forecast_status_response_no_run",
+      "description": "No successful forecast run exists yet for this scope.",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/status",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "latest_run": null
+      }
+    },
+    {
+      "name": "forecast_central_bootstrap_response",
+      "description": "Server-authored forecast bootstrap (§22.6). Canonical path: GET /forecasts/central-bootstrap; GET /forecasts/bootstrap is an alias returning the identical body.",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/central-bootstrap",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "next_cursor": "123456",
+        "runs": [
+          {
+            "server_seq": 1200,
+            "run_id": "d7a8b9c0-1e2f-4a3b-8c5d-6e7f0a1b2c3d",
+            "generated_on": "2026-07-08",
+            "status": "success",
+            "completed_at": "2026-07-08T02:58:10Z",
+            "families": [
+              "revenue",
+              "items",
+              "volume"
+            ],
+            "metrics": {}
+          }
+        ],
+        "rows": [
+          {
+            "server_seq": 1201,
+            "run_id": "d7a8b9c0-1e2f-4a3b-8c5d-6e7f0a1b2c3d",
+            "family": "revenue",
+            "kind": "forward",
+            "forecast_date": "2026-07-08",
+            "model_name": "gp",
+            "entity_id": null,
+            "entity_name": null,
+            "payload": {
+              "revenue": 40500.0,
+              "orders": 0,
+              "gp_lower": 29000.0,
+              "gp_upper": 52000.0
+            }
+          }
+        ],
+        "weather_rows": [
+          {
+            "server_seq": 1210,
+            "weather_date": "2026-07-08",
+            "payload": {
+              "temp_max": 35.0,
+              "rain_sum": 0.0,
+              "rain_category": "none",
+              "source": "forecast"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "forecast_delta_response",
+      "description": "Normal delta sync — no new rows since last cursor (§22.7).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/delta",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "next_cursor": "123456",
+        "has_more": false,
+        "runs": [],
+        "rows": [],
+        "weather_rows": []
+      }
+    },
+    {
+      "name": "forecast_delta_response_with_data",
+      "description": "Delta sync with new rows and has_more paging indicator (§22.7).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/delta",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "next_cursor": "124000",
+        "has_more": true,
+        "runs": [
+          {
+            "server_seq": 1300,
+            "run_id": "e8b9c0d1-2f3a-4b5c-9d6e-7f0a1b2c3d4e",
+            "generated_on": "2026-07-09",
+            "status": "success",
+            "completed_at": "2026-07-09T02:55:00Z",
+            "families": [
+              "revenue",
+              "items",
+              "volume"
+            ],
+            "metrics": {
+              "active_items": 61
+            }
+          }
+        ],
+        "rows": [
+          {
+            "server_seq": 1301,
+            "run_id": "e8b9c0d1-2f3a-4b5c-9d6e-7f0a1b2c3d4e",
+            "family": "items",
+            "kind": "forward",
+            "forecast_date": "2026-07-09",
+            "model_name": "prophet",
+            "entity_id": "item-123",
+            "entity_name": "Paneer Tikka",
+            "payload": {
+              "quantity": 48,
+              "lower": 35,
+              "upper": 62
+            }
+          }
+        ],
+        "weather_rows": [
+          {
+            "server_seq": 1310,
+            "weather_date": "2026-07-09",
+            "payload": {
+              "temp_max": 34.0,
+              "temp_min": 27.0,
+              "rain_sum": 5.2,
+              "rain_category": "light",
+              "source": "observed"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "forecast_weather_response",
+      "description": "Direct weather read (§22.8). NOT YET IMPLEMENTED on server.",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/weather",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "weather_rows": [
+          {
+            "weather_date": "2026-07-08",
+            "payload": {
+              "temp_max": 35.0,
+              "temp_min": 28.0,
+              "rain_sum": 0.0,
+              "rain_category": "none",
+              "source": "forecast"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "forecast_revenue_chart_response",
+      "description": "Revenue chart payload (§22.9).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/revenue",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "generated_on": "2026-07-08",
+        "chart_data": [
+          {
+            "date": "2026-07-08",
+            "revenue": 40500.0,
+            "gp_lower": 29000.0,
+            "gp_upper": 52000.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "forecast_items_chart_response",
+      "description": "Item-demand chart payload (§22.9).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/items",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "generated_on": "2026-07-08",
+        "chart_data": [
+          {
+            "date": "2026-07-08",
+            "item_id": "item-123",
+            "quantity": 45
+          }
+        ]
+      }
+    },
+    {
+      "name": "forecast_volume_chart_response",
+      "description": "Volume-demand chart payload (§22.9).",
+      "endpoint": "GET /desktop-analytics-sync/forecasts/volume",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "scope_key": "default",
+        "generated_on": "2026-07-08",
+        "chart_data": [
+          {
+            "date": "2026-07-08",
+            "item_id": "item-456",
+            "volume_value": 250.0,
+            "unit": "ML"
+          }
+        ]
+      }
+    }
+  ]
+}

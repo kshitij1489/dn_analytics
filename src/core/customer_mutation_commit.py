@@ -29,14 +29,12 @@ from src.core.sync_identity import (
     apply_customer_scope_state,
     extract_customer_scope_state,
     get_customer_state_revision,
-    get_customer_strict_mode_enabled,
     get_sync_attribution,
     set_customer_state_revision,
 )
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SCOPE_KEY = "default"
 MAX_COMMIT_ATTEMPTS = 2
 MAX_PULL_PAGES_PER_STREAM = 1000
 COMMIT_SCHEMA_VERSION = 1
@@ -91,13 +89,14 @@ def strict_mode_ready(conn) -> bool:
 
 
 def strict_mode_active(conn) -> bool:
-    """True when the server-advertised strict flag is on and readiness holds."""
-    return get_customer_strict_mode_enabled(conn) and strict_mode_ready(conn)
+    """True when the client is ready for server-authoritative commits. The server is
+    always strict — the only remaining gate is local readiness."""
+    return strict_mode_ready(conn)
 
 
 def strict_mode_editing_blocked(conn) -> bool:
-    """True when the server advertises strict mode but local readiness is missing."""
-    return get_customer_strict_mode_enabled(conn) and not strict_mode_ready(conn)
+    """True when strict mode is required but local readiness is missing."""
+    return not strict_mode_ready(conn)
 
 
 def strict_mode_edit_blocked_response(conn) -> Optional[Dict[str, Any]]:
@@ -515,12 +514,12 @@ def _status_url(base_url: str, mutation_id: str) -> str:
     return f"{base_url}/desktop-analytics-sync/customer-mutations/{mutation_id}"
 
 
-def _auth_headers(api_key: str) -> Dict[str, str]:
-    return {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+def _auth_headers(conn, api_key: str) -> Dict[str, str]:
+    from src.core.central_api import scoped_headers
+
+    return scoped_headers(
+        conn, auth_kind="sync", credential=api_key, content_type="application/json"
+    )
 
 
 def _build_commit_request(conn, plan: MutationPlan, *, expected_customer_revision: int) -> Dict[str, Any]:
@@ -533,7 +532,6 @@ def _build_commit_request(conn, plan: MutationPlan, *, expected_customer_revisio
         "event": plan.event,
         "uploaded_by": attribution.get("employee") or None,
         "uploaded_from": attribution.get("device") or None,
-        "scope_key": DEFAULT_SCOPE_KEY,
     }
 
 
@@ -555,12 +553,16 @@ def _post_commit(
         response = requests.post(
             _commit_url(base_url),
             json=payload,
-            headers=_auth_headers(api_key),
+            headers=_auth_headers(conn, api_key),
             timeout=60,
         )
         body = response.json() if response.content else None
         if not isinstance(body, dict):
             body = None
+        if response.status_code >= 400:
+            from src.core.central_api import error_from_response
+
+            error_from_response(response, conn=conn)
         return response.status_code, body, False
     except Exception:
         logger.exception("Customer mutation commit POST failed for %s", plan.mutation_id)
@@ -581,13 +583,16 @@ def _get_mutation_status(
 
         response = requests.get(
             _status_url(base_url, mutation_id),
-            headers=_auth_headers(api_key),
-            params={"scope_key": DEFAULT_SCOPE_KEY},
+            headers=_auth_headers(conn, api_key),
             timeout=60,
         )
         body = response.json() if response.content else None
         if not isinstance(body, dict):
             body = None
+        if response.status_code >= 400:
+            from src.core.central_api import error_from_response
+
+            error_from_response(response, conn=conn)
         return response.status_code, body, False
     except Exception:
         logger.exception("Customer mutation status GET failed for %s", mutation_id)

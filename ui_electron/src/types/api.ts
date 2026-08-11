@@ -447,6 +447,123 @@ export interface SyncIdentityResponse {
     device: SyncDeviceIdentity;
 }
 
+export interface Store {
+    restaurant_id: string;
+    display_name: string;
+    timezone: string;
+    database_path: string;
+    authorization_state: 'authorized' | 'unauthorized';
+    local_address?: string | null;
+    is_bound: boolean;
+    menu_group_id?: string | null;
+    menu_capabilities?: string[];
+}
+
+export interface GlobalMenuStatus {
+    mode: 'legacy_restaurant_v1' | 'global_menu_v1';
+    restaurant_id?: string | null;
+    menu_group_id?: string | null;
+    schema_version: number;
+    active: boolean;
+    server_advertised: boolean;
+    capabilities: string[];
+    aggregation_advertised: boolean;
+    resolution_advertised: boolean;
+    mutation_advertised: boolean;
+    shared_pos_catalog_advertised: boolean;
+    resolution_ready: boolean;
+    mutation_ready: boolean;
+    aggregation_ready: boolean;
+    shared_pos_catalog_ready: boolean;
+    coverage_complete: boolean;
+    coverage_linked: number;
+    coverage_total: number;
+    quarantine_count: number;
+    catalog_revision: number;
+    mutation_revision: number;
+    event_cursor?: string | null;
+    assignment_cursor?: string | null;
+    history_cursor?: string | null;
+    bootstrap_status: 'not_started' | 'in_progress' | 'complete' | 'error';
+    reason: string;
+}
+
+export interface GlobalMenuPreview {
+    status: 'preview';
+    mutation_id: string;
+    preview_digest: string;
+    menu_group_id: string;
+    menu_group_revision: number;
+    mutation_type: string;
+    payload: Record<string, unknown>;
+    coverage_complete: boolean;
+    conflicts: Array<Record<string, unknown>>;
+    commit_allowed: boolean;
+    affects_entire_menu_group: true;
+    impact?: {
+        restaurants?: Array<Record<string, unknown>>;
+        totals?: {
+            assignments?: number;
+            mapping_rules?: number;
+            redirects?: number;
+        };
+        catalog?: Record<string, unknown>;
+        affected_restaurants?: number;
+        existing_assignments?: number;
+        mapping_rule_changes?: number;
+        variant_reconciliation?: unknown;
+    };
+}
+
+export interface GlobalMenuPreviewReference {
+    global_mutation_id?: string;
+    global_preview_digest?: string;
+    global_menu_group_id?: string;
+    global_preview_revision?: number;
+    global_coverage_complete?: boolean;
+    global_conflicts?: Array<Record<string, unknown>>;
+    global_mutation_type?: string;
+    global_mutation_payload?: Record<string, unknown>;
+}
+
+export interface GlobalMenuResolutionLocator {
+    locator_type: 'pos_item' | 'pos_addon' | 'itemcode' | 'alias';
+    locator_value: string;
+    rule_scope: 'restaurant' | 'group';
+    restaurant_id?: string | null;
+    confirm_group_wide: boolean;
+}
+
+export interface GlobalMenuResolutionContext {
+    local_menu_item_id: string;
+    local_variant_id?: string | null;
+    global_item_id?: string | null;
+    global_variant_id?: string | null;
+    canonical_name: string;
+    canonical_type: string;
+    is_verified: boolean;
+    variant?: {
+        canonical_name: string;
+        dimension: { unit: string; value?: number | null };
+    } | null;
+    locators: GlobalMenuResolutionLocator[];
+}
+
+/** Whether the All Stores option can be selected, and which stores it covers. */
+export interface AllStoresState {
+    available: boolean;
+    member_count: number;
+    members: string[];
+}
+
+export interface StoreSelectionResponse {
+    profile: Store | null;
+    selection_mode?: 'restaurant' | 'all' | null;
+    all_stores?: AllStoresState;
+    error?: string;
+    code?: string;
+}
+
 // --- API Response Wrappers ---
 
 export interface TopItemsResponse {

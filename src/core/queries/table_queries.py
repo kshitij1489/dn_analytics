@@ -7,6 +7,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM orders t",
         "default_sort": "created_on",
         "default_direction": "DESC",
+        "tie_breaker": "t.order_id",
         "sort_columns": {
             "order_id": "t.order_id",
             "petpooja_order_id": "t.petpooja_order_id",
@@ -97,6 +98,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM order_items t JOIN orders o ON t.order_id = o.order_id",
         "default_sort": "created_at",
         "default_direction": "DESC",
+        "tie_breaker": "t.order_item_id",
         "sort_columns": {
             "order_item_id": "t.order_item_id",
             "order_id": "t.order_id",
@@ -157,6 +159,63 @@ TABLE_QUERY_CONFIG = {
             "t.match_method",
         ],
     },
+    "order_item_addons": {
+        "select_sql": "SELECT t.*, oi.order_id, o.created_on",
+        "from_sql": """
+            FROM order_item_addons t
+            JOIN order_items oi ON t.order_item_id = oi.order_item_id
+            JOIN orders o ON oi.order_id = o.order_id
+        """,
+        "default_sort": "created_at",
+        "default_direction": "DESC",
+        "tie_breaker": "t.order_item_addon_id",
+        "sort_columns": {
+            "order_item_addon_id": "t.order_item_addon_id",
+            "order_item_id": "t.order_item_id",
+            "order_id": "oi.order_id",
+            "created_on": "o.created_on",
+            "created_at": "t.created_at",
+            "menu_item_id": "t.menu_item_id",
+            "variant_id": "t.variant_id",
+            "petpooja_addonid": "t.petpooja_addonid",
+            "name_raw": "t.name_raw",
+            "group_name": "t.group_name",
+            "quantity": "t.quantity",
+            "price": "t.price",
+            "addon_sap_code": "t.addon_sap_code",
+            "match_confidence": "t.match_confidence",
+            "match_method": "t.match_method",
+        },
+        "filter_columns": {
+            "order_item_addon_id": "t.order_item_addon_id",
+            "order_item_id": "t.order_item_id",
+            "order_id": "oi.order_id",
+            "created_on": "o.created_on",
+            "menu_item_id": "t.menu_item_id",
+            "variant_id": "t.variant_id",
+            "petpooja_addonid": "t.petpooja_addonid",
+            "name_raw": "t.name_raw",
+            "group_name": "t.group_name",
+            "addon_sap_code": "t.addon_sap_code",
+            "match_method": "t.match_method",
+        },
+        "search_columns": [
+            "t.order_item_addon_id",
+            "t.order_item_id",
+            "oi.order_id",
+            "o.created_on",
+            "t.menu_item_id",
+            "t.variant_id",
+            "t.petpooja_addonid",
+            "t.name_raw",
+            "t.group_name",
+            "t.quantity",
+            "t.price",
+            "t.addon_sap_code",
+            "t.match_confidence",
+            "t.match_method",
+        ],
+    },
     "customers": {
         "select_sql": "SELECT t.*",
         "from_sql": """
@@ -173,6 +232,7 @@ TABLE_QUERY_CONFIG = {
         """,
         "default_sort": "last_order_date",
         "default_direction": "DESC",
+        "tie_breaker": "t.customer_id",
         "sort_columns": {
             "customer_id": "t.customer_id",
             "customer_identity_key": "t.customer_identity_key",
@@ -213,6 +273,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM restaurants t",
         "default_sort": "restaurant_id",
         "default_direction": "DESC",
+        "tie_breaker": "t.restaurant_id",
         "sort_columns": {
             "restaurant_id": "t.restaurant_id",
             "petpooja_restid": "t.petpooja_restid",
@@ -243,6 +304,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM order_taxes t JOIN orders o ON t.order_id = o.order_id",
         "default_sort": "created_at",
         "default_direction": "DESC",
+        "tie_breaker": "t.order_tax_id",
         "sort_columns": {
             "order_tax_id": "t.order_tax_id",
             "order_id": "t.order_id",
@@ -277,6 +339,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM order_discounts t JOIN orders o ON t.order_id = o.order_id",
         "default_sort": "created_at",
         "default_direction": "DESC",
+        "tie_breaker": "t.order_discount_id",
         "sort_columns": {
             "order_discount_id": "t.order_discount_id",
             "order_id": "t.order_id",
@@ -311,6 +374,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM menu_items_summary_view t",
         "default_sort": "name",
         "default_direction": "ASC",
+        "tie_breaker": "t.menu_item_id",
         "sort_columns": {
             "menu_item_id": "t.menu_item_id",
             "name": "t.name",
@@ -338,6 +402,7 @@ TABLE_QUERY_CONFIG = {
         "from_sql": "FROM variants t",
         "default_sort": "variant_name",
         "default_direction": "ASC",
+        "tie_breaker": "t.variant_id",
         "sort_columns": {
             "variant_id": "t.variant_id",
             "variant_name": "t.variant_name",
@@ -426,11 +491,17 @@ def fetch_paginated_table(
         total_count = cursor.fetchone()[0]
 
         offset = (page - 1) * page_size
+        tie_breaker = config.get("tie_breaker")
+        tie_order_sql = (
+            f", {tie_breaker} ASC"
+            if tie_breaker and tie_breaker != sort_expression
+            else ""
+        )
         data_query = f"""
             {config['select_sql']}
             {config['from_sql']}
             {where_clause}
-            ORDER BY {sort_expression} {safe_sort_direction}
+            ORDER BY {sort_expression} {safe_sort_direction}{tie_order_sql}
             LIMIT ? OFFSET ?
         """
 

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from src.core.menu_merge_sync import pull_and_apply_menu_merge_events
-from src.core.sync_identity import get_menu_state_revision, get_menu_strict_mode_enabled
+from src.core.sync_identity import get_menu_state_revision
 
 
 class MenuMergeScopeStatePullTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class MenuMergeScopeStatePullTests(unittest.TestCase):
     @patch("src.core.menu_merge_sync._fetch_remote_events")
     @patch("src.core.menu_merge_sync.retry_quarantined_menu_merge_events", return_value={"attempted": 0, "resolved": 0})
     @patch("src.core.menu_merge_sync.is_assignment_apply_enabled", return_value=False)
-    def test_pull_stores_menu_revision_and_strict_flag(
+    def test_pull_stores_menu_revision(
         self,
         _assignment_enabled,
         _retry,
@@ -33,7 +33,7 @@ class MenuMergeScopeStatePullTests(unittest.TestCase):
         fetch_remote.return_value = {
             "events": [],
             "next_cursor": "cursor-1",
-            "scope_state": {"menu_revision": 99, "strict_mode_enabled": True},
+            "scope_state": {"menu_revision": 99},
             "error": None,
         }
 
@@ -45,7 +45,6 @@ class MenuMergeScopeStatePullTests(unittest.TestCase):
 
         self.assertIsNone(result.get("error"))
         self.assertIsNone(get_menu_state_revision(self.conn))
-        self.assertTrue(get_menu_strict_mode_enabled(self.conn))
 
 
 if __name__ == "__main__":

@@ -3,11 +3,12 @@ import { endpoints } from '../api';
 import { PaginatedDataTable, TabButton } from '../components';
 
 export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
-    const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'restaurants' | 'taxes' | 'discounts'>('orders');
+    const [activeTab, setActiveTab] = useState<'orders' | 'items' | 'addons' | 'restaurants' | 'taxes' | 'discounts'>('orders');
 
     const tabs = [
         { id: 'orders', label: '🛒 Orders' },
         { id: 'items', label: '📦 Order Items' },
+        { id: 'addons', label: '➕ AddOns' },
         { id: 'restaurants', label: '🍽️ Restaurants' },
         { id: 'taxes', label: '📊 Taxes' },
         { id: 'discounts', label: '💰 Discounts' },
@@ -31,6 +32,7 @@ export default function Orders({ lastDbSync }: { lastDbSync?: number }) {
 
             {activeTab === 'orders' && <PaginatedDataTable title="Orders" apiCall={endpoints.orders.orders} defaultSort="created_on" lastDbSync={lastDbSync} />}
             {activeTab === 'items' && <PaginatedDataTable title="Order Items" apiCall={endpoints.orders.items} defaultSort="created_at" lastDbSync={lastDbSync} />}
+            {activeTab === 'addons' && <PaginatedDataTable title="AddOns" apiCall={endpoints.orders.addons} defaultSort="created_at" lastDbSync={lastDbSync} />}
             {activeTab === 'restaurants' && <PaginatedDataTable title="Restaurants" apiCall={endpoints.orders.restaurants} defaultSort="restaurant_id" lastDbSync={lastDbSync} />}
             {activeTab === 'taxes' && <PaginatedDataTable title="Taxes" apiCall={endpoints.orders.taxes} defaultSort="created_at" lastDbSync={lastDbSync} />}
             {activeTab === 'discounts' && <PaginatedDataTable title="Discounts" apiCall={endpoints.orders.discounts} defaultSort="created_at" lastDbSync={lastDbSync} />}

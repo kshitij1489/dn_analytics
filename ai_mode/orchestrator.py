@@ -5,10 +5,13 @@ AI Mode: main orchestrator — correct → classify → plan actions → execute
 
 from typing import Dict, List, AsyncGenerator, Optional
 import json
+import time
 import asyncio
 
 from src.api.models import AIResponse
 from ai_mode.debug_log import set_debug_log
+from ai_mode.telemetry import start_trace, get_trace, reset_trace, summarize
+from ai_mode.llm.client import get_ai_model
 from ai_mode.llm.spelling import correct_query
 from ai_mode.llm.followup import (
     resolve_follow_up,
@@ -39,7 +42,7 @@ from ai_mode.handlers import (
     run_generate_summary_streaming,
     run_generate_report_streaming,
 )
-from ai_mode.logging import log_interaction
+from ai_mode.logging import log_interaction, persist_call_trace, persist_debug_log
 
 
 ACTION_HANDLERS = {
@@ -75,6 +78,9 @@ async def process_chat_stream(
     - {"type": "debug", "entries": [...]}  (when debug_log is provided)
     """
     raw_prompt = prompt
+    started_at = time.perf_counter()
+    # §4 telemetry: request-scoped per-step trace (tokens/latency/cache-vs-llm). Always on.
+    start_trace()
     if debug_log is not None:
         set_debug_log(debug_log)
         debug_log.append({
@@ -84,10 +90,17 @@ async def process_chat_stream(
             "output_preview": "",
         })
 
+    # §3.4: the pipeline steps below are synchronous and each makes 1+ blocking
+    # OpenAI calls. Run them via asyncio.to_thread so they don't stall the FastAPI
+    # event loop (other requests + the 5-min sync scheduler would otherwise queue
+    # behind them). to_thread copies the current context, so the telemetry/debug
+    # ContextVars (mutable lists) still receive appends from the worker thread; the
+    # DB connection is check_same_thread=False and used strictly sequentially here.
+
     # 1. Spelling
     yield json.dumps({"type": "status", "content": "Correcting spelling..."})
-    prompt = correct_query(conn, prompt)
-    
+    prompt = await asyncio.to_thread(correct_query, conn, prompt)
+
     # 2. Context / Follow-up / Reply-to-clarification
     previous_query_ignored = False
     query_status_this_turn = "complete"
@@ -99,7 +112,8 @@ async def process_chat_stream(
         previous_user_question = get_previous_user_question(history)
         if clarification_text and previous_user_question:
             # yield json.dumps({"type": "status", "content": "Checking clarification..."}) 
-            is_reply, prompt = resolve_reply_to_clarification(
+            is_reply, prompt = await asyncio.to_thread(
+                resolve_reply_to_clarification,
                 conn, clarification_text, previous_user_question, prompt
             )
             handled_reply_to_clarification = True
@@ -108,11 +122,11 @@ async def process_chat_stream(
 
     if not handled_reply_to_clarification:
         # yield json.dumps({"type": "status", "content": "Checking for follow-up..."})
-        prompt = resolve_follow_up(conn, prompt, history)
+        prompt = await asyncio.to_thread(resolve_follow_up, conn, prompt, history)
 
     # 3. Intent Classification
     yield json.dumps({"type": "status", "content": "Understanding intent..."})
-    classification = classify_intent(conn, prompt, history)
+    classification = await asyncio.to_thread(classify_intent, conn, prompt, history)
     intent = classification.get("intent", "GENERAL_CHAT")
     action_sequence = plan_actions(classification)
     
@@ -175,9 +189,11 @@ async def process_chat_stream(
             try:
                 if action == ASK_CLARIFICATION:
                     reason = classification.get("reason", "I need a bit more info.")
-                    part, context = run_ask_clarification(prompt, context, conn, reason=reason)
+                    part, context = await asyncio.to_thread(
+                        run_ask_clarification, prompt, context, conn, reason=reason
+                    )
                 else:
-                    part, context = handler(prompt, context, conn)
+                    part, context = await asyncio.to_thread(handler, prompt, context, conn)
                 
                 parts.append(part)
                 if part.get("clarification"):
@@ -239,6 +255,14 @@ async def process_chat_stream(
             explanation_parts.append(p["explanation"])
     explanation_for_log = " ".join(explanation_parts).strip() or None
 
+    # §4 telemetry: aggregate the per-step trace into ai_logs columns (model, tokens, call/hit counts).
+    trace = get_trace() or []
+    agg = summarize(trace)
+    try:
+        model_for_log = agg["model"] or get_ai_model(conn)
+    except Exception:
+        model_for_log = agg["model"]
+
     ai_resp.query_id = log_interaction(
         conn,
         prompt,
@@ -250,7 +274,15 @@ async def process_chat_stream(
         corrected_query=prompt,
         action_sequence=action_sequence,
         explanation=explanation_for_log,
+        execution_time_ms=int((time.perf_counter() - started_at) * 1000),
+        model=model_for_log,
+        total_prompt_tokens=agg["total_prompt_tokens"],
+        total_completion_tokens=agg["total_completion_tokens"],
+        llm_calls=agg["llm_calls"],
+        cache_hits=agg["cache_hits"],
     )
+    persist_call_trace(conn, ai_resp.query_id, trace)
+    reset_trace()
 
     if debug_log is not None:
         if step_error:
@@ -260,6 +292,9 @@ async def process_chat_stream(
                 "output_preview": step_error,
                 "input_preview": "",
             })
+        # §3.7: persist per query_id so the debug panel reads it back race-free
+        # (replaces the old cross-request in-memory globals).
+        persist_debug_log(conn, ai_resp.query_id, debug_log)
         set_debug_log(None)
         yield json.dumps({"type": "debug", "entries": debug_log})
 

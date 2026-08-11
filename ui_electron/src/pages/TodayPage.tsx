@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { endpoints } from '../api';
 import { ResizableTableWrapper, LoadingSpinner, Card, DateSelector } from '../components';
 import { CustomerLink } from '../components/CustomerLink';
+import { useStore } from '../contexts/StoreContext';
 import './TodayPage.css';
 
 interface SourceData {
@@ -28,6 +29,9 @@ interface Customer {
     items_ordered: string[];
     history_orders: number;
     history_spent: number;
+    restaurant_id?: string;
+    restaurant_name?: string;
+    row_key?: string;
 }
 
 interface Order {
@@ -39,6 +43,9 @@ interface Order {
     total: number;
     time: string;
     source: string;
+    restaurant_id?: string;
+    restaurant_name?: string;
+    row_key?: string;
 }
 
 interface SummaryData {
@@ -55,6 +62,7 @@ interface TodayPageProps {
 }
 
 export default function TodayPage({ lastDbSync }: TodayPageProps) {
+    const { isAllStores } = useStore();
     const [summary, setSummary] = useState<SummaryData | null>(null);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [customers, setCustomers] = useState<Customer[]>([]);
@@ -243,6 +251,7 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         <table className="standard-table">
                             <thead>
                                 <tr>
+                                    {isAllStores && <th>Store</th>}
                                     <th>Customer</th>
                                     <th className="text-right">Order Value</th>
                                     <th>Returning</th>
@@ -253,10 +262,16 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                             </thead>
                             <tbody>
                                 {customers.map((cust, idx) => (
-                                    <tr key={idx}>
+                                    <tr key={cust.row_key ?? idx}>
+                                        {isAllStores && <td>{cust.restaurant_name || cust.restaurant_id || '—'}</td>}
                                         <td>
                                             <span className="customer-name">
-                                                <CustomerLink customerId={cust.customer_id} name={cust.name} />
+                                                <CustomerLink
+                                                    customerId={cust.customer_id}
+                                                    name={cust.name}
+                                                    restaurantId={cust.restaurant_id}
+                                                    restaurantName={cust.restaurant_name}
+                                                />
                                                 {cust.is_verified && (
                                                     <span className="verified-badge" title="Verified">✓</span>
                                                 )}
@@ -299,6 +314,7 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                         <table className="standard-table">
                             <thead>
                                 <tr>
+                                    {isAllStores && <th>Store</th>}
                                     <th>Time</th>
                                     <th>Customer</th>
                                     <th>Order Items</th>
@@ -309,12 +325,15 @@ export default function TodayPage({ lastDbSync }: TodayPageProps) {
                             </thead>
                             <tbody>
                                 {orders.map((order) => (
-                                    <tr key={order.order_id}>
+                                    <tr key={order.row_key ?? order.order_id}>
+                                        {isAllStores && <td>{order.restaurant_name || order.restaurant_id || '—'}</td>}
                                         <td>{order.time}</td>
                                         <td>
                                             <CustomerLink
                                                 customerId={order.customer_id}
                                                 name={order.customer_name}
+                                                restaurantId={order.restaurant_id}
+                                                restaurantName={order.restaurant_name}
                                             />
                                         </td>
                                         <td>

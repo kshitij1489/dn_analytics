@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './App.css';
-import { endpoints } from './api';
+import { ALL_STORES_SCOPE, endpoints } from './api';
 import type { JobResponse } from './api';
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext'; // Import Context
 import { ErrorPopup } from './components';
 import type { PopupMessage } from './components';
+import { StoreSelector } from './components/StoreSelector';
+import { StoreProvider, useStore } from './contexts/StoreContext';
 
 // Components
 import Insights from './pages/Insights';
@@ -28,6 +30,18 @@ const getCloudSectionError = (section: any): string | null => {
   return typeof section.error === 'string' && section.error ? section.error : null;
 };
 
+/** Stores an All Stores job could not finish, named so a partial run is never silent. */
+const getFailedSyncStores = (job: JobResponse | null): { restaurant_name?: string; restaurant_id?: string; error?: string; status?: string }[] => {
+  const stats = job?.stats;
+  if (!stats || stats.scope !== 'all') return [];
+  return (stats.stores ?? []).filter((store: any) => store?.status !== 'completed');
+};
+
+const describeFailedSyncStores = (job: JobResponse | null): string =>
+  getFailedSyncStores(job)
+    .map((store) => `${store.restaurant_name || store.restaurant_id}: ${store.error || store.status}`)
+    .join('; ');
+
 const getSyncResultLabel = (job: JobResponse | null): string => {
   if (!job) {
     return 'Sync complete';
@@ -36,6 +50,19 @@ const getSyncResultLabel = (job: JobResponse | null): string => {
   const stats = job.stats;
   if (!stats) {
     return job.message || 'Sync complete';
+  }
+
+  // An All Stores job wraps one full sync per store. Its per-store outcome has
+  // to lead: a run where one store failed must never read as a clean success.
+  if (stats.scope === 'all') {
+    const coverage = `${stats.stores_completed ?? 0} of ${stats.stores_requested ?? 0} stores`;
+    const syncedOrders = Number(stats.orders ?? stats.fetched ?? 0);
+    const orderPart = syncedOrders > 0 ? `Synced ${syncedOrders} new orders` : 'No new orders to sync';
+    if (stats.outcome === 'completed') {
+      return `All Stores · ${coverage} · ${orderPart}`;
+    }
+    const failures = describeFailedSyncStores(job);
+    return `All Stores · ${coverage} · ${orderPart} · Failed: ${failures || job.message}`;
   }
 
   const cloud = stats.cloud_pull;
@@ -111,12 +138,19 @@ const getSyncResultLabel = (job: JobResponse | null): string => {
 
 function AppContent() {
   const { activeTab, setActiveTab } = useNavigation();
+  const {
+    selectedStore, selectionGeneration, loading: storeLoading,
+    isAllStores, allStores, completeness,
+  } = useStore();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
   // Sync State
   const [job, setJob] = useState<JobResponse | null>(null);
   const [polling, setPolling] = useState(false);
+  const [syncStarting, setSyncStarting] = useState(false);
+  const [syncingStoreName, setSyncingStoreName] = useState<string | null>(null);
+  const syncRequestPending = useRef(false);
   const [lastDbSync, setLastDbSync] = useState<number>(Date.now());
   const [showSyncStatus, setShowSyncStatus] = useState(false);
   const [popup, setPopup] = useState<PopupMessage | null>(null);
@@ -138,7 +172,7 @@ function AppContent() {
     // Check connection every 30 seconds
     const interval = setInterval(() => checkConnection(), 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectionGeneration, selectedStore?.restaurant_id, selectedStore?.authorization_state, storeLoading]);
 
   // Sync Polling Effect
   useEffect(() => {
@@ -153,6 +187,14 @@ function AppContent() {
             if (res.data.status === 'completed') {
               bumpLastDbSync();
               setShowSyncStatus(true);
+              // A partial All Stores run finishes "completed" with at least one
+              // store failed. Surface that store instead of implying success.
+              if (res.data.stats?.outcome === 'partial') {
+                setPopup({
+                  type: 'error',
+                  message: `Sync incomplete: ${describeFailedSyncStores(res.data) || res.data.message}`,
+                });
+              }
             } else if (res.data.status === 'failed') {
               setPopup({ type: 'error', message: `Sync Failed: ${res.data.message}` });
             }
@@ -184,9 +226,36 @@ function AppContent() {
     }
   };
 
-  const startSync = async () => {
+  const startSync = async (): Promise<boolean> => {
+    if (syncRequestPending.current || polling) return false;
     try {
-      const res = await endpoints.sync.run();
+      if (storeLoading) return false;
+      if (isAllStores) {
+        if (!allStores.available) {
+          setPopup({ type: 'info', message: 'All Stores needs two synced restaurants.' });
+          return false;
+        }
+      } else if (!selectedStore) {
+        setPopup({ type: 'info', message: 'Select a physical restaurant before syncing.' });
+        return false;
+      } else if (selectedStore.authorization_state !== 'authorized') {
+        setPopup({
+          type: 'info',
+          message: `${selectedStore.display_name} is available offline only and cannot be synced.`,
+        });
+        return false;
+      }
+      syncRequestPending.current = true;
+      setSyncStarting(true);
+      // The backend freezes the store list when the job is created; the label
+      // below names whichever physical store the job is currently working on.
+      const capturedStoreName = isAllStores
+        ? `All Stores (${allStores.member_count})`
+        : selectedStore!.display_name;
+      setSyncingStoreName(capturedStoreName);
+      const res = await endpoints.sync.run(
+        isAllStores ? ALL_STORES_SCOPE : selectedStore!.restaurant_id,
+      );
       setJob(res.data);
       setPolling(true);
 
@@ -206,9 +275,15 @@ function AppContent() {
           // Ignore - polling will handle it
         }
       }, 300);
+      return true;
     } catch (err) {
       console.error(err);
+      setSyncingStoreName(null);
       setPopup({ type: 'error', message: "Failed to start sync" });
+      return false;
+    } finally {
+      syncRequestPending.current = false;
+      setSyncStarting(false);
     }
   };
 
@@ -224,8 +299,15 @@ function AppContent() {
   };
 
   const status = getStatusDisplay();
+  const canSync = !storeLoading && (
+    isAllStores ? allStores.available : selectedStore?.authorization_state === 'authorized'
+  );
 
   const checkDataAndSync = async () => {
+    // Auto-sync bootstraps one empty profile. All Stores syncing is always an
+    // explicit button press.
+    if (storeLoading || isAllStores) return;
+    if (!selectedStore || selectedStore.authorization_state !== 'authorized') return;
     try {
       // Check if we have any menu types (cheap check for data existence)
       const res = await endpoints.menu.types();
@@ -233,8 +315,10 @@ function AppContent() {
         console.log("No data found, identifying as fresh install. Triggering auto-sync...");
 
         // Trigger Sync
-        startSync();
-        setPopup({ type: 'info', message: "No data found. Auto-sync started." });
+        const started = await startSync();
+        if (started) {
+          setPopup({ type: 'info', message: "No data found. Auto-sync started." });
+        }
       }
     } catch (e) {
       console.error("Auto-sync check failed", e);
@@ -265,6 +349,7 @@ function AppContent() {
           }}
         />
         <nav>
+          <StoreSelector />
           <button className={activeTab === 'insights' ? 'active' : ''} onClick={() => setActiveTab('insights')}>Insights</button>
           <button className={activeTab === 'today' ? 'active' : ''} onClick={() => setActiveTab('today')}>Today</button>
           <button className={activeTab === 'forecast' ? 'active' : ''} onClick={() => setActiveTab('forecast')}>Forecast</button>
@@ -323,24 +408,30 @@ function AppContent() {
             {/* Sync Button */}
             <button
               onClick={startSync}
-              disabled={polling || connectionStatus !== 'connected'}
-              title="Sync Database"
+              disabled={!canSync || syncStarting || polling || connectionStatus !== 'connected'}
+              title={selectedStore?.authorization_state === 'unauthorized'
+                ? 'This restaurant is available for offline read-only access'
+                : 'Sync Database'}
               style={{
                 width: '100%',
                 padding: '12px',
                 fontSize: '14px',
                 fontWeight: '600',
-                background: polling ? '#555' : '#E65100', // Dark Orange
+                background: (syncStarting || polling) ? '#555' : '#E65100', // Dark Orange
                 color: 'white',
                 border: 'none',
                 borderRadius: '8px',
-                cursor: (polling || connectionStatus !== 'connected') ? 'not-allowed' : 'pointer',
+                cursor: (!canSync || syncStarting || polling || connectionStatus !== 'connected') ? 'not-allowed' : 'pointer',
                 display: 'block',
                 marginTop: '10px',
                 textAlign: 'center'
               }}
             >
-              {polling ? 'Syncing...' : 'Sync DB'}
+              {syncStarting
+                ? `Starting ${syncingStoreName ?? 'restaurant'}...`
+                : polling
+                  ? `Syncing ${syncingStoreName ?? 'restaurant'}...`
+                  : 'Sync DB'}
             </button>
 
             {/* Sync Progress */}
@@ -364,7 +455,7 @@ function AppContent() {
                 marginTop: '4px',
                 fontWeight: 'bold'
               }}>
-                {getSyncResultLabel(job)}
+                {syncingStoreName ? `${syncingStoreName}: ` : ''}{getSyncResultLabel(job)}
               </div>
             )}
 
@@ -446,22 +537,63 @@ function AppContent() {
         </div>
       </aside>
       <main className="main-content">
-        {activeTab === 'insights' && <Insights lastDbSync={lastDbSync} />}
-        {activeTab === 'today' && <TodayPage lastDbSync={lastDbSync} />}
-        {activeTab === 'forecast' && <ForecastPage lastDbSync={lastDbSync} />}
-        {activeTab === 'chart' && <ChartPage lastDbSync={lastDbSync} />}
-        {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
-        {activeTab === 'customers' && (
-          <Customers
-            lastDbSync={lastDbSync}
-            onCustomerDataChanged={bumpLastDbSync}
-          />
-        )}
-        {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
-        {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
-        {activeTab === 'sql' && <SQLConsole />}
-        {activeTab === 'ai_mode' && <AIMode />}
-        {activeTab === 'configuration' && <Configuration />}
+        <div key={`${isAllStores ? ALL_STORES_SCOPE : selectedStore?.restaurant_id ?? 'unselected'}:${selectionGeneration}`}>
+          {isAllStores && (
+            <div className="card" style={{ margin: '0 0 16px', padding: '10px 14px' }}>
+              <strong>All Stores</strong> — read-only view over {allStores.member_count} restaurant
+              {allStores.member_count === 1 ? '' : 's'}. Menu and customer changes, SQL Console, AI Mode,
+              manual pulls, and reset need one physical restaurant.
+              {completeness && completeness.incompleteProfiles.length > 0 && (
+                <div style={{ marginTop: 6, color: '#B45309' }}>
+                  ⚠️ Incomplete: {completeness.incompleteProfiles
+                    .map((store) => `${store.restaurant_name || store.restaurant_id}${store.error ? ` (${store.error})` : ''}`)
+                    .join('; ')}. These stores are missing from the totals — they are not counted as zero.
+                </div>
+              )}
+              {completeness && completeness.excludedProfiles.length > 0 && (
+                <div style={{ marginTop: 6, color: '#B45309' }}>
+                  Excluded (no current authorization): {completeness.excludedProfiles
+                    .map((store) => store.restaurant_name || store.restaurant_id)
+                    .join('; ')}.
+                </div>
+              )}
+            </div>
+          )}
+          {!selectedStore && !isAllStores && activeTab !== 'configuration' ? (
+            <div className="card" style={{ maxWidth: 680, margin: '40px auto' }}>
+              <h2>Select a restaurant</h2>
+              <p>Choose one physical restaurant in the sidebar before opening analytics or syncing data.</p>
+            </div>
+          ) : isAllStores && (activeTab === 'sql' || activeTab === 'ai_mode') ? (
+            <div className="card" style={{ maxWidth: 680, margin: '40px auto' }}>
+              <h2>Select one restaurant</h2>
+              <p>
+                {activeTab === 'sql' ? 'SQL Console' : 'AI Mode'} runs against one physical restaurant
+                database. Arbitrary queries cannot be federated across stores safely, so choose a
+                restaurant in the sidebar.
+              </p>
+            </div>
+          ) : (
+            <>
+              {activeTab === 'insights' && <Insights lastDbSync={lastDbSync} />}
+              {activeTab === 'today' && <TodayPage lastDbSync={lastDbSync} />}
+              {activeTab === 'forecast' && <ForecastPage lastDbSync={lastDbSync} />}
+              {activeTab === 'chart' && <ChartPage lastDbSync={lastDbSync} />}
+              {activeTab === 'menu' && <Menu lastDbSync={lastDbSync} />}
+              {activeTab === 'customers' && (
+                <Customers
+                  lastDbSync={lastDbSync}
+                  onCustomerDataChanged={bumpLastDbSync}
+                />
+              )}
+              {activeTab === 'orders' && <Orders lastDbSync={lastDbSync} />}
+              {activeTab === 'inventory' && <ComingSoon title="Inventory & COGS" />}
+              {activeTab === 'sql' && <SQLConsole />}
+              {activeTab === 'ai_mode' && <AIMode />}
+              {activeTab === 'configuration' && <Configuration />}
+            </>
+          )}
+        </div>
       </main>
     </div >
   );
@@ -471,9 +603,11 @@ function App() {
   const [activeTab, setActiveTab] = useState('insights');
 
   return (
-    <NavigationProvider activeTab={activeTab} setActiveTab={setActiveTab}>
-      <AppContent />
-    </NavigationProvider>
+    <StoreProvider>
+      <NavigationProvider activeTab={activeTab} setActiveTab={setActiveTab}>
+        <AppContent />
+      </NavigationProvider>
+    </StoreProvider>
   );
 }
 

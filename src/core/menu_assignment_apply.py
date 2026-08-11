@@ -9,7 +9,7 @@ server_seq guard so replay is idempotent and order-independent.
 
 Extraction semantics are shared with the Dachnona server
 (desktop_analytics_app_sync/services/assignment_state.py) and pinned by
-contracts/menu_merge_event_fixtures.json in both repos.
+contracts/fixtures/1/menu_merge_event_fixtures.json in both repos.
 
 Normalized assignment dicts always carry order_item_id and menu_item_id.
 The variant_id / is_verified keys are OMITTED when the event does not specify
@@ -23,6 +23,12 @@ import os
 from typing import Any, Dict, List, Optional, Set
 
 from src.core.menu_assignment_schema import ensure_assignment_sync_schema
+from utils.id_generator import generate_deterministic_id
+from src.core.order_item_key import (
+    AssignmentKeyIndex,
+    has_local_pos_backing,
+    update_local_order_rows_for_assignment_key,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -61,7 +67,7 @@ def coerce_server_seq(value: Any) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
-# Extraction (shared with server; see contracts/menu_merge_event_fixtures.json)
+# Extraction (shared with server; see contracts/fixtures/1/menu_merge_event_fixtures.json)
 # ---------------------------------------------------------------------------
 
 
@@ -241,6 +247,16 @@ def ensure_menu_item_exists(conn, item: Dict[str, Any]) -> None:
     )
 
 
+def _menu_item_exists(conn, menu_item_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM menu_items WHERE menu_item_id = ? LIMIT 1",
+            (menu_item_id,),
+        ).fetchone()
+        is not None
+    )
+
+
 def ensure_variant_exists(conn, variant_id: Any, variant_name: Any) -> None:
     normalized_variant_id = _normalize_variant_value(variant_id)
     if normalized_variant_id is None:
@@ -274,6 +290,13 @@ def _build_item_snapshots(event: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             menu_item_id = str(item.get("menu_item_id") or "").strip()
             if menu_item_id:
                 snapshots[menu_item_id] = item
+    merge_payload = event.get("merge_payload")
+    if isinstance(merge_payload, dict):
+        for item in merge_payload.get("item_snapshots") or []:
+            if isinstance(item, dict):
+                menu_item_id = str(item.get("menu_item_id") or "").strip()
+                if menu_item_id:
+                    snapshots[menu_item_id] = item
     return snapshots
 
 
@@ -300,7 +323,19 @@ def _build_variant_names(event: Dict[str, Any]) -> Dict[str, str]:
         note(resolution.get("source_variant_id"), resolution.get("source_variant_name"))
         note(resolution.get("target_variant_id"), resolution.get("target_variant_name"))
 
+    for variant in merge_payload.get("variant_snapshots") or []:
+        if isinstance(variant, dict):
+            note(variant.get("variant_id"), variant.get("variant_name"))
+
     return names
+
+
+def _is_derived_assignment_event(event: Dict[str, Any]) -> bool:
+    merge_payload = event.get("merge_payload")
+    return (
+        isinstance(merge_payload, dict)
+        and str(merge_payload.get("kind") or "").strip() == "derived_assignment_v1"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -311,23 +346,33 @@ def _build_variant_names(event: Dict[str, Any]) -> Dict[str, str]:
 def _row_authored_locally(conn, assignment_seq: Any) -> bool:
     """
     True when the event that last wrote this row (by server_seq) was one of our
-    own — i.e. its remote_event_id exists in our outbox. Used to notify the
-    local user when a peer's later decision overwrites theirs.
+    own. Used to notify the local user when a peer's later decision overwrites
+    theirs.
+
+    A strict commit self-applies through the same pull applier a peer runs, so a
+    self-authored event lands in menu_merge_remote_events indistinguishable from a
+    peer's except by its attribution. Authorship is therefore decided by matching
+    the recorded event's install_id to this install's own (the legacy outbox this
+    used to join is no longer written).
     """
-    seq = coerce_server_seq(assignment_seq)
-    if seq is None:
+    event = lookup_event_by_server_seq(conn, assignment_seq)
+    if not event:
         return False
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM menu_merge_remote_events r
-        JOIN menu_merge_sync_events s ON s.event_id = r.remote_event_id
-        WHERE r.server_seq = ?
-        LIMIT 1
-        """,
-        (seq,),
-    ).fetchone()
-    return row is not None
+    attribution = event.get("attribution")
+    if not isinstance(attribution, dict):
+        return False
+    device = attribution.get("device")
+    event_install_id = str(device.get("install_id")) if isinstance(device, dict) else ""
+    if not event_install_id:
+        return False
+
+    # Read the persisted install_id only — get_device_identity would lazily
+    # mint and WRITE one inside this pull-apply transaction. Unset means the
+    # identity was never established, so nothing here can be self-authored.
+    from src.core.sync_identity import get_persisted_install_id
+
+    local_install_id = str(get_persisted_install_id(conn) or "")
+    return bool(local_install_id) and event_install_id == local_install_id
 
 
 def insert_supersede_notice(
@@ -445,10 +490,16 @@ def apply_assignments(
 
     snapshots = _build_item_snapshots(event)
     variant_names = _build_variant_names(event)
+    derived_assignment_event = _is_derived_assignment_event(event)
+    # One order_items scan for the whole event instead of one per name-derived
+    # key (has_local_pos_backing + the order-row updates below).
+    key_index = AssignmentKeyIndex(conn)
 
     stats: Dict[str, Any] = {
         "rows_applied": 0,
         "rows_missing": 0,
+        "menu_items_missing": 0,
+        "derived_rows_skipped_existing": [],
         "stale_rows": [],
         "superseded": [],
         "touched_menu_item_ids": set(),
@@ -460,8 +511,20 @@ def apply_assignments(
         if not order_item_id or not menu_item_id:
             continue
 
+        # menu_item_variants.variant_id is NOT NULL, so a null/sentinel wire
+        # value cannot be stored: downgrade it to "variant unspecified" — the
+        # existing row keeps its locally derived variant, and a brand-new row
+        # falls back to the UNKNOWN variant below. (order_items.variant_id is
+        # nullable, but blanking it while the mapping row keeps a variant would
+        # diverge the two, so the same downgrade applies there.)
         variant_specified = "variant_id" in assignment
-        variant_value = assignment.get("variant_id") if variant_specified else None
+        variant_value = (
+            _normalize_variant_value(assignment.get("variant_id"))
+            if variant_specified
+            else None
+        )
+        if variant_specified and variant_value is None:
+            variant_specified = False
         verify_specified = "is_verified" in assignment
         verify_value = assignment.get("is_verified") if verify_specified else None
 
@@ -475,8 +538,18 @@ def apply_assignments(
             (order_item_id,),
         ).fetchone()
 
+        local_update_variant_specified = variant_specified
+        local_update_variant_value = variant_value
+
         if row is not None:
             row_seq = coerce_server_seq(row["assignment_seq"])
+            if derived_assignment_event and (
+                row_seq is not None or int(row["pending_local"] or 0)
+            ):
+                stats["derived_rows_skipped_existing"].append(
+                    {"order_item_id": order_item_id, "assignment_seq": row_seq}
+                )
+                continue
             if server_seq is not None and row_seq is not None and row_seq >= server_seq:
                 stats["stale_rows"].append(
                     {"order_item_id": order_item_id, "assignment_seq": row_seq}
@@ -488,6 +561,16 @@ def apply_assignments(
             ensure_menu_item_exists(conn, snapshot)
         if variant_specified and variant_value is not None:
             ensure_variant_exists(conn, variant_value, variant_names.get(variant_value))
+
+        # The menu_item_variants.menu_item_id FK must be satisfiable. Server
+        # streams (assignment snapshot, baseline, merge events) can reference a
+        # legacy/collapsed menu_item_id this install never materialized and that
+        # carries no item snapshot to self-heal from. Writing it would trip the
+        # FOREIGN KEY and abort the ENTIRE menu pull ("Sync Failed"); skip the
+        # row and report it so one dangling id can't sink the whole sync.
+        if not _menu_item_exists(conn, menu_item_id):
+            stats["menu_items_missing"] += 1
+            continue
 
         if row is not None:
             # is_verified is deliberately NOT part of the change set on an
@@ -527,14 +610,19 @@ def apply_assignments(
             )
             stats["touched_menu_item_ids"].add(str(row["menu_item_id"]))
         else:
-            order_row = conn.execute(
-                "SELECT 1 FROM order_items WHERE order_item_id = ? LIMIT 1",
-                (order_item_id,),
-            ).fetchone()
-            if order_row is None:
+            if not has_local_pos_backing(conn, order_item_id, key_index=key_index):
                 # This install has never seen the order item; nothing to move.
                 stats["rows_missing"] += 1
                 continue
+            insert_variant_id = variant_value
+            if insert_variant_id is None:
+                # No wire variant and no local row to inherit one from; the
+                # column is NOT NULL, so park the mapping on UNKNOWN (same
+                # deterministic id the clustering parser uses).
+                insert_variant_id = generate_deterministic_id("UNKNOWN")
+                ensure_variant_exists(conn, insert_variant_id, "UNKNOWN")
+            local_update_variant_specified = True
+            local_update_variant_value = insert_variant_id
             conn.execute(
                 """
                 INSERT INTO menu_item_variants (
@@ -546,46 +634,20 @@ def apply_assignments(
                 (
                     order_item_id,
                     menu_item_id,
-                    variant_value,
+                    insert_variant_id,
                     int(verify_value) if verify_specified and verify_value is not None else 1,
                     server_seq,
                 ),
             )
 
-        if variant_specified:
-            conn.execute(
-                """
-                UPDATE order_items
-                SET menu_item_id = ?, variant_id = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE order_item_id = ?
-                """,
-                (menu_item_id, variant_value, order_item_id),
-            )
-            conn.execute(
-                """
-                UPDATE order_item_addons
-                SET menu_item_id = ?, variant_id = ?
-                WHERE order_item_id = ?
-                """,
-                (menu_item_id, variant_value, order_item_id),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE order_items
-                SET menu_item_id = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE order_item_id = ?
-                """,
-                (menu_item_id, order_item_id),
-            )
-            conn.execute(
-                """
-                UPDATE order_item_addons
-                SET menu_item_id = ?
-                WHERE order_item_id = ?
-                """,
-                (menu_item_id, order_item_id),
-            )
+        update_local_order_rows_for_assignment_key(
+            conn,
+            order_item_id,
+            menu_item_id=menu_item_id,
+            variant_id=local_update_variant_value,
+            variant_specified=local_update_variant_specified,
+            key_index=key_index,
+        )
 
         stats["touched_menu_item_ids"].add(menu_item_id)
         stats["rows_applied"] += 1

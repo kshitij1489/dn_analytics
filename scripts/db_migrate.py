@@ -1,3 +1,4 @@
+import argparse
 import sqlite3
 import os
 import sys
@@ -5,29 +6,22 @@ import sys
 # Add project root to path to use existing connection logic
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.core.db.connection import get_db_connection
+from src.core.db.connection import get_profile_connection
+from src.core.profiles import get_profile
 from ai_mode.cache.cache_config import CACHE_DB_PATH
 
-def run_migrations():
+def run_migrations(restaurant_id: str):
     print("--- Starting Database Migrations ---")
-    
-    # 1. Main Database Migration
-    print(f"\n1. Applying Main Schema to analytics.db...")
+
+    # 1. Main Database Migration — one named profile, never an implicit default.
+    print(f"\n1. Applying Main Schema to restaurant profile {restaurant_id}...")
     try:
-        conn, msg = get_db_connection()
-        if not conn:
-            print(f"   Error connecting to main DB: {msg}")
-        else:
-            schema_file = 'database/schema_sqlite.sql'
-            if os.path.exists(schema_file):
-                with open(schema_file, 'r') as f:
-                    schema_sql = f.read()
-                # Use executescript to handle multiple statements
-                conn.executescript(schema_sql)
-                conn.commit()
-                print(f"   Successfully applied {schema_file}")
-            else:
-                print(f"   Warning: {schema_file} not found.")
+        # get_profile_connection applies the canonical schema owner and verifies
+        # the identity row, so this script does not re-inline or re-run schema DDL.
+        conn, _ = get_profile_connection(get_profile(restaurant_id))
+        try:
+            print("   Successfully applied database/schema_sqlite.sql")
+        finally:
             conn.close()
     except Exception as e:
         print(f"   Error migrating main DB: {e}")
@@ -53,4 +47,6 @@ def run_migrations():
     print("\n--- Migrations Complete ---")
 
 if __name__ == "__main__":
-    run_migrations()
+    parser = argparse.ArgumentParser(description="Apply schema migrations to one restaurant profile")
+    parser.add_argument("--restaurant-id", required=True, help="Bound restaurant profile to migrate")
+    run_migrations(parser.parse_args().restaurant_id)

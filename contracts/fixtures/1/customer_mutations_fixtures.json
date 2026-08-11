@@ -1,0 +1,276 @@
+{
+  "description": "Customer mutation commit payload fixtures for 100% coverage of request/response payloads (contract v1.2, §21). Covers applied + undo commits, conflict, malformed undo, and status reconcile.",
+  "fixtures": [
+    {
+      "name": "customer_mutations_commit_request_applied",
+      "description": "Commit a customer_merge.applied mutation (§21.4).",
+      "endpoint": "POST /desktop-analytics-sync/customer-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "987e6543-e21b-12d3-a456-426614174000",
+        "mutation_type": "customer_merge.applied",
+        "expected_customer_revision": 41,
+        "event": {
+          "remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+          "schema_version": 1,
+          "event_type": "customer_merge.applied",
+          "occurred_at": "2024-02-05 12:00:00",
+          "attribution": {
+            "employee": {
+              "employee_id": "0001",
+              "name": "Owner"
+            },
+            "device": {
+              "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+              "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+              "device_label": "MacBook-Pro",
+              "platform": "Darwin",
+              "platform_release": "24.5.0",
+              "machine": "arm64"
+            }
+          },
+          "source_customer": {
+            "snapshot": {
+              "name": "Rahul Sharma",
+              "phone": "9999999999",
+              "address": "HSR Layout",
+              "gstin": null,
+              "total_orders": 1,
+              "total_spent": 80.0,
+              "last_order_date": "2024-02-03 10:00:00",
+              "is_verified": false
+            },
+            "portable_locators": {
+              "customer_identity_key": "phone:source",
+              "phone_hash": "8c1f1046219ddd216a023f792356ddf127fce372a8d304f8115b01f9501ef7c3",
+              "name_address_hash": "7cb95a5f8f495f7b4454d7b2207c1c12ab57f2e1d1d5656e2e6ae4d3e15cf287",
+              "name_normalized": "rahul sharma",
+              "address_normalized": "hsr layout",
+              "address_book_hashes": [
+                "93d0a31ea8c636f0f4096f3c490769f2f255f78e7baf8854b45ea0f59052785e"
+              ]
+            }
+          },
+          "target_customer": {
+            "snapshot": {
+              "name": "Rahul S.",
+              "phone": null,
+              "address": "HSR Layout",
+              "gstin": null,
+              "total_orders": 1,
+              "total_spent": 120.0,
+              "last_order_date": "2024-02-04 10:00:00",
+              "is_verified": false
+            },
+            "portable_locators": {
+              "customer_identity_key": "addr:target",
+              "phone_hash": null,
+              "name_address_hash": "c2e16ebf6f3f5f7dab2db4b74df4c8f3817afef27506f3ccb452fc6d33f34551",
+              "name_normalized": "rahul s.",
+              "address_normalized": "hsr layout",
+              "address_book_hashes": [
+                "93d0a31ea8c636f0f4096f3c490769f2f255f78e7baf8854b45ea0f59052785e"
+              ]
+            }
+          },
+          "merge_metadata": {
+            "similarity_score": 0.98,
+            "model_name": "duplicate_matcher_v1",
+            "reasons": ["phone exact match"],
+            "copied_address_count": 0,
+            "target_before_fields": {
+              "phone": null,
+              "address": "HSR Layout",
+              "gstin": null,
+              "is_verified": false
+            },
+            "target_is_verified_after_merge": true,
+            "mark_target_verified": true
+          },
+          "moved_orders": {
+            "count": 1,
+            "portable_refs": [
+              {
+                "petpooja_order_id": "PP-101",
+                "stream_id": 5001,
+                "event_id": "evt-101",
+                "aggregate_id": "agg-101",
+                "created_on": "2024-02-03 10:00:00",
+                "total": 80.0,
+                "local_order_id": 101
+              }
+            ]
+          },
+          "local_refs": {
+            "merge_id": 999,
+            "source_customer_id": 11,
+            "target_customer_id": 22,
+            "moved_order_ids": [444],
+            "inserted_target_address_ids": [],
+            "removed_target_address_ids": []
+          }
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "customer_mutations_commit_request_undone",
+      "description": "Commit a customer_merge.undone mutation with reverts_remote_event_id (§21.4).",
+      "endpoint": "POST /desktop-analytics-sync/customer-mutations/commit",
+      "payload": {
+        "schema_version": 1,
+        "mutation_id": "a87e6543-e21b-12d3-a456-426614174000",
+        "mutation_type": "customer_merge.undone",
+        "expected_customer_revision": 42,
+        "event": {
+          "remote_event_id": "74fc71320f9b4b598c7dcb2f6de716ef",
+          "schema_version": 1,
+          "event_type": "customer_merge.undone",
+          "occurred_at": "2024-02-05 13:00:00",
+          "reverts_remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+          "attribution": {
+            "employee": {
+              "employee_id": "0001",
+              "name": "Owner"
+            },
+            "device": {
+              "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+              "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+              "device_label": "MacBook-Pro",
+              "platform": "Darwin",
+              "platform_release": "24.5.0",
+              "machine": "arm64"
+            }
+          },
+          "source_customer": {},
+          "target_customer": {},
+          "merge_metadata": {},
+          "undo_metadata": {
+            "restored_order_count": 1,
+            "restored_target_fields": [
+              "address",
+              "gstin",
+              "is_verified",
+              "phone"
+            ],
+            "original_merged_at": "2024-02-05 12:00:00"
+          },
+          "moved_orders": {
+            "count": 1,
+            "portable_refs": []
+          },
+          "local_refs": {
+            "merge_id": 999
+          }
+        },
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-5fd6f0df7d8ef4d7fba2a134",
+          "install_id": "install-0b3185b5294f4da1b1d13c39d637f5ec",
+          "device_label": "MacBook-Pro"
+        }
+      }
+    },
+    {
+      "name": "customer_mutations_commit_response_200",
+      "description": "Accepted commit response with customer_merge_cursor (§21.5).",
+      "endpoint": "POST /desktop-analytics-sync/customer-mutations/commit",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "987e6543-e21b-12d3-a456-426614174000",
+        "customer_revision": 42,
+        "accepted_events": [
+          {
+            "remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+            "server_seq": 456,
+            "server_ingested_at": "2026-07-09T12:00:01Z"
+          }
+        ],
+        "customer_merge_cursor": "customer-merge-cursor-000001"
+      }
+    },
+    {
+      "name": "customer_mutations_commit_response_409",
+      "description": "Conflict — expected_customer_revision stale, conflicting_events with customer_keys (§21.6).",
+      "endpoint": "POST /desktop-analytics-sync/customer-mutations/commit",
+      "http_status": 409,
+      "payload": {
+        "status": "conflict",
+        "error": "Customer state changed on the server. Pull latest customer state and retry.",
+        "expected_customer_revision": 41,
+        "current_customer_revision": 42,
+        "conflicting_events": [
+          {
+            "remote_event_id": "event-from-other-app",
+            "server_seq": 456,
+            "server_ingested_at": "2026-07-09T12:05:00Z",
+            "attribution": {
+              "employee": {
+                "employee_id": "emp-456",
+                "name": "Other User"
+              },
+              "device": {
+                "device_id": "dev-789",
+                "install_id": "inst-012"
+              }
+            },
+            "customer_keys": [
+              "8c1f1046219ddd216a023f792356ddf127fce372a8d304f8115b01f9501ef7c3",
+              "c2e16ebf6f3f5f7dab2db4b74df4c8f3817afef27506f3ccb452fc6d33f34551"
+            ]
+          }
+        ],
+        "recommended_action": "pull_latest_customer_state"
+      }
+    },
+    {
+      "name": "customer_mutations_commit_response_422",
+      "description": "Undo references an unknown reverts_remote_event_id (§21.6).",
+      "endpoint": "POST /desktop-analytics-sync/customer-mutations/commit",
+      "http_status": 422,
+      "payload": {
+        "error": "Undo event references unknown remote_event_id 'nonexistent-event-id' in this scope."
+      }
+    },
+    {
+      "name": "customer_mutations_status_response_200",
+      "description": "Mutation was committed — returns stored accepted response for idempotent reconcile (§21.8).",
+      "endpoint": "GET /desktop-analytics-sync/customer-mutations/{mutation_id}",
+      "http_status": 200,
+      "payload": {
+        "status": "accepted",
+        "mutation_id": "987e6543-e21b-12d3-a456-426614174000",
+        "customer_revision": 42,
+        "accepted_events": [
+          {
+            "remote_event_id": "4f3198a5f96f4750b8f2dcdab0e2d89f",
+            "server_seq": 456,
+            "server_ingested_at": "2026-07-09T12:00:01Z"
+          }
+        ],
+        "customer_merge_cursor": "customer-merge-cursor-000001"
+      }
+    },
+    {
+      "name": "customer_mutations_status_response_404",
+      "description": "Mutation was never committed — client should re-POST (§21.8).",
+      "endpoint": "GET /desktop-analytics-sync/customer-mutations/{mutation_id}",
+      "http_status": 404,
+      "payload": {
+        "error": "Mutation not found."
+      }
+    }
+  ]
+}

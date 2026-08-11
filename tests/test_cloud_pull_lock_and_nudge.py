@@ -1,25 +1,25 @@
 """
-Phase C5: shared pull lock (scheduler vs Sync DB job) and the fire-and-forget
-menu-merge push nudge after local commits.
+Phase C5: shared pull lock (scheduler vs Sync DB job).
 """
 
 import sqlite3
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, patch
 
 from src.core.customer_mutation_commit import pull_latest_customer_state
-from src.core.menu_merge_push_nudge import nudge_menu_merge_push_async
 from src.core.menu_mutation_commit import pull_latest_menu_state
 from src.core.services.cloud_pull_orchestrator import (
     CLOUD_PULL_LOCK,
     run_best_effort_cloud_pulls,
 )
+from tests.profile_test_helpers import bind_test_profile
 
 
 def _conn_with_cloud_config(url=None):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE system_config (key TEXT PRIMARY KEY, value TEXT)")
+    bind_test_profile(conn)
     if url:
         conn.execute(
             "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', ?)", (url,)
@@ -32,6 +32,58 @@ def _conn_with_cloud_config(url=None):
 
 
 class CloudPullLockTests(unittest.TestCase):
+    def test_global_background_pull_uses_trusted_profile_sync_context(self) -> None:
+        conn = _conn_with_cloud_config(url="https://cloud.example")
+        self.addCleanup(conn.close)
+        global_capability = Mock(active=True)
+        with patch(
+            "src.core.config.cloud_sync_config.get_cloud_sync_config",
+            return_value=("https://cloud.example", "k"),
+        ), patch(
+            "src.core.global_menu_schema.resolve_global_menu_capability",
+            return_value=global_capability,
+        ) as capability_resolver, patch(
+            "src.core.global_menu_sync.pull_global_menu_state",
+            return_value={"status": "applied"},
+        ) as global_pull, patch(
+            "src.core.global_menu_sync.pull_global_assignment_snapshot",
+            return_value={"status": "applied"},
+        ) as assignment_pull, patch(
+            "src.core.global_menu_history.pull_global_menu_history",
+            return_value={"status": "applied"},
+        ) as history_pull, patch(
+            "src.core.menu_bootstrap_sync.get_menu_bootstrap_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_assignment_bootstrap.get_menu_assignments_snapshot_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_mapping_verification_sync.get_menu_mapping_verification_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.menu_merge_sync.get_menu_merge_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.customer_merge_sync.get_customer_merge_pull_endpoint",
+            return_value=None,
+        ), patch(
+            "src.core.forecast_sync.get_forecast_delta_endpoint",
+            return_value=None,
+        ):
+            result = run_best_effort_cloud_pulls(conn, blocking=False)
+
+        self.assertTrue(result["attempted"])
+        capability_resolver.assert_called_once_with(conn, allow_profile_sync=True)
+        global_pull.assert_called_once_with(
+            conn, auth="k", allow_profile_sync=True
+        )
+        assignment_pull.assert_called_once_with(
+            conn, auth="k", allow_profile_sync=True
+        )
+        history_pull.assert_called_once_with(
+            conn, auth="k", allow_profile_sync=True
+        )
+
     def test_nonblocking_pull_skips_while_lock_is_held(self) -> None:
         conn = _conn_with_cloud_config()
         self.addCleanup(conn.close)
@@ -56,7 +108,10 @@ class CloudPullLockTests(unittest.TestCase):
         ) as locked_body:
             summary = run_best_effort_cloud_pulls(conn, blocking=False)
         locked_body.assert_called_once()
-        self.assertEqual(summary, {"attempted": False})
+        self.assertEqual(
+            summary,
+            {"attempted": False, "restaurant_id": "test-restaurant"},
+        )
         # The lock must be free again after the run.
         self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
         CLOUD_PULL_LOCK.release()
@@ -197,52 +252,6 @@ class CloudPullLockTests(unittest.TestCase):
             run_best_effort_cloud_pulls(conn, blocking=False)
 
         pull_customer_state.assert_called_once_with(conn, already_locked=True)
-
-
-class MenuMergePushNudgeTests(unittest.TestCase):
-    def test_no_thread_without_cloud_config(self) -> None:
-        conn = _conn_with_cloud_config(url=None)
-        self.addCleanup(conn.close)
-        with patch("threading.Thread") as thread_cls:
-            started = nudge_menu_merge_push_async(conn)
-        self.assertFalse(started)
-        thread_cls.assert_not_called()
-
-    def test_thread_started_with_cloud_config(self) -> None:
-        conn = _conn_with_cloud_config(url="https://cloud.example")
-        self.addCleanup(conn.close)
-        thread = MagicMock()
-        with patch("threading.Thread", return_value=thread) as thread_cls:
-            started = nudge_menu_merge_push_async(conn)
-        self.assertTrue(started)
-        thread.start.assert_called_once()
-        kwargs = thread_cls.call_args.kwargs
-        self.assertTrue(kwargs["daemon"])
-        self.assertEqual(
-            kwargs["args"][0],
-            "https://cloud.example/desktop-analytics-sync/menu-merges/ingest",
-        )
-
-    def test_local_merge_triggers_nudge(self) -> None:
-        from tests.test_menu_assignment_apply import make_install_db
-        from utils import menu_utils
-
-        conn = make_install_db()
-        self.addCleanup(conn.close)
-        with patch("utils.menu_utils.export_to_backups", return_value=True), patch(
-            "utils.menu_utils._clear_impacted_models", return_value=None
-        ), patch(
-            "src.core.menu_merge_push_nudge.nudge_menu_merge_push_async"
-        ) as nudge:
-            result = menu_utils.merge_menu_items(conn, "item_a", "item_b")
-            self.assertEqual(result["status"], "success")
-            nudge.assert_called_once()
-
-            # Remote applies (emit_sync_event=False) must not nudge.
-            nudge.reset_mock()
-            result = menu_utils.undo_merge(conn, int(result["merge_id"]), emit_sync_event=False)
-            self.assertEqual(result["status"], "success")
-            nudge.assert_not_called()
 
 
 if __name__ == "__main__":

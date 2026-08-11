@@ -1,12 +1,37 @@
+import json
 import sqlite3
 import unittest
+from unittest.mock import Mock, patch
 
+from src.core.customer_merge_sync import ensure_customer_merge_pull_tables
 from src.core.queries.customer_merge_queries import merge_customers, undo_customer_merge
 from src.core.queries.customer_similarity_helpers import fetch_customer_summary
 from src.core.queries.customer_similarity_queries import (
     fetch_customer_merge_preview,
     fetch_customer_similarity_candidates,
 )
+from src.core.sync_identity import set_customer_state_revision
+from tests.profile_test_helpers import bind_test_profile
+
+
+def _accept_post(*_args, **kwargs):
+    """Generic strict-commit accept: echo the plan's event back as accepted."""
+    body = kwargs["json"]
+    event = body["event"]
+    accepted = {
+        "status": "accepted",
+        "mutation_id": body["mutation_id"],
+        "customer_revision": 2,
+        "accepted_events": [
+            {
+                "remote_event_id": event["remote_event_id"],
+                "server_seq": 1,
+                "server_ingested_at": "2026-07-06T10:00:00Z",
+            }
+        ],
+        "customer_merge_cursor": "cursor-1",
+    }
+    return Mock(status_code=200, content=json.dumps(accepted), json=lambda: accepted)
 
 
 class CustomerMergeRuleTests(unittest.TestCase):
@@ -17,7 +42,9 @@ class CustomerMergeRuleTests(unittest.TestCase):
             """
             CREATE TABLE customers (
                 customer_id INTEGER PRIMARY KEY,
+                customer_identity_key TEXT,
                 name TEXT,
+                name_normalized TEXT,
                 phone TEXT,
                 address TEXT,
                 gstin TEXT,
@@ -47,6 +74,9 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 order_id INTEGER PRIMARY KEY,
                 customer_id INTEGER NOT NULL,
                 petpooja_order_id TEXT,
+                stream_id INTEGER,
+                event_id TEXT,
+                aggregate_id TEXT,
                 total REAL NOT NULL DEFAULT 0,
                 created_on TEXT,
                 updated_at TEXT
@@ -80,20 +110,35 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 undone_at TEXT,
                 undo_context TEXT
             );
+
+            CREATE TABLE customer_merge_sync_events (
+                event_id TEXT PRIMARY KEY,
+                merge_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                upload_attempted_at TEXT,
+                uploaded_at TEXT,
+                last_error TEXT,
+                UNIQUE (merge_id, event_type)
+            );
             """
         )
+        bind_test_profile(self.conn)
+        ensure_customer_merge_pull_tables(self.conn)
         self.conn.executemany(
             """
             INSERT INTO customers (
-                customer_id, name, phone, address, total_orders, total_spent, first_order_date, last_order_date, is_verified
+                customer_id, customer_identity_key, name, phone, address, total_orders, total_spent, first_order_date, last_order_date, is_verified
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                (1, "Rahul Sharma", "9999999999", "HSR Layout", 2, 400.0, "2024-01-15", "2024-02-05", 1),
-                (2, "Rahul Sharma", None, "HSR Layout", 1, 80.0, "2024-02-03", "2024-02-03", 0),
-                (3, "Rahul Sharma", None, "HSR Layout", 1, 120.0, "2024-02-04", "2024-02-04", 0),
-                (4, "Rahul Sharma", "9999999999", "HSR Layout", 1, 260.0, "2024-02-06", "2024-02-06", 1),
+                (1, "cust-1", "Rahul Sharma", "9999999999", "HSR Layout", 2, 400.0, "2024-01-15", "2024-02-05", 1),
+                (2, "cust-2", "Rahul Sharma", None, "HSR Layout", 1, 80.0, "2024-02-03", "2024-02-03", 0),
+                (3, "cust-3", "Rahul Sharma", None, "HSR Layout", 1, 120.0, "2024-02-04", "2024-02-04", 0),
+                (4, "cust-4", "Rahul Sharma", "9999999999", "HSR Layout", 1, 260.0, "2024-02-06", "2024-02-06", 1),
             ],
         )
         self.conn.executemany(
@@ -134,6 +179,10 @@ class CustomerMergeRuleTests(unittest.TestCase):
                 (301, "m_burger", "Burger", 1),
                 (301, "m_pasta", "Pasta", 2),
             ],
+        )
+        set_customer_state_revision(self.conn, 1)
+        self.conn.execute(
+            "INSERT INTO system_config (key, value) VALUES ('cloud_sync_url', 'https://cloud.example'), ('cloud_sync_api_key', 'secret')"
         )
         self.conn.commit()
 
@@ -189,7 +238,8 @@ class CustomerMergeRuleTests(unittest.TestCase):
         self.assertTrue(preview["can_mark_target_verified"])
         self.assertFalse(preview["target_customer"]["is_verified"])
 
-    def test_merge_can_promote_unverified_target_to_verified_and_undo_restores_state(self) -> None:
+    @patch("requests.post", side_effect=_accept_post)
+    def test_merge_can_promote_unverified_target_to_verified_and_undo_restores_state(self, _mock_post) -> None:
         result = merge_customers(self.conn, "2", "3", mark_target_verified=True)
 
         self.assertEqual(result["status"], "success")
