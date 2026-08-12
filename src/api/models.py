@@ -131,6 +131,14 @@ class ResolveVariantRequest(GlobalMenuPreviewReference):
     new_variant_name: Optional[str] = None
 
 
+class VerifyAssignmentRequest(BaseModel):
+    """Verify exact assignment keys without changing their menu identities."""
+    assignment_order_item_ids: List[str]
+    expected_global_menu_item_id: str
+    expected_global_variant_id: str
+    mutation_id: Optional[str] = None
+
+
 # --- AI Mode Models ---
 
 class AIQueryRequest(BaseModel):

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 import json
+import uuid
 from datetime import datetime, timezone
 from src.core.itemcode_mapping import rebuild_itemcode_mappings_best_effort
 from src.core.menu_assignment_schema import ensure_assignment_sync_schema
@@ -2605,3 +2606,220 @@ def verify_item(
         return {"status": "error", "message": f"Verification failed: {e}"}
     finally:
         cursor.close()
+
+
+def verify_menu_mapping_assignments(
+    conn,
+    assignment_order_item_ids: List[str],
+    *,
+    expected_global_menu_item_id: str,
+    expected_global_variant_id: str,
+    mutation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Centrally verify exact assignment keys without changing their identities.
+
+    This is the shadow/global-resolution counterpart to identity repair.  It
+    deliberately bypasses the global-canonical-write blocker because §25 keeps
+    restaurant assignment verification available in shadow mode, but it still
+    requires the ordinary strict menu commit path and never writes the local
+    verification flag before central acknowledgement.
+    """
+    from src.core.menu_mutation_commit import (
+        LOCAL_APPLY_FAILED_MESSAGE,
+        MUTATION_TYPE_VERIFY,
+        build_plan,
+        strict_mode_edit_blocked_response,
+    )
+    from src.core.menu_mapping_verification_sync_events import (
+        build_menu_mapping_verification_event_payloads,
+    )
+
+    blocked = strict_mode_edit_blocked_response(conn)
+    if blocked:
+        # Global shadow sync intentionally skips the legacy merge/verification
+        # tail, but its additive assignment snapshot still advertises the §19
+        # restaurant menu revision. Older local profiles may not have mirrored
+        # that token yet. Refresh the ordinary global projection/snapshot once
+        # before refusing the centrally-authorized verification operation.
+        try:
+            from src.core.global_menu_schema import resolve_global_menu_capability
+            from src.core.global_menu_sync import (
+                pull_global_assignment_snapshot,
+                pull_global_menu_state,
+            )
+            from src.core.services.cloud_pull_orchestrator import CLOUD_PULL_LOCK
+
+            capability = resolve_global_menu_capability(conn)
+            if capability.resolution_ready:
+                with CLOUD_PULL_LOCK:
+                    global_result = pull_global_menu_state(conn)
+                    assignment_result = (
+                        pull_global_assignment_snapshot(conn)
+                        if global_result.get("status") == "applied"
+                        else {"status": "error"}
+                    )
+                if (
+                    global_result.get("status") == "applied"
+                    and assignment_result.get("status") == "applied"
+                ):
+                    blocked = strict_mode_edit_blocked_response(conn)
+        except Exception:
+            # Preserve the established strict-mode/network failure response;
+            # the caller must never fall back to a local verification write.
+            pass
+    if blocked:
+        return blocked
+
+    assignment_ids = list(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in assignment_order_item_ids
+            if str(value or "").strip()
+        )
+    )
+    expected_global_item_id = str(expected_global_menu_item_id or "").strip()
+    expected_global_variant_id = str(expected_global_variant_id or "").strip()
+    if (
+        not assignment_ids
+        or not expected_global_item_id
+        or not expected_global_variant_id
+    ):
+        return {
+            "status": "error",
+            "message": (
+                "Exact assignment keys and the expected global menu identity "
+                "are required."
+            ),
+        }
+
+    placeholders = ", ".join("?" for _ in assignment_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            mv.order_item_id,
+            mv.menu_item_id,
+            mv.variant_id,
+            mv.is_verified,
+            gil.global_menu_item_id,
+            gvl.global_variant_id
+        FROM menu_item_variants mv
+        LEFT JOIN menu_item_global_links gil
+            ON gil.local_menu_item_id = mv.menu_item_id
+        LEFT JOIN variant_global_links gvl
+            ON gvl.local_variant_id = mv.variant_id
+        WHERE mv.order_item_id IN ({placeholders})
+        ORDER BY mv.order_item_id
+        """,
+        assignment_ids,
+    ).fetchall()
+    rows_by_id = {str(row[0]): row for row in rows}
+    missing_ids = [value for value in assignment_ids if value not in rows_by_id]
+    if missing_ids:
+        return {
+            "status": "error",
+            "message": "One or more assignment rows no longer exist. Refresh resolutions and try again.",
+        }
+
+    identity_before: dict[str, tuple[str, str]] = {}
+    pending_rows: List[Dict[str, Any]] = []
+    for assignment_id in assignment_ids:
+        row = rows_by_id[assignment_id]
+        actual_item_id = str(row[1] or "").strip()
+        global_item_id = str(row[4] or "").strip()
+        global_variant_id = str(row[5] or "").strip()
+        if not global_item_id or not global_variant_id:
+            return {
+                "status": "error",
+                "message": "Global identity is incomplete; repair its locator mapping first.",
+                "code": "global_menu_identity_unresolved",
+            }
+        if (
+            global_item_id != expected_global_item_id
+            or global_variant_id != expected_global_variant_id
+        ):
+            return {
+                "status": "error",
+                "message": (
+                    "The assignment's global identity changed while it was open. "
+                    "Refresh resolutions before verifying it."
+                ),
+            }
+        identity_before[assignment_id] = (global_item_id, global_variant_id)
+        if not bool(row[3]):
+            pending_rows.append(
+                {
+                    "order_item_id": assignment_id,
+                    "menu_item_id": actual_item_id,
+                    "variant_id": row[2],
+                    "is_verified": 1,
+                }
+            )
+
+    if not pending_rows:
+        return {
+            "status": "success",
+            "message": "Assignment already verified.",
+            "already_verified": True,
+            "verified_assignment_ids": assignment_ids,
+        }
+
+    stable_mutation_id = str(mutation_id or uuid.uuid4())
+    verification_events = build_menu_mapping_verification_event_payloads(
+        conn, pending_rows
+    )
+    # A UI retry reuses mutation_id. Keep the nested event ids stable too so an
+    # accepted status response can be validated and applied after an uncertain
+    # network outcome instead of creating a second verification event.
+    for index, event in enumerate(verification_events):
+        event["remote_event_id"] = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"dn-analytics:assignment-verification:{stable_mutation_id}:{index}",
+        ).hex
+
+    plan = build_plan(
+        mutation_type=MUTATION_TYPE_VERIFY,
+        verification_events=verification_events,
+        order_item_ids=[row["order_item_id"] for row in pending_rows],
+        mutation_id=stable_mutation_id,
+    )
+    response = _commit_strict_plan(
+        conn,
+        plan,
+        success_message="Assignment verified successfully.",
+    )
+    if response.get("status") != "success":
+        return response
+
+    verified_rows = conn.execute(
+        f"""
+        SELECT
+            mv.order_item_id,
+            mv.is_verified,
+            gil.global_menu_item_id,
+            gvl.global_variant_id
+        FROM menu_item_variants mv
+        LEFT JOIN menu_item_global_links gil
+            ON gil.local_menu_item_id = mv.menu_item_id
+        LEFT JOIN variant_global_links gvl
+            ON gvl.local_variant_id = mv.variant_id
+        WHERE mv.order_item_id IN ({placeholders})
+        """,
+        assignment_ids,
+    ).fetchall()
+    verified_by_id = {str(row[0]): row for row in verified_rows}
+    locally_verified = all(
+        assignment_id in verified_by_id
+        and bool(verified_by_id[assignment_id][1])
+        and (
+            str(verified_by_id[assignment_id][2] or "").strip(),
+            str(verified_by_id[assignment_id][3] or "").strip(),
+        )
+        == identity_before[assignment_id]
+        for assignment_id in assignment_ids
+    )
+    if not locally_verified:
+        return {"status": "error", "message": LOCAL_APPLY_FAILED_MESSAGE}
+
+    response["verified_assignment_ids"] = assignment_ids
+    response["mutation_id"] = stable_mutation_id
+    return response

@@ -8,6 +8,7 @@ from datetime import datetime, timezone as dt_timezone
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import Depends, Header, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from src.core.analytics_scope import AnalyticsScope, scope_from_token
 from src.core.db.connection import get_profile_connection
@@ -18,7 +19,11 @@ from src.core.profiles import (
     validate_restaurant_id,
 )
 from src.core.queries.multi_store import federate
-from src.core.utils.business_date import business_date_context
+from src.core.utils.business_date import (
+    bind_business_date_context,
+    business_date_context,
+    reset_business_date_context,
+)
 
 
 def _single_restaurant_required() -> HTTPException:
@@ -64,47 +69,65 @@ def get_authorized_restaurant_profile(
     return profile
 
 
-def get_db(profile=Depends(get_restaurant_profile)):
+async def _open_profile_connection(profile):
+    """Open one profile connection without blocking the event loop.
+
+    Opening applies the canonical schema, so it is real file I/O and belongs in
+    a worker thread. The connection itself is created with
+    ``check_same_thread=False`` and is used later from the endpoint's own
+    thread, exactly as before.
+    """
+    try:
+        conn, _ = await run_in_threadpool(get_profile_connection, profile)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": str(exc), "code": "profile_open_failed"},
+        ) from exc
+    return conn
+
+
+async def get_db(profile=Depends(get_restaurant_profile)):
     """
     Database connection dependency for FastAPI routes.
 
     Yields a database connection and ensures it's properly closed after use.
-    Raises HTTPException 500 if connection fails.
+
+    This is deliberately an async generator. FastAPI runs a *sync* generator
+    dependency's setup and teardown as two separate threadpool calls, and each
+    one gets its own copied ``contextvars.Context``: the business-date binding
+    would be discarded before the endpoint ran, and resetting its token during
+    teardown would raise ``Token was created in a different Context``. On the
+    event loop both halves share one context, and the endpoint — sync or async
+    — inherits the binding.
 
     Usage:
         @router.get("/endpoint")
         def my_endpoint(conn = Depends(get_db)):
             # use conn here
     """
+    conn = await _open_profile_connection(profile)
+    _context, token = bind_business_date_context(timezone=profile.timezone)
     try:
-        conn, _ = get_profile_connection(profile)
-    except Exception as exc:
-        raise HTTPException(status_code=409, detail={"error": str(exc), "code": "profile_open_failed"}) from exc
-    try:
-        with business_date_context(timezone=profile.timezone):
-            yield conn
+        yield conn
     finally:
+        reset_business_date_context(token)
         conn.close()
 
 
-def get_authorized_db(profile=Depends(get_authorized_restaurant_profile)):
+async def get_authorized_db(profile=Depends(get_authorized_restaurant_profile)):
     """Writable/scoped-network database dependency.
 
     Profiles removed from the latest server allow-list remain available through
     `get_db` for offline reads, but must not accept local mutations or start new
     scoped network work.
     """
+    conn = await _open_profile_connection(profile)
+    _context, token = bind_business_date_context(timezone=profile.timezone)
     try:
-        conn, _ = get_profile_connection(profile)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"error": str(exc), "code": "profile_open_failed"},
-        ) from exc
-    try:
-        with business_date_context(timezone=profile.timezone):
-            yield conn
+        yield conn
     finally:
+        reset_business_date_context(token)
         conn.close()
 
 

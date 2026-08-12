@@ -22,6 +22,13 @@ import {
     hasGlobalMenuSharedPosCatalogCapability,
     isGroupOwnedMenuReady,
 } from '../globalMenuCapabilities';
+import {
+    GlobalIdentityMappedVerificationError,
+    globalResolutionRoute,
+    repairGlobalIdentityCoverage,
+    resolutionAttemptKey,
+    runResolutionAttempt,
+} from '../menuResolutionRouting';
 
 // --- Shared Components ---
 
@@ -65,6 +72,7 @@ interface ResolutionItem {
     suggested_variant_name?: string | null;
     resolution_kind?: 'addon_gap' | 'unverified_mapping' | 'global_identity_gap' | null;
     is_verified?: boolean | number | null;
+    assignment_order_item_ids?: string[];
 }
 
 interface SuspectMapping {
@@ -2622,11 +2630,18 @@ function ResolutionsTab({
     const [selectedTargetVariants, setSelectedTargetVariants] = useState<Record<string, string>>({});
     const [newVariantNames, setNewVariantNames] = useState<Record<string, string>>({});
     const renameSectionRef = useRef<HTMLDivElement>(null);
+    const resolutionInFlightRef = useRef<Set<string>>(new Set());
+    const verificationMutationIdsRef = useRef<Map<string, string>>(new Map());
+    const mappedResolutionIdentitiesRef = useRef<Map<string, {
+        globalItemId: string;
+        globalVariantId: string;
+    }>>(new Map());
 
-    const loadItems = async () => {
+    const loadItems = async (): Promise<ResolutionItem[]> => {
         const res = await endpoints.menu.unverified();
-        setItems(res.data);
-        return res.data;
+        const rows = res.data as ResolutionItem[];
+        setItems(rows);
+        return rows;
     };
 
     const loadLookupItems = async () => {
@@ -2853,6 +2868,56 @@ function ResolutionsTab({
         return response.data;
     };
 
+    const verifyExistingGlobalAssignment = async (
+        item: ResolutionItem,
+        expectedIdentity: { globalItemId: string; globalVariantId: string },
+    ): Promise<string | null> => {
+        const assignmentIds = Array.from(new Set(
+            (item.assignment_order_item_ids || [])
+                .map(value => String(value || '').trim())
+                .filter(Boolean),
+        )).sort();
+        if (!assignmentIds.length) {
+            throw new Error(
+                'The exact assignment row could not be identified. Refresh resolutions and try again.',
+            );
+        }
+        const expectedGlobalItemId = expectedIdentity.globalItemId.trim();
+        const expectedGlobalVariantId = expectedIdentity.globalVariantId.trim();
+        if (!expectedGlobalItemId || !expectedGlobalVariantId) {
+            throw new Error(
+                'The expected global menu identity is incomplete. Refresh resolutions and try again.',
+            );
+        }
+        const requestKey = resolutionAttemptKey(item);
+        let mutationId = verificationMutationIdsRef.current.get(requestKey);
+        if (!mutationId) {
+            mutationId = globalThis.crypto.randomUUID();
+            verificationMutationIdsRef.current.set(requestKey, mutationId);
+        }
+        const response = await endpoints.menu.verifyAssignment({
+            assignment_order_item_ids: assignmentIds,
+            expected_global_menu_item_id: expectedGlobalItemId,
+            expected_global_variant_id: expectedGlobalVariantId,
+            mutation_id: mutationId,
+        });
+        const refreshed = await loadItems();
+        const assignmentIdSet = new Set(assignmentIds);
+        const stillUnresolved = refreshed.some(candidate =>
+            (candidate.assignment_order_item_ids || []).some(
+                assignmentId => assignmentIdSet.has(String(assignmentId)),
+            ),
+        );
+        if (stillUnresolved) {
+            throw new Error(
+                'Central verification was acknowledged, but the refreshed resolution list still contains this assignment. Sync DB and try again.',
+            );
+        }
+        verificationMutationIdsRef.current.delete(requestKey);
+        mappedResolutionIdentitiesRef.current.delete(requestKey);
+        return response.data.message || 'Assignment verified successfully.';
+    };
+
     const ensureGlobalResolutionItem = async (
         context: GlobalMenuResolutionContext,
         canonicalName: string,
@@ -2939,8 +3004,21 @@ function ResolutionsTab({
             return;
         }
 
-        setMergeSubmitting(true);
-        try {
+        const attemptKey = resolutionAttemptKey(modalItem);
+        await runResolutionAttempt(resolutionInFlightRef.current, attemptKey, async () => {
+            setMergeSubmitting(true);
+            try {
+            const mappedIdentity = mappedResolutionIdentitiesRef.current.get(attemptKey);
+            if (mappedIdentity) {
+                const message = await verifyExistingGlobalAssignment(
+                    modalItem,
+                    mappedIdentity,
+                );
+                if (!message) return;
+                setPopup({ type: 'success', message });
+                closeResolutionModal();
+                return;
+            }
             const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
             const sourceResolutionContext = globalResolutionAdvertised
                 ? await loadGlobalResolutionContext(
@@ -2948,56 +3026,96 @@ function ResolutionsTab({
                     modalItem.source_variant_id,
                 )
                 : null;
-            const useCoverageRepair = Boolean(
+            const targetResolutionContext = sourceResolutionContext
+                ? (selectedTargetVariant === '__new__'
+                    ? await loadGlobalResolutionContext(selectedTargetId)
+                    : await loadGlobalResolutionContext(selectedTargetId, selectedTargetVariant))
+                : null;
+            const resolutionRoute = sourceResolutionContext
+                ? globalResolutionRoute(
+                    modalItem.resolution_kind,
+                    sourceResolutionContext,
+                    targetResolutionContext,
+                )
+                : 'locator_map';
+            if (resolutionRoute === 'verify_assignment') {
+                const message = await verifyExistingGlobalAssignment(modalItem, {
+                    globalItemId: sourceResolutionContext!.global_item_id!,
+                    globalVariantId: sourceResolutionContext!.global_variant_id!,
+                });
+                if (!message) return;
+                setPopup({ type: 'success', message });
+                closeResolutionModal();
+                return;
+            }
+            const sourceIdentityMissing = Boolean(
                 sourceResolutionContext && (
-                    globalResolutionOnly ||
                     !sourceResolutionContext.global_item_id ||
                     !sourceResolutionContext.global_variant_id
                 ),
             );
+            const useCoverageRepair = Boolean(
+                sourceResolutionContext && (
+                    sourceIdentityMissing ||
+                    (globalResolutionOnly && resolutionRoute === 'locator_map')
+                ),
+            );
             if (useCoverageRepair && sourceResolutionContext) {
                 const sourceContext = sourceResolutionContext;
-                const targetContext = selectedTargetVariant === '__new__'
-                    ? await loadGlobalResolutionContext(selectedTargetId)
-                    : await loadGlobalResolutionContext(selectedTargetId, selectedTargetVariant);
-                const globalItemId = await ensureGlobalResolutionItem(
-                    targetContext,
-                    targetContext.canonical_name,
-                    targetContext.canonical_type,
-                );
-                if (!globalItemId) return;
-                const globalVariantId = await ensureGlobalResolutionVariant(
-                    selectedTargetVariant === '__new__' ? null : targetContext,
-                    selectedTargetVariant === '__new__'
-                        ? (newVariantNames[selectedSourceVariant.variant_id] || '')
-                        : undefined,
-                );
-                if (!globalVariantId) {
-                    throw new Error('The target canonical variant could not be created or resolved.');
-                }
+                const targetContext = targetResolutionContext!;
                 const targetNeedsMapping = !targetContext.global_item_id || (
                     selectedTargetVariant !== '__new__' && !targetContext.global_variant_id
                 );
-                if (targetNeedsMapping) {
-                    const targetMapped = await mapGlobalResolutionLocators(
+                const message = await repairGlobalIdentityCoverage({
+                    ensureItem: () => ensureGlobalResolutionItem(
                         targetContext,
-                        globalItemId,
-                        selectedTargetVariant === '__new__' ? null : globalVariantId,
                         targetContext.canonical_name,
-                    );
-                    if (!targetMapped) return;
-                }
-                const sourceMapped = await mapGlobalResolutionLocators(
-                    sourceContext,
-                    globalItemId,
-                    globalVariantId,
-                    modalItem.display_name || modalItem.name,
-                );
-                if (!sourceMapped) return;
-                removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
-                setPopup({ type: 'success', message: 'Global menu identity resolved successfully.' });
+                        targetContext.canonical_type,
+                    ),
+                    ensureVariant: async () => {
+                        const globalVariantId = await ensureGlobalResolutionVariant(
+                            selectedTargetVariant === '__new__' ? null : targetContext,
+                            selectedTargetVariant === '__new__'
+                                ? (newVariantNames[selectedSourceVariant.variant_id] || '')
+                                : undefined,
+                        );
+                        if (!globalVariantId) {
+                            throw new Error('The target canonical variant could not be created or resolved.');
+                        }
+                        return globalVariantId;
+                    },
+                    mapTargetLocators: targetNeedsMapping
+                        ? (globalItemId, globalVariantId) => mapGlobalResolutionLocators(
+                            targetContext,
+                            globalItemId,
+                            selectedTargetVariant === '__new__' ? null : globalVariantId,
+                            targetContext.canonical_name,
+                        )
+                        : undefined,
+                    mapSourceLocators: (globalItemId, globalVariantId) => (
+                        mapGlobalResolutionLocators(
+                            sourceContext,
+                            globalItemId,
+                            globalVariantId,
+                            modalItem.display_name || modalItem.name,
+                        )
+                    ),
+                    onIdentityMapped: (globalItemId, globalVariantId) => {
+                        mappedResolutionIdentitiesRef.current.set(attemptKey, {
+                            globalItemId,
+                            globalVariantId,
+                        });
+                    },
+                    verifyAssignment: (globalItemId, globalVariantId) => (
+                        verifyExistingGlobalAssignment(modalItem, {
+                            globalItemId,
+                            globalVariantId,
+                        })
+                    ),
+                });
+                if (!message) return;
+                setPopup({ type: 'success', message });
                 closeResolutionModal();
-                await refreshAll();
                 return;
             }
             let globalPreview = mergePreview?.global_menu;
@@ -3031,11 +3149,26 @@ function ResolutionsTab({
             setPopup({ type: 'success', message: res.data.message || 'Variant resolved successfully.' });
             closeResolutionModal();
             await refreshAll();
-        } catch (error) {
-            setPopup({ type: 'error', message: getApiErrorMessage(error) });
-        } finally {
-            setMergeSubmitting(false);
-        }
+            } catch (error) {
+                const partialFailure = (
+                    error instanceof GlobalIdentityMappedVerificationError ||
+                    mappedResolutionIdentitiesRef.current.has(attemptKey)
+                );
+                const detail = getApiErrorMessage(
+                    error instanceof GlobalIdentityMappedVerificationError
+                        ? error.verificationError
+                        : error,
+                );
+                setPopup({
+                    type: 'error',
+                    message: partialFailure
+                        ? `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} The resolution remains open; retry to verify the existing identities.`
+                        : detail,
+                });
+            } finally {
+                setMergeSubmitting(false);
+            }
+        });
     };
 
     const handleRenameResolution = async () => {
@@ -3054,27 +3187,81 @@ function ResolutionsTab({
             return;
         }
 
-        setRenameSubmitting(true);
-        try {
+        const attemptKey = resolutionAttemptKey(modalItem);
+        await runResolutionAttempt(resolutionInFlightRef.current, attemptKey, async () => {
+            setRenameSubmitting(true);
+            try {
+            const mappedIdentity = mappedResolutionIdentitiesRef.current.get(attemptKey);
+            if (mappedIdentity) {
+                const message = await verifyExistingGlobalAssignment(
+                    modalItem,
+                    mappedIdentity,
+                );
+                if (!message) return;
+                setPopup({ type: 'success', message });
+                closeResolutionModal();
+                return;
+            }
             const sourceResolutionContext = globalResolutionAdvertised
                 ? await loadGlobalResolutionContext(
                     modalItem.menu_item_id,
                     modalItem.source_variant_id,
                 )
                 : null;
-            const useCoverageRepair = Boolean(
+            const variantContext = sourceResolutionContext
+                ? await loadGlobalResolutionContext(
+                    modalItem.menu_item_id,
+                    renameVariantId,
+                )
+                : null;
+            const resolutionRoute = sourceResolutionContext
+                ? globalResolutionRoute(
+                    modalItem.resolution_kind,
+                    sourceResolutionContext,
+                    {
+                        global_item_id: sourceResolutionContext.global_item_id,
+                        global_variant_id: variantContext?.global_variant_id,
+                    },
+                )
+                : 'locator_map';
+            const localResolutionUnchanged = Boolean(
+                trimmedName === modalItem.name &&
+                trimmedType === modalItem.type &&
+                renameVariantId === modalItem.source_variant_id,
+            );
+            if (resolutionRoute === 'verify_assignment' && localResolutionUnchanged) {
+                const message = await verifyExistingGlobalAssignment(modalItem, {
+                    globalItemId: sourceResolutionContext!.global_item_id!,
+                    globalVariantId: sourceResolutionContext!.global_variant_id!,
+                });
+                if (!message) return;
+                setPopup({ type: 'success', message });
+                closeResolutionModal();
+                return;
+            }
+            if (
+                resolutionRoute === 'verify_assignment' &&
+                globalResolutionOnly &&
+                !localResolutionUnchanged
+            ) {
+                throw new Error(
+                    'Renaming an existing canonical item requires active global-menu mutations. Choose its current canonical name/type or wait for activation.',
+                );
+            }
+            const sourceIdentityMissing = Boolean(
                 sourceResolutionContext && (
-                    globalResolutionOnly ||
                     !sourceResolutionContext.global_item_id ||
                     !sourceResolutionContext.global_variant_id
                 ),
             );
+            const useCoverageRepair = Boolean(
+                sourceResolutionContext && (
+                    sourceIdentityMissing ||
+                    (globalResolutionOnly && resolutionRoute === 'locator_map')
+                ),
+            );
             if (useCoverageRepair && sourceResolutionContext) {
                 const sourceContext = sourceResolutionContext;
-                const variantContext = await loadGlobalResolutionContext(
-                    modalItem.menu_item_id,
-                    renameVariantId,
-                );
                 if (sourceContext.global_item_id && (
                     sourceContext.canonical_name !== trimmedName ||
                     sourceContext.canonical_type !== trimmedType
@@ -3083,27 +3270,45 @@ function ResolutionsTab({
                         'Renaming an existing canonical item requires active global-menu mutations. Choose its current canonical name/type or wait for activation.',
                     );
                 }
-                const globalItemId = await ensureGlobalResolutionItem(
-                    sourceContext,
-                    trimmedName,
-                    trimmedType,
-                );
-                if (!globalItemId) return;
-                const globalVariantId = await ensureGlobalResolutionVariant(variantContext);
-                if (!globalVariantId) {
-                    throw new Error('The selected canonical variant could not be created or resolved.');
-                }
-                const mapped = await mapGlobalResolutionLocators(
-                    sourceContext,
-                    globalItemId,
-                    globalVariantId,
-                    modalItem.display_name || modalItem.name,
-                );
-                if (!mapped) return;
-                removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
-                setPopup({ type: 'success', message: 'Global menu identity resolved successfully.' });
+                const message = await repairGlobalIdentityCoverage({
+                    ensureItem: () => ensureGlobalResolutionItem(
+                        sourceContext,
+                        trimmedName,
+                        trimmedType,
+                    ),
+                    ensureVariant: async () => {
+                        const globalVariantId = await ensureGlobalResolutionVariant(
+                            variantContext,
+                        );
+                        if (!globalVariantId) {
+                            throw new Error('The selected canonical variant could not be created or resolved.');
+                        }
+                        return globalVariantId;
+                    },
+                    mapSourceLocators: (globalItemId, globalVariantId) => (
+                        mapGlobalResolutionLocators(
+                            sourceContext,
+                            globalItemId,
+                            globalVariantId,
+                            modalItem.display_name || modalItem.name,
+                        )
+                    ),
+                    onIdentityMapped: (globalItemId, globalVariantId) => {
+                        mappedResolutionIdentitiesRef.current.set(attemptKey, {
+                            globalItemId,
+                            globalVariantId,
+                        });
+                    },
+                    verifyAssignment: (globalItemId, globalVariantId) => (
+                        verifyExistingGlobalAssignment(modalItem, {
+                            globalItemId,
+                            globalVariantId,
+                        })
+                    ),
+                });
+                if (!message) return;
+                setPopup({ type: 'success', message });
                 closeResolutionModal();
-                await refreshAll();
                 return;
             }
             let globalPreview: GlobalMenuPreview | undefined;
@@ -3131,11 +3336,26 @@ function ResolutionsTab({
             setPopup({ type: 'success', message: res.data.message || 'Resolution saved successfully.' });
             closeResolutionModal();
             await refreshAll();
-        } catch (error) {
-            setPopup({ type: 'error', message: getApiErrorMessage(error) });
-        } finally {
-            setRenameSubmitting(false);
-        }
+            } catch (error) {
+                const partialFailure = (
+                    error instanceof GlobalIdentityMappedVerificationError ||
+                    mappedResolutionIdentitiesRef.current.has(attemptKey)
+                );
+                const detail = getApiErrorMessage(
+                    error instanceof GlobalIdentityMappedVerificationError
+                        ? error.verificationError
+                        : error,
+                );
+                setPopup({
+                    type: 'error',
+                    message: partialFailure
+                        ? `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} The resolution remains open; retry to verify the existing identities.`
+                        : detail,
+                });
+            } finally {
+                setRenameSubmitting(false);
+            }
+        });
     };
 
     const handleUndo = async (mergeId: number) => {

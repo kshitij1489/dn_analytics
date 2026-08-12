@@ -14,10 +14,7 @@ from src.core.menu_mutation_commit import (
     strict_mode_active,
 )
 from src.core.order_item_key import AssignmentKeyIndex, has_local_pos_backing
-from utils.menu_item_variant_enforcement import (
-    addon_seeded_mapping_order_item_id,
-    catalog_stub_order_item_id,
-)
+from utils.menu_item_variant_enforcement import is_synthetic_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +42,10 @@ def _is_synthetic_local_row(row: Any) -> bool:
     derived from their own menu_item_id/variant_id, so they are recognized
     without touching order_items.
     """
-    order_item_id = str(row["order_item_id"] or "")
-    menu_item_id = str(row["menu_item_id"] or "")
-    if order_item_id == catalog_stub_order_item_id(menu_item_id):
-        return True
-    variant_id = row["variant_id"]
-    return variant_id is not None and order_item_id == addon_seeded_mapping_order_item_id(
-        menu_item_id, str(variant_id)
+    return is_synthetic_mapping(
+        str(row["menu_item_id"] or ""),
+        str(row["variant_id"]) if row["variant_id"] is not None else None,
+        str(row["order_item_id"] or ""),
     )
 
 

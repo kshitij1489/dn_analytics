@@ -119,4 +119,21 @@ app.include_router(conversations.router, prefix="/api/conversations", tags=["Con
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    """Liveness plus the data location this process resolved.
+
+    A desktop launcher may find port 8000 already occupied. Reporting the
+    resolved roots lets it prove the running backend addresses the same profile
+    registry before attaching a window to it, instead of silently showing a
+    different installation's databases.
+    """
+    payload = {"status": "ok"}
+    try:
+        from src.core.db.control import app_data_root, control_db_path
+
+        payload["app_data_root"] = str(app_data_root())
+        payload["control_db_path"] = str(control_db_path())
+    except Exception:
+        # Health must stay answerable even if path resolution is misconfigured;
+        # the launcher treats a missing root as "cannot confirm".
+        pass
+    return payload

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -161,6 +161,97 @@ function startPythonParams(dbPath, appDataRoot) {
     }
 }
 
+const HEALTH_URL = `http://127.0.0.1:${API_PORT}/api/health`;
+const BACKEND_READY_TIMEOUT_MS = 60000;
+
+async function probeBackend() {
+    try {
+        const response = await axios.get(HEALTH_URL, { timeout: 2000 });
+        return response.data && typeof response.data === 'object' ? response.data : {};
+    } catch (err) {
+        return null;
+    }
+}
+
+async function waitForBackend(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const health = await probeBackend();
+        if (health) return health;
+        if (Date.now() >= deadline) return null;
+        console.log('Waiting for backend...');
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+}
+
+function assertBackendAddressesThisInstall(health, userDataPath) {
+    // Adopting whatever answers on port 8000 is how a window ends up showing a
+    // different installation's databases. The backend reports the roots it
+    // resolved; anything we cannot match is refused rather than guessed at.
+    const reportedRoot = health && health.app_data_root;
+    if (!reportedRoot) {
+        throw new Error(
+            `A backend is already running on port ${API_PORT}, but it did not report ` +
+            'which data directory it is using, so it cannot be confirmed as this ' +
+            "installation's backend. Stop that process and start the app again."
+        );
+    }
+    if (path.resolve(reportedRoot) !== path.resolve(userDataPath)) {
+        throw new Error(
+            `The backend already running on port ${API_PORT} is using a different ` +
+            `data directory.\n\nIt is using:\n  ${reportedRoot}\n\nThis app expects:\n  ` +
+            `${userDataPath}\n\nStop that process and start the app again.`
+        );
+    }
+}
+
+async function ensureBackend(dbPath, userDataPath) {
+    // Returns the spawned child process, or null when an externally launched
+    // backend is being reused (so `will-quit` never kills a process we do not own).
+    const skipSpawn = String(process.env.ANALYTICS_SKIP_BACKEND_SPAWN || '').trim() === '1';
+
+    let existing = await probeBackend();
+    if (!existing && skipSpawn) {
+        console.log('Backend is started externally; waiting for it...');
+        existing = await waitForBackend(BACKEND_READY_TIMEOUT_MS);
+        if (!existing) {
+            throw new Error(
+                `The externally started backend never became ready on port ${API_PORT}.`
+            );
+        }
+    }
+
+    if (existing) {
+        assertBackendAddressesThisInstall(existing, userDataPath);
+        console.log(`Reusing the backend already running on port ${API_PORT}.`);
+        return null;
+    }
+
+    const child = startPythonParams(dbPath, userDataPath);
+    console.log(`Python API started with PID: ${child.pid}`);
+    try {
+        const health = await waitForBackend(BACKEND_READY_TIMEOUT_MS);
+        if (!health) {
+            throw new Error(`The backend did not become ready on port ${API_PORT}.`);
+        }
+        assertBackendAddressesThisInstall(health, userDataPath);
+        return child;
+    } catch (err) {
+        // apiProcess is assigned only after this function returns. Until then,
+        // ensureBackend owns the child and must stop it on every failure path;
+        // the will-quit handler cannot see it yet.
+        if (child.exitCode === null && child.signalCode === null) {
+            console.log(`Killing unready Python process with PID: ${child.pid}`);
+            try {
+                child.kill();
+            } catch (killErr) {
+                console.error(`Failed to kill Python process ${child.pid}:`, killErr);
+            }
+        }
+        throw err;
+    }
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1500,
@@ -182,7 +273,7 @@ function createWindow() {
     }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     const userDataPath = app.getPath('userData');
     // Ensure we have a persistent path for the database
     const dbPath = path.join(userDataPath, 'analytics.db');
@@ -193,25 +284,23 @@ app.whenReady().then(() => {
         appendBackendLog(`Backend log file: ${backendLogPath}`);
     }
 
-    apiProcess = startPythonParams(dbPath, userDataPath);
-    console.log(`Python API started with PID: ${apiProcess.pid}`);
+    try {
+        apiProcess = await ensureBackend(dbPath, userDataPath);
+    } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        console.error(message);
+        appendBackendLog(message, 'error');
+        dialog.showErrorBox('Analytics backend unavailable', message);
+        app.quit();
+        return;
+    }
+
+    console.log('Backend is ready!');
 
     // Setup Auto Updater
     setupAutoUpdater();
 
-    // Health Check Loop
-    const checkServer = () => {
-        axios.get(`http://127.0.0.1:${API_PORT}/api/health`)
-            .then(() => {
-                console.log('Backend is ready!');
-                createWindow();
-            })
-            .catch(() => {
-                console.log('Waiting for backend...');
-                setTimeout(checkServer, 500);
-            });
-    };
-    checkServer();
+    createWindow();
 });
 
 app.on('will-quit', () => {

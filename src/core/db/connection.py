@@ -115,16 +115,11 @@ def apply_analytics_schema(conn) -> None:
     conn.executescript(schema_sql)
     _relax_global_menu_item_type_constraint(conn)
 
-    # New global-menu tables are additive. The canonical CREATE statements
-    # above upgrade old profile databases; this focused owner validates the
-    # projection and initializes its singleton state idempotently.
-    from src.core.global_menu_schema import ensure_global_menu_schema
-
-    ensure_global_menu_schema(conn)
-
     # CREATE TABLE IF NOT EXISTS does not add columns to databases created by
     # older releases. Keep these upgrade migrations beside the canonical schema
-    # owner instead of duplicating DDL in API startup or routers.
+    # owner instead of duplicating DDL in API startup or routers, and run them
+    # before the projection validator so an older profile upgrades in place
+    # instead of failing its column check.
     additive_columns = {
         "ai_logs": (
             ("uploaded_at", "TEXT"),
@@ -145,6 +140,11 @@ def apply_analytics_schema(conn) -> None:
             ("shared_pos_rule_tombstoned", "INTEGER NOT NULL DEFAULT 0"),
             ("shared_pos_prior_is_active", "INTEGER"),
         ),
+        # Revision 1.7 added these to global-menu tables that older profiles
+        # already own. ALTER TABLE cannot carry the canonical CHECK constraint;
+        # global_menu_sync validates every price on the wire and on read.
+        "global_menu_state": (("history_cursor", "TEXT"),),
+        "global_menu_mapping_rules": (("price", "DECIMAL(10,2)"),),
     }
     for table, columns in additive_columns.items():
         existing = {
@@ -153,6 +153,13 @@ def apply_analytics_schema(conn) -> None:
         for column, column_type in columns:
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+    # The canonical CREATE statements plus the additive upgrades above bring an
+    # old profile to the revision-1.7 shape; this focused owner then validates
+    # the projection and initializes its singleton state idempotently.
+    from src.core.global_menu_schema import ensure_global_menu_schema
+
+    ensure_global_menu_schema(conn)
 
     app_user_columns = {
         str(row[1]) for row in conn.execute("PRAGMA table_info(app_users)").fetchall()

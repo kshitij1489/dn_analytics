@@ -26,6 +26,7 @@ from src.core.sync_identity import get_sync_attribution
 
 logger = logging.getLogger(__name__)
 GLOBAL_MUTATION_SCHEMA_VERSION = 1
+MUTATION_GLOBAL_VARIANT_CREATE = "global_variant.create"
 _PRICE_QUANTUM = Decimal("0.01")
 _PRICE_LIMIT = Decimal("100000000")
 GLOBAL_MENU_RESOLUTION_MUTATION_TYPES = frozenset(
@@ -799,7 +800,7 @@ def _commit_global_mutation_locked(
         "mutation_type": str(preview["mutation_type"]),
         "expected_menu_group_revision": int(preview["menu_group_revision"]),
         "preview_digest": str(preview["preview_digest"]),
-        "payload": dict(preview["payload"]),
+        "payload": _payload_for_central_commit(preview),
     }
     attribution = get_sync_attribution(conn)
     payload["uploaded_by"] = attribution.get("employee") or None
@@ -842,6 +843,23 @@ def _commit_global_mutation_locked(
         raise GlobalMenuMutationError("Global mutation response ID does not match the request")
     _apply_accepted_projection(conn, body)
     return {**body, "status": "success", "affects_entire_menu_group": True}
+
+
+def _payload_for_central_commit(preview: Mapping[str, Any]) -> Dict[str, Any]:
+    """Restore the accepted request shape when a preview flattens a variant dimension."""
+    payload = dict(preview["payload"])
+    if (
+        str(preview.get("mutation_type") or "").strip()
+        != MUTATION_GLOBAL_VARIANT_CREATE
+        or "dimension" in payload
+        or not ({"unit", "value"} & payload.keys())
+    ):
+        return payload
+
+    unit = payload.pop("unit", "")
+    value = payload.pop("value", None)
+    payload["dimension"] = {"unit": unit, "value": value}
+    return payload
 
 
 def preview_reference_from_request(request: Any) -> Dict[str, Any]:

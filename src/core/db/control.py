@@ -156,13 +156,6 @@ def ensure_control_schema(conn: Optional[sqlite3.Connection] = None) -> None:
     owned = conn is None
     target = conn or get_control_connection()
     try:
-        try:
-            previous = target.execute(
-                "SELECT value FROM control_metadata WHERE key='schema_version'"
-            ).fetchone()
-            previous_version = int(previous[0]) if previous else None
-        except (sqlite3.Error, TypeError, ValueError):
-            previous_version = None
         target.executescript(CONTROL_SCHEMA_SQL)
         profile_columns = {
             str(row[1]) for row in target.execute("PRAGMA table_info(restaurant_profiles)").fetchall()
@@ -181,23 +174,15 @@ def ensure_control_schema(conn: Optional[sqlite3.Connection] = None) -> None:
             target.execute(
                 "ALTER TABLE restaurant_profiles ADD COLUMN last_archive_path TEXT"
             )
-        if previous_version is not None and previous_version < CONTROL_SCHEMA_VERSION:
-            # Every profile already registered by a pre-Phase-F control DB is
-            # an old-generation file (or an uninitialized cached row). Mark it
-            # without opening its analytics path. The profile binding/reset
-            # flows resolve the marker after creating a canonical fresh file.
-            target.execute(
-                """
-                UPDATE restaurant_profiles
-                SET clean_rebuild_status='required', updated_at=CURRENT_TIMESTAMP
-                WHERE clean_rebuild_status IS NULL
-                """
-            )
-        # Revision 1.7 has no in-place profile migration. Once the central
-        # registry advertises the shared-POS capability, an existing profile
-        # must be archived and recreated before ordinary runtime code opens it.
-        # This marker lives in the control DB specifically so checking it never
-        # needs to inspect the old analytics schema.
+        # Revision 1.7 has no in-place shared-POS profile migration. Once the
+        # central registry advertises the shared-POS capability, an existing
+        # profile must be archived and recreated before ordinary runtime code
+        # opens it. This marker lives in the control DB specifically so checking
+        # it never needs to inspect the old analytics schema.
+        #
+        # Capability absence preserves legacy behavior: a profile whose group
+        # never advertises the policy keeps opening in place, upgraded by the
+        # additive column migrations in db/connection.py.
         target.execute(
             """
             UPDATE restaurant_profiles

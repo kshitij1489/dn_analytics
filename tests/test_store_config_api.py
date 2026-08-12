@@ -210,19 +210,38 @@ class RestaurantProfileTests(unittest.TestCase):
         conn, _ = get_profile_connection(profile)
         conn.close()
 
-    def test_control_v3_upgrade_marks_registered_old_profile_without_opening_it(self) -> None:
-        from src.core.db.control import ensure_control_schema, get_control_connection
+    def test_control_upgrade_marks_only_shared_pos_profiles_without_opening_them(self) -> None:
+        """Capability absence preserves legacy behavior.
 
-        upsert_allowed_restaurants(self._allowed("rest-A"))
-        profile = get_profile("rest-A")
-        old_path = Path(profile.database_path)
-        old_path.parent.mkdir(parents=True, exist_ok=True)
-        old_path.write_bytes(b"old profile must remain opaque")
+        Only a profile whose group advertises the shared-POS policy owes the
+        destructive archive-and-rebuild. Every other registered profile keeps
+        opening in place, upgraded by the additive column migrations in
+        ``db/connection.py``.
+        """
+        from src.core.db.control import ensure_control_schema, get_control_connection
+        from src.core.profiles import SHARED_POS_CATALOG_CAPABILITY
+
+        upsert_allowed_restaurants(
+            self._allowed("rest-A")
+            + [
+                {
+                    "restaurant_id": "rest-shared",
+                    "display_name": "Shared POS store",
+                    "timezone": "Asia/Kolkata",
+                    "menu_group_id": "group-1",
+                    "menu_capabilities": [
+                        "global_menu_v1",
+                        SHARED_POS_CATALOG_CAPABILITY,
+                    ],
+                }
+            ]
+        )
+        shared_path = Path(get_profile("rest-shared").database_path)
+        shared_path.parent.mkdir(parents=True, exist_ok=True)
+        shared_path.write_bytes(b"old profile must remain opaque")
         control = get_control_connection()
         try:
-            control.execute(
-                "UPDATE restaurant_profiles SET clean_rebuild_status=NULL WHERE restaurant_id='rest-A'"
-            )
+            control.execute("UPDATE restaurant_profiles SET clean_rebuild_status=NULL")
             control.execute(
                 "UPDATE control_metadata SET value='3' WHERE key='schema_version'"
             )
@@ -231,7 +250,8 @@ class RestaurantProfileTests(unittest.TestCase):
         finally:
             control.close()
 
-        upgraded = get_profile("rest-A")
+        self.assertIsNone(get_profile("rest-A").clean_rebuild_status)
+        upgraded = get_profile("rest-shared")
         self.assertEqual(upgraded.clean_rebuild_status, "required")
         self.assertTrue(upgraded.is_bound)
 

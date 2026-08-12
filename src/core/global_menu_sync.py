@@ -1505,6 +1505,147 @@ def _shared_assignment_target(
     return str(item_id), str(variant_id) if variant_id else None
 
 
+def _projection_owner_matches(
+    conn,
+    *,
+    local_item_id: str,
+    local_variant_id: str,
+    global_item_id: str,
+    global_variant_id: str,
+) -> bool:
+    """True when this mapping already points at both requested projection owners."""
+    try:
+        canonical_item_id = resolve_redirect_chain(conn, "item", global_item_id)
+        canonical_variant_id = resolve_redirect_chain(
+            conn, "variant", global_variant_id
+        )
+    except GlobalMenuIdentityError:
+        # Preserve the legacy stale guard for an invalid identity. A row that
+        # actually needs projection will still validate/fail in the normal
+        # authoritative apply path below.
+        return False
+    item_link = conn.execute(
+        """
+        SELECT 1 FROM menu_item_global_links
+        WHERE local_menu_item_id=? AND global_menu_item_id=?
+          AND is_projection_owner=1
+        """,
+        (local_item_id, canonical_item_id),
+    ).fetchone()
+    variant_link = conn.execute(
+        """
+        SELECT 1 FROM variant_global_links
+        WHERE local_variant_id=? AND global_variant_id=?
+          AND is_projection_owner=1
+        """,
+        (local_variant_id, canonical_variant_id),
+    ).fetchone()
+    return item_link is not None and variant_link is not None
+
+
+def _can_recover_legacy_watermark_projection(
+    conn,
+    *,
+    row: Dict[str, Any],
+    local: Any,
+    global_item_id: Optional[str],
+    global_variant_id: Optional[str],
+) -> bool:
+    """Recognize a false-stale revision-1.6 projection, without changing semantics.
+
+    Older assignment snapshot bootstrap stamped every row with the page's
+    blanket watermark.  A later global snapshot carries the true (often lower)
+    per-row sequence.  It is safe to ignore that artificial lead only when the
+    central row names the exact local item/variant already assigned, the row is
+    acknowledged (not pending), and neither local target is a projection owner.
+    The operation can then only add the central global identity; it cannot
+    replay an older semantic assignment over a newer local one.
+    """
+    if not global_item_id or not global_variant_id or int(local[4] or 0):
+        return False
+    incoming_item_id = str(row.get("menu_item_id") or "").strip()
+    incoming_variant_id = str(row.get("variant_id") or "").strip()
+    if (
+        not incoming_item_id
+        or not incoming_variant_id
+        or incoming_item_id != str(local[0])
+        or incoming_variant_id != str(local[1])
+    ):
+        return False
+    item_projected = conn.execute(
+        """
+        SELECT 1 FROM menu_item_global_links
+        WHERE local_menu_item_id=? AND is_projection_owner=1
+        """,
+        (str(local[0]),),
+    ).fetchone()
+    variant_projected = conn.execute(
+        """
+        SELECT 1 FROM variant_global_links
+        WHERE local_variant_id=? AND is_projection_owner=1
+        """,
+        (str(local[1]),),
+    ).fetchone()
+    return item_projected is None and variant_projected is None
+
+
+def _can_apply_reviewed_locator_projection(
+    conn,
+    *,
+    capability: GlobalMenuCapabilityStatus,
+    order_item_id: str,
+    local: Any,
+    global_item_id: Optional[str],
+    global_variant_id: Optional[str],
+    server_revision: int,
+) -> bool:
+    """Allow a newer reviewed POS rule to move an acknowledged global projection."""
+    if (
+        not global_item_id
+        or not global_variant_id
+        or int(local[4] or 0)
+        or server_revision <= 0
+    ):
+        return False
+    current = conn.execute(
+        """
+        SELECT item_link.global_menu_item_id, variant_link.global_variant_id
+        FROM menu_item_global_links item_link
+        JOIN variant_global_links variant_link
+          ON variant_link.local_variant_id=?
+         AND variant_link.is_projection_owner=1
+        WHERE item_link.local_menu_item_id=?
+          AND item_link.is_projection_owner=1
+        """,
+        (str(local[1]), str(local[0])),
+    ).fetchone()
+    if current is None or tuple(current) == (global_item_id, global_variant_id):
+        return False
+    return conn.execute(
+        """
+        SELECT 1
+        FROM global_menu_mapping_rules
+        WHERE menu_group_id=?
+          AND locator_scope='restaurant'
+          AND restaurant_id=?
+          AND locator_kind IN ('pos-item', 'pos-addon')
+          AND locator_value=?
+          AND target_global_menu_item_id=?
+          AND target_global_variant_id=?
+          AND lifecycle_state='active'
+          AND server_revision <= ?
+        """,
+        (
+            capability.menu_group_id,
+            capability.restaurant_id,
+            order_item_id,
+            global_item_id,
+            global_variant_id,
+            server_revision,
+        ),
+    ).fetchone() is not None
+
+
 def apply_global_assignment_rows(
     conn,
     rows: Any,
@@ -1529,7 +1670,8 @@ def apply_global_assignment_rows(
     capability = capability or resolve_global_menu_capability(conn)
     assignments = _iter_dicts(rows, "assignments")
     revision = _revision(server_revision or 0, "menu_group_revision")
-    applied = missing = stale = unlinked = 0
+    applied = missing = stale = unlinked = recovered_legacy_watermark = 0
+    recovered_reviewed_locator = 0
     touched: set[str] = set()
     for row in assignments:
         order_item_id = _nonblank(row, "order_item_id")
@@ -1569,8 +1711,41 @@ def apply_global_assignment_rows(
         if last_seq_raw is not None and local[2] is not None:
             last_seq = _revision(last_seq_raw, "last_seq")
             if int(local[2]) > last_seq:
-                stale += 1
-                continue
+                already_projected = bool(
+                    global_item_id
+                    and global_variant_id
+                    and not int(local[4] or 0)
+                    and _projection_owner_matches(
+                        conn,
+                        local_item_id=str(local[0]),
+                        local_variant_id=str(local[1]),
+                        global_item_id=global_item_id,
+                        global_variant_id=global_variant_id,
+                    )
+                )
+                recover_legacy_watermark = _can_recover_legacy_watermark_projection(
+                    conn,
+                    row=row,
+                    local=local,
+                    global_item_id=global_item_id,
+                    global_variant_id=global_variant_id,
+                )
+                recover_reviewed_locator = _can_apply_reviewed_locator_projection(
+                    conn,
+                    capability=capability,
+                    order_item_id=order_item_id,
+                    local=local,
+                    global_item_id=global_item_id,
+                    global_variant_id=global_variant_id,
+                    server_revision=revision,
+                )
+                if recover_legacy_watermark:
+                    recovered_legacy_watermark += 1
+                elif recover_reviewed_locator:
+                    recovered_reviewed_locator += 1
+                elif not already_projected:
+                    stale += 1
+                    continue
         local_item_id = str(local[0])
         if global_item_id is not None:
             item_owner = ensure_item_projection_owner(conn, global_item_id)
@@ -1664,6 +1839,8 @@ def apply_global_assignment_rows(
         "rows_applied": applied,
         "rows_missing": missing,
         "rows_stale": stale,
+        "rows_recovered_legacy_watermark": recovered_legacy_watermark,
+        "rows_recovered_reviewed_locator": recovered_reviewed_locator,
         "rows_unlinked": unlinked,
         "touched_menu_item_ids": touched,
     }
@@ -2162,7 +2339,8 @@ def pull_global_assignment_snapshot(
     if not endpoint or not auth:
         return {"status": "error", "error": "Global assignment pull is not configured"}
     cursor = capability.assignment_cursor
-    pages = applied = missing = 0
+    pages = applied = missing = stale = recovered_legacy_watermark = 0
+    recovered_reviewed_locator = 0
     for _page_number in range(GLOBAL_MENU_MAX_PAGES):
         page = _fetch_page(conn, endpoint, auth=auth, cursor=cursor, limit=page_limit)
         if page.get("error"):
@@ -2188,6 +2366,16 @@ def pull_global_assignment_snapshot(
                 server_revision=page_revision,
                 capability=current_capability,
             )
+            # This is the existing §17 assignment snapshot with an additive
+            # global envelope. Its restaurant-scoped menu_revision remains the
+            # OCC token for §19 verification commits even while canonical menu
+            # mutations are group-owned in shadow mode.
+            if page.get("menu_revision") is not None:
+                from src.core.sync_identity import set_menu_state_revision
+
+                set_menu_state_revision(
+                    conn, _revision(page.get("menu_revision"), "menu_revision")
+                )
             next_cursor = page.get("next_page")
             resolve_global_menu_quarantine_page(
                 conn, stream="assignments", page_cursor=cursor
@@ -2203,6 +2391,13 @@ def pull_global_assignment_snapshot(
         pages += 1
         applied += int(result.get("rows_applied") or 0)
         missing += int(result.get("rows_missing") or 0)
+        stale += int(result.get("rows_stale") or 0)
+        recovered_legacy_watermark += int(
+            result.get("rows_recovered_legacy_watermark") or 0
+        )
+        recovered_reviewed_locator += int(
+            result.get("rows_recovered_reviewed_locator") or 0
+        )
         cursor = next_cursor
         if next_cursor is None:
             return {
@@ -2210,5 +2405,9 @@ def pull_global_assignment_snapshot(
                 "pages": pages,
                 "rows_applied": applied,
                 "rows_missing": missing,
+                "rows_stale": stale,
+                "rows_recovered_legacy_watermark": recovered_legacy_watermark,
+                "rows_recovered_reviewed_locator": recovered_reviewed_locator,
+                "menu_revision": page.get("menu_revision"),
             }
     return {"status": "error", "error": "Global assignment pull exceeded page limit"}

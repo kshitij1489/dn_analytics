@@ -35,6 +35,7 @@ from src.api.models import (
     UpdateVariantMappingRequest,
     ResolveVariantRequest,
     VerifyRequest,
+    VerifyAssignmentRequest,
     GlobalMenuMutationPreviewRequest,
     GlobalMenuLocalMutationPreviewRequest,
     GlobalMenuMutationCommitRequest,
@@ -1372,6 +1373,21 @@ def verify_item_endpoint(req: VerifyRequest, conn=Depends(get_authorized_db)):
         return _commit_global_request(conn, req)
     _ensure_menu_edit_allowed(conn)
     res = menu_utils.verify_item(conn, req.menu_item_id, req.new_name, req.new_type, req.new_variant_id)
+    return _finalize_menu_edit_response(res)
+
+
+@router.post("/resolutions/verify-assignment")
+def verify_assignment_endpoint(
+    req: VerifyAssignmentRequest, conn=Depends(get_authorized_db)
+):
+    """Verify exact assignment rows through the central verification stream."""
+    res = menu_utils.verify_menu_mapping_assignments(
+        conn,
+        req.assignment_order_item_ids,
+        expected_global_menu_item_id=req.expected_global_menu_item_id,
+        expected_global_variant_id=req.expected_global_variant_id,
+        mutation_id=req.mutation_id,
+    )
     return _finalize_menu_edit_response(res)
 
 

@@ -452,6 +452,12 @@ export const endpoints = {
             new_variant_name?: string,
         } & GlobalMenuPreviewReference) => api.post('/menu/resolutions/resolve', data),
         verify: (data: { menu_item_id: string, new_name?: string, new_type?: string, new_variant_id?: string } & GlobalMenuPreviewReference) => api.post('/menu/resolutions/verify', data),
+        verifyAssignment: (data: {
+            assignment_order_item_ids: string[];
+            expected_global_menu_item_id: string;
+            expected_global_variant_id: string;
+            mutation_id: string;
+        }) => api.post('/menu/resolutions/verify-assignment', data),
         globalStatus: () => api.get<GlobalMenuStatus>('/menu/global/status'),
         globalCatalog: () => api.get<GlobalMenuCatalogResponse>('/menu/global/catalog'),
         globalMatrix: () => api.get('/menu/global/matrix'),

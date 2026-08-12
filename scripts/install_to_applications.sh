@@ -27,11 +27,17 @@ cp -R "$SOURCE_APP" /Applications/
 echo "Ensuring backend is executable..."
 chmod +x "$BACKEND_BINARY"
 
+echo "Signing nested Electron frameworks and helpers..."
+codesign --force --deep --sign - "$DEST_APP"
+
 echo "Signing backend executable (with entitlements)..."
 codesign --force --sign - --entitlements "$ENTITLEMENTS" "$BACKEND_BINARY"
 
-echo "Signing app bundle (do NOT use --deep; preserves backend signature)..."
+echo "Signing outer app bundle with entitlements..."
 codesign --force --sign - --entitlements "$ENTITLEMENTS" "$DEST_APP"
+
+echo "Verifying the complete app signature..."
+codesign --verify --deep --strict "$DEST_APP"
 
 echo "Clearing quarantine (avoids 'damaged' / Gatekeeper)..."
 xattr -cr "$DEST_APP"

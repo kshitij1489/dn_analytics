@@ -26,6 +26,7 @@ from src.core.db.control import ensure_control_schema
 from src.core.global_menu_identity import (
     GlobalIdentityResolution,
     GlobalMenuIdentityError,
+    ensure_variant_projection_owner,
     global_ids_for_local,
     resolve_redirect_chain,
     resolve_global_identity_for_ingest,
@@ -74,7 +75,12 @@ from src.core.queries.menu_queries import (
     fetch_unverified_items,
 )
 from src.core.services.cloud_pull_orchestrator import CLOUD_PULL_LOCK
+from src.core.sync_identity import get_menu_state_revision
 from utils.id_generator import generate_deterministic_id
+from utils.menu_item_variant_enforcement import (
+    addon_seeded_mapping_order_item_id,
+    catalog_stub_order_item_id,
+)
 from services.clustering_service import OrderItemCluster
 
 
@@ -394,6 +400,55 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         )
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         conn.close()
+
+    def test_pre_revision_17_profile_upgrades_global_menu_columns_in_place(self) -> None:
+        """A profile written by the previous release must still open.
+
+        ``CREATE TABLE IF NOT EXISTS`` cannot add ``global_menu_state.history_cursor``
+        or ``global_menu_mapping_rules.price`` to tables an older build already
+        created, so the additive upgrade has to run before the projection
+        validator. Without it every pre-revision-1.7 profile fails to open.
+        """
+        from src.core.db.connection import analytics_schema_path
+
+        schema_sql = analytics_schema_path().read_text(encoding="utf-8")
+        legacy_sql = schema_sql.replace(
+            "    history_cursor TEXT,\n", ""
+        ).replace(
+            "    price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0),\n", ""
+        )
+        self.assertNotEqual(legacy_sql, schema_sql)
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.executescript(legacy_sql)
+        self.assertNotIn(
+            "history_cursor",
+            {row[1] for row in conn.execute("PRAGMA table_info(global_menu_state)")},
+        )
+
+        apply_analytics_schema(conn)
+
+        self.assertIn(
+            "history_cursor",
+            {row[1] for row in conn.execute("PRAGMA table_info(global_menu_state)")},
+        )
+        self.assertIn(
+            "price",
+            {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(global_menu_mapping_rules)")
+            },
+        )
+        # The dormant projection is still initialized and usable after upgrade.
+        update_global_menu_state(conn, history_cursor="cursor-1")
+        self.assertEqual(
+            conn.execute(
+                "SELECT history_cursor FROM global_menu_state WHERE singleton_id=1"
+            ).fetchone()[0],
+            "cursor-1",
+        )
 
     def test_control_schema_upgrades_old_registry_additively(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -2579,6 +2634,242 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         self.assertEqual(int(row[1]), 4)
         self.assertEqual(int(row[2]), 1)
 
+    def test_legacy_blanket_sequence_is_recovered_for_projection_only(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        self.conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES ('legacy-item', 'Legacy Vanilla', 'Ice Cream', 1)"
+        )
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('legacy-variant', 'Legacy Regular', 1)"
+        )
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, price, is_verified,
+                assignment_seq, pending_local
+            ) VALUES ('1001', 'legacy-item', 'legacy-variant', 299, 1, 668, 0)
+            """
+        )
+        assignment = {
+            "order_item_id": "1001",
+            "menu_item_id": "legacy-item",
+            "variant_id": "legacy-variant",
+            "global_menu_item_id": "global-vanilla",
+            "global_variant_id": "global-regular",
+            "is_verified": 1,
+            "last_seq": 25,
+            "last_verification_seq": 25,
+        }
+
+        first = apply_global_assignment_rows(
+            self.conn, [assignment], server_revision=7
+        )
+        projected = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, price, assignment_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id='1001'
+            """
+        ).fetchone()
+        self.assertEqual(first["rows_applied"], 1)
+        self.assertEqual(first["rows_stale"], 0)
+        self.assertEqual(first["rows_recovered_legacy_watermark"], 1)
+        self.assertEqual(
+            global_ids_for_local(self.conn, projected[0], projected[1]),
+            ("global-vanilla", "global-regular"),
+        )
+        self.assertEqual(float(projected[2]), 299.0)
+        self.assertEqual(int(projected[3]), 668)
+        self.assertEqual(int(projected[4]), 0)
+
+        # The blanket sequence remains a safe future-event guard, while an
+        # unchanged snapshot recognizes the already-correct projection as a
+        # no-op rather than reporting it stale or recovering it again.
+        second = apply_global_assignment_rows(
+            self.conn, [assignment], server_revision=7
+        )
+        rerun = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, price, assignment_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id='1001'
+            """
+        ).fetchone()
+        self.assertEqual(second["rows_stale"], 0)
+        self.assertEqual(second["rows_recovered_legacy_watermark"], 0)
+        self.assertEqual(tuple(rerun), tuple(projected))
+
+    def test_reviewed_pos_rule_moves_an_older_global_projection(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        owner = self.conn.execute(
+            "SELECT local_menu_item_id FROM menu_item_global_links "
+            "WHERE global_menu_item_id='global-vanilla' AND is_projection_owner=1"
+        ).fetchone()[0]
+        old_variant = self.conn.execute(
+            "SELECT local_variant_id FROM variant_global_links "
+            "WHERE global_variant_id='global-regular' AND is_projection_owner=1"
+        ).fetchone()[0]
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES ('1001', ?, ?, 0, 668, 0)
+            """,
+            (owner, old_variant),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name, unit, value,
+                lifecycle_state, server_revision
+            ) VALUES ('global-mini', 'group-desserts', 'Mini Tub', 'GMS', 160,
+                      'active', 8)
+            """
+        )
+        ensure_variant_projection_owner(self.conn, "global-mini")
+        self.conn.execute(
+            """
+            UPDATE global_menu_mapping_rules
+            SET target_global_variant_id='global-mini', server_revision=8
+            WHERE restaurant_id='rest-1' AND locator_kind='pos-item'
+              AND locator_value='1001'
+            """
+        )
+
+        result = apply_global_assignment_rows(
+            self.conn,
+            [{
+                "order_item_id": "1001",
+                "global_menu_item_id": "global-vanilla",
+                "global_variant_id": "global-mini",
+                "last_seq": 25,
+            }],
+            server_revision=8,
+            capability=capability(revision=8, complete=False),
+        )
+        row = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, assignment_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id='1001'
+            """
+        ).fetchone()
+
+        self.assertEqual(result["rows_applied"], 1)
+        self.assertEqual(result["rows_stale"], 0)
+        self.assertEqual(result["rows_recovered_reviewed_locator"], 1)
+        self.assertEqual(
+            global_ids_for_local(self.conn, row[0], row[1]),
+            ("global-vanilla", "global-mini"),
+        )
+        self.assertEqual(tuple(row[2:]), (668, 0))
+
+    def test_pending_local_row_is_not_legacy_recovered(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        self.conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES ('pending-item', 'Pending Vanilla', 'Ice Cream', 1)"
+        )
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('pending-variant', 'Pending Regular', 1)"
+        )
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES ('1001', 'pending-item', 'pending-variant', 1, 668, 1)
+            """
+        )
+        result = apply_global_assignment_rows(
+            self.conn,
+            [{
+                "order_item_id": "1001",
+                "menu_item_id": "pending-item",
+                "variant_id": "pending-variant",
+                "global_menu_item_id": "global-vanilla",
+                "global_variant_id": "global-regular",
+                "last_seq": 25,
+            }],
+            server_revision=7,
+        )
+        row = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, assignment_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id='1001'
+            """
+        ).fetchone()
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(result["rows_stale"], 1)
+        self.assertEqual(result["rows_recovered_legacy_watermark"], 0)
+        self.assertEqual(tuple(row), ("pending-item", "pending-variant", 668, 1))
+
+    def test_newer_semantic_assignment_remains_sequence_protected(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        self.conn.executemany(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES (?, ?, 'Ice Cream', 1)",
+            [
+                ("central-item", "Central Vanilla"),
+                ("newer-item", "Newer Chocolate"),
+            ],
+        )
+        self.conn.executemany(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES (?, ?, 1)",
+            [
+                ("central-variant", "Central Regular"),
+                ("newer-variant", "Newer Large"),
+            ],
+        )
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES ('1001', 'newer-item', 'newer-variant', 1, 668, 0)
+            """
+        )
+        result = apply_global_assignment_rows(
+            self.conn,
+            [{
+                "order_item_id": "1001",
+                "menu_item_id": "central-item",
+                "variant_id": "central-variant",
+                "global_menu_item_id": "global-vanilla",
+                "global_variant_id": "global-regular",
+                "last_seq": 25,
+            }],
+            server_revision=7,
+        )
+        row = self.conn.execute(
+            "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id='1001'"
+        ).fetchone()
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(result["rows_stale"], 1)
+        self.assertEqual(result["rows_recovered_legacy_watermark"], 0)
+        self.assertEqual(tuple(row), ("newer-item", "newer-variant"))
+
     def test_assignment_snapshot_reconciles_linked_rows_back_to_unlinked(self) -> None:
         apply_global_menu_payload_page(
             self.conn, self.fixture, stream="snapshot", capability=capability(complete=False)
@@ -2764,6 +3055,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             "schema_version": 1,
             "menu_group_id": "group-desserts",
             "menu_group_revision": 7,
+            "menu_revision": 55,
             "assignments": [
                 {
                     "order_item_id": "101",
@@ -2795,6 +3087,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         ):
             result = pull_global_assignment_snapshot(self.conn, auth="sync-key")
         self.assertEqual(result["status"], "applied")
+        self.assertEqual(get_menu_state_revision(self.conn), 55)
 
         wrong_group = {**page, "menu_group_id": "other-group"}
         with patch(
@@ -2813,6 +3106,63 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             refused = pull_global_assignment_snapshot(self.conn, auth="sync-key")
         self.assertEqual(refused["status"], "error")
         self.assertIn("Cross-group", refused["error"])
+
+    def test_assignment_pull_aggregates_stale_and_legacy_recovered_counts(self) -> None:
+        cap = capability(revision=7)
+        pages = [
+            {
+                "schema_version": 1,
+                "menu_group_id": "group-desserts",
+                "menu_group_revision": 7,
+                "assignments": [],
+                "next_page": "page-2",
+            },
+            {
+                "schema_version": 1,
+                "menu_group_id": "group-desserts",
+                "menu_group_revision": 7,
+                "assignments": [],
+                "next_page": None,
+            },
+        ]
+        apply_results = [
+            {
+                "rows_applied": 4,
+                "rows_missing": 2,
+                "rows_stale": 3,
+                "rows_recovered_legacy_watermark": 1,
+            },
+            {
+                "rows_applied": 5,
+                "rows_missing": 6,
+                "rows_stale": 7,
+                "rows_recovered_legacy_watermark": 8,
+            },
+        ]
+        with patch(
+            "src.core.global_menu_sync.require_global_menu_capability",
+            return_value=cap,
+        ), patch(
+            "src.core.global_menu_sync.resolve_global_menu_capability",
+            return_value=cap,
+        ), patch(
+            "src.core.global_menu_sync.get_global_menu_assignment_endpoint",
+            return_value="https://cloud/menu-assignments/snapshot",
+        ), patch(
+            "src.core.global_menu_sync._fetch_page",
+            side_effect=pages,
+        ), patch(
+            "src.core.global_menu_sync.apply_global_assignment_rows",
+            side_effect=apply_results,
+        ):
+            result = pull_global_assignment_snapshot(self.conn, auth="sync-key")
+
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["pages"], 2)
+        self.assertEqual(result["rows_applied"], 9)
+        self.assertEqual(result["rows_missing"], 8)
+        self.assertEqual(result["rows_stale"], 10)
+        self.assertEqual(result["rows_recovered_legacy_watermark"], 9)
 
     def test_global_merge_and_undo_recompute_stats_and_clear_forecasts(self) -> None:
         snapshot = json.loads(json.dumps(self.fixture))
@@ -3364,6 +3714,139 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertTrue(fetch_unverified_items(conn).empty)
         rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
         self.assertEqual(rows.iloc[0]["resolution_kind"], "global_identity_gap")
+        self.assertEqual(rows.iloc[0]["assignment_order_item_ids"], ["7777"])
+        conn.close()
+
+    def test_verified_non_pos_synthetic_rows_are_not_global_identity_gaps(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_analytics_schema(conn)
+        conn.executemany(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES (?, ?, 'Dessert', 1)",
+            [
+                ("catalog-item", "Catalog Only"),
+                ("addon-item", "Addon Only"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('local-regular', 'Regular', 1)"
+        )
+        conn.executemany(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES (?, ?, 'local-regular', 1, NULL, 0)
+            """,
+            [
+                (catalog_stub_order_item_id("catalog-item"), "catalog-item"),
+                (
+                    addon_seeded_mapping_order_item_id(
+                        "addon-item", "local-regular"
+                    ),
+                    "addon-item",
+                ),
+            ],
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+
+        self.assertTrue(rows.empty)
+        conn.close()
+
+    def test_pos_backed_missing_global_link_remains_visible(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_analytics_schema(conn)
+        conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES ('pos-item', 'POS Kulfi', 'Dessert', 1)"
+        )
+        conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('pos-variant', 'Regular', 1)"
+        )
+        conn.execute(
+            """
+            INSERT INTO orders (
+                order_id, petpooja_order_id, stream_id, event_id, occurred_at,
+                created_on, order_type, order_from, order_status
+            ) VALUES (1, 1, 1, 'event-1', '2026-08-10T10:00:00Z',
+                      '2026-08-10 15:30:00', 'Delivery', 'POS', 'Success')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO order_items (
+                order_item_id, order_id, menu_item_id, variant_id,
+                petpooja_itemid, name_raw, quantity, unit_price, total_price
+            ) VALUES (1, 1, 'pos-item', 'pos-variant', 7777,
+                      'POS Kulfi', 1, 100, 100)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified
+            ) VALUES ('7777', 'pos-item', 'pos-variant', 1)
+            """
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows.iloc[0]["menu_item_id"], "pos-item")
+        self.assertEqual(rows.iloc[0]["resolution_kind"], "global_identity_gap")
+        self.assertEqual(rows.iloc[0]["assignment_order_item_ids"], ["7777"])
+        conn.close()
+
+    def test_unverified_synthetic_rows_keep_existing_resolution_kinds(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_analytics_schema(conn)
+        conn.executemany(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES (?, ?, 'Dessert', 0)",
+            [
+                ("catalog-item", "Unverified Catalog"),
+                ("addon-item", "Unverified Addon"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('local-regular', 'Regular', 0)"
+        )
+        conn.executemany(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES (?, ?, 'local-regular', 0, NULL, 0)
+            """,
+            [
+                (catalog_stub_order_item_id("catalog-item"), "catalog-item"),
+                (
+                    addon_seeded_mapping_order_item_id(
+                        "addon-item", "local-regular"
+                    ),
+                    "addon-item",
+                ),
+            ],
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+        kinds = {
+            str(row["menu_item_id"]): str(row["resolution_kind"])
+            for _, row in rows.iterrows()
+        }
+
+        self.assertEqual(kinds["catalog-item"], "unverified_mapping")
+        self.assertEqual(kinds["addon-item"], "addon_gap")
         conn.close()
 
     def test_mutation_headers_use_the_separate_editor_credential(self) -> None:
@@ -3476,6 +3959,54 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             "payload": preview_fixture["payload"]["payload"],
         }
         self.assertEqual(sent, expected)
+        self.assertEqual(result["status"], "success")
+
+    def test_variant_create_commit_restores_the_previewed_dimension_shape(self) -> None:
+        mutation_id = "variant-create-1"
+        preview = {
+            "mutation_id": mutation_id,
+            "mutation_type": "global_variant.create",
+            "menu_group_id": "group-1",
+            "menu_group_revision": 0,
+            "coverage_complete": False,
+            "conflicts": [],
+            "preview_digest": "variant-create-digest",
+            "payload": {
+                "canonical_name": "Mini Tub",
+                "unit": "GMS",
+                "value": 160.0,
+                "is_verified": False,
+            },
+        }
+        accepted = {"status": "accepted", "mutation_id": mutation_id}
+        with patch(
+            "src.core.global_menu_mutation.require_global_menu_capability",
+            return_value=capability(revision=0, group_id="group-1"),
+        ), patch(
+            "src.core.global_menu_mutation._urls",
+            return_value=("https://cloud/mutations", "sync-key"),
+        ), patch(
+            "src.core.global_menu_mutation._headers",
+            return_value={"X-Global-Menu-Key": "editor-key"},
+        ), patch(
+            "src.core.global_menu_mutation.get_sync_attribution",
+            return_value={"employee": None, "device": {}},
+        ), patch(
+            "src.core.global_menu_mutation._request_json",
+            return_value=(200, accepted),
+        ) as transport, patch(
+            "src.core.global_menu_mutation._apply_accepted_projection"
+        ):
+            result = commit_global_mutation(Mock(), preview=preview)
+
+        self.assertEqual(
+            transport.call_args.kwargs["payload"]["payload"],
+            {
+                "canonical_name": "Mini Tub",
+                "dimension": {"unit": "GMS", "value": 160.0},
+                "is_verified": False,
+            },
+        )
         self.assertEqual(result["status"], "success")
 
     def test_global_ids_group_different_names_and_leave_unlinked_rows_distinct(self) -> None:

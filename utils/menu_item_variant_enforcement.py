@@ -197,6 +197,36 @@ def addon_seeded_mapping_order_item_id(menu_item_id: str, variant_id: str) -> st
     )
 
 
+def synthetic_mapping_kind(
+    menu_item_id: str,
+    variant_id: Optional[str],
+    order_item_id: str,
+) -> Optional[str]:
+    """Return the local-only synthetic mapping kind, if this row is one.
+
+    Keep recognition in one place so upload and resolution-query filters cannot
+    drift.  POS backing is deliberately not considered here: callers decide
+    whether a synthetically-shaped key is nevertheless backed by observed POS
+    data for their own workflow.
+    """
+    if is_catalog_stub_mapping(menu_item_id, order_item_id):
+        return "catalog_stub"
+    if variant_id is not None and str(order_item_id) == addon_seeded_mapping_order_item_id(
+        menu_item_id, variant_id
+    ):
+        return "addon_seeded"
+    return None
+
+
+def is_synthetic_mapping(
+    menu_item_id: str,
+    variant_id: Optional[str],
+    order_item_id: str,
+) -> bool:
+    """True for catalog-stub and addon-seeded local read-model mappings."""
+    return synthetic_mapping_kind(menu_item_id, variant_id, order_item_id) is not None
+
+
 def mark_addon_eligible_from_usage(conn, *, cursor) -> int:
     """
     Set addon_eligible = 1 for every menu_item_variants pair that has ever

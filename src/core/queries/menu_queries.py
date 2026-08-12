@@ -2,14 +2,23 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from src.core.order_item_key import AssignmentKeyIndex, has_local_pos_backing
 from src.core.utils.business_date import get_business_date_range
-from utils.menu_item_variant_enforcement import addon_seeded_mapping_order_item_id
+from utils.menu_item_variant_enforcement import (
+    is_synthetic_mapping,
+    synthetic_mapping_kind,
+)
 
 # SQLite strftime('%w') = 0 Sunday, 1 Monday, ..., 6 Saturday
 DAY_NAME_TO_SQLITE_DOW = {
     "Sunday": 0, "Monday": 1, "Tuesday": 2, "Wednesday": 3,
     "Thursday": 4, "Friday": 5, "Saturday": 6,
 }
+
+# Each assignment-pair predicate consumes two bind parameters and contributes
+# two levels to SQLite's expression tree. Keep batches below both the legacy
+# 999-variable ceiling and the default 1000-level expression-depth ceiling.
+ASSIGNMENT_PAIR_QUERY_CHUNK_SIZE = 400
 
 
 def _weekdays_to_sqlite_dow(selected_weekdays):
@@ -349,7 +358,37 @@ def fetch_menu_types(conn):
 
 def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
     """Fetch unresolved menu item + variant rows for the resolutions workflow."""
-    query = """
+    ignored_synthetic_ids: list[str] = []
+    if include_global_identity_gaps:
+        synthetic_candidates = conn.execute(
+            """
+            SELECT order_item_id, menu_item_id, variant_id
+            FROM menu_item_variants
+            WHERE is_verified = 1
+            """
+        ).fetchall()
+        key_index = AssignmentKeyIndex(conn)
+        ignored_synthetic_ids = [
+            str(order_item_id)
+            for order_item_id, menu_item_id, variant_id in synthetic_candidates
+            if is_synthetic_mapping(
+                str(menu_item_id),
+                str(variant_id) if variant_id is not None else None,
+                str(order_item_id),
+            )
+            and not has_local_pos_backing(
+                conn, str(order_item_id), key_index=key_index
+            )
+        ]
+
+    synthetic_gap_filter = ""
+    params: list[Any] = [1 if include_global_identity_gaps else 0]
+    if ignored_synthetic_ids:
+        placeholders = ", ".join("?" for _ in ignored_synthetic_ids)
+        synthetic_gap_filter = f"AND mv.order_item_id NOT IN ({placeholders})"
+        params.extend(ignored_synthetic_ids)
+
+    query = f"""
         WITH unresolved_variants AS (
             SELECT
                 mv.menu_item_id,
@@ -362,7 +401,11 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
             LEFT JOIN variant_global_links gvl
                 ON gvl.local_variant_id = mv.variant_id
             WHERE mv.is_verified = 0
-               OR (? = 1 AND (gil.global_menu_item_id IS NULL OR gvl.global_variant_id IS NULL))
+               OR (
+                    ? = 1
+                    AND (gil.global_menu_item_id IS NULL OR gvl.global_variant_id IS NULL)
+                    {synthetic_gap_filter}
+               )
             GROUP BY mv.menu_item_id, mv.variant_id
         ),
         order_item_usage AS (
@@ -412,7 +455,7 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
             ON uv.menu_item_id = au.menu_item_id AND uv.variant_id = au.variant_id
         ORDER BY m.name, v.variant_name
     """
-    cursor = conn.execute(query, (1 if include_global_identity_gaps else 0,))
+    cursor = conn.execute(query, params)
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     if df.empty:
         return df
@@ -427,7 +470,7 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
     addon_gap_pairs = {
         (str(mid), str(vid))
         for mid, vid, oid in cursor.fetchall()
-        if oid == addon_seeded_mapping_order_item_id(str(mid), str(vid))
+        if synthetic_mapping_kind(str(mid), str(vid), str(oid)) == "addon_seeded"
     }
 
     df["resolution_kind"] = df.apply(
@@ -439,6 +482,56 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
                 if (str(row["menu_item_id"]), str(row["source_variant_id"])) in addon_gap_pairs
                 else "unverified_mapping"
             )
+        ),
+        axis=1,
+    )
+    resolution_pairs = {
+        (
+            str(row["menu_item_id"]),
+            None
+            if pd.isna(row["source_variant_id"])
+            else str(row["source_variant_id"]),
+        )
+        for _, row in df.iterrows()
+    }
+    sorted_resolution_pairs = sorted(
+        resolution_pairs,
+        key=lambda candidate: (candidate[0], candidate[1] or ""),
+    )
+    assignment_keys: dict[tuple[str, Optional[str]], list[str]] = {}
+    for offset in range(
+        0, len(sorted_resolution_pairs), ASSIGNMENT_PAIR_QUERY_CHUNK_SIZE
+    ):
+        pair_batch = sorted_resolution_pairs[
+            offset : offset + ASSIGNMENT_PAIR_QUERY_CHUNK_SIZE
+        ]
+        pair_clauses = " OR ".join(
+            "(menu_item_id = ? AND variant_id IS ?)" for _ in pair_batch
+        )
+        pair_params = [value for pair in pair_batch for value in pair]
+        for menu_item_id, variant_id, order_item_id in conn.execute(
+            f"""
+            SELECT menu_item_id, variant_id, order_item_id
+            FROM menu_item_variants
+            WHERE {pair_clauses}
+            ORDER BY order_item_id
+            """,
+            pair_params,
+        ).fetchall():
+            key = (
+                str(menu_item_id),
+                str(variant_id) if variant_id is not None else None,
+            )
+            assignment_keys.setdefault(key, []).append(str(order_item_id))
+    df["assignment_order_item_ids"] = df.apply(
+        lambda row: assignment_keys.get(
+            (
+                str(row["menu_item_id"]),
+                str(row["source_variant_id"])
+                if not pd.isna(row["source_variant_id"])
+                else None,
+            ),
+            [],
         ),
         axis=1,
     )

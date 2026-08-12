@@ -10,7 +10,7 @@ import contextvars
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Tuple
 
 try:
     from zoneinfo import ZoneInfo
@@ -62,21 +62,39 @@ def current_business_date_context() -> BusinessDateContext:
     return _BUSINESS_DATE_CONTEXT.get() or BusinessDateContext()
 
 
-@contextmanager
-def business_date_context(
+def bind_business_date_context(
     timezone: Optional[str] = None, as_of: Optional[datetime] = None
-) -> Iterator[BusinessDateContext]:
-    """Bind the profile timezone (and optionally one captured instant)."""
+) -> Tuple[BusinessDateContext, "contextvars.Token"]:
+    """Bind the profile timezone and return the token that undoes the binding.
+
+    Callers that enter and leave inside one frame should use
+    ``business_date_context``. This lower-level pair exists for FastAPI
+    dependencies, whose setup and teardown are separate calls: a ``ContextVar``
+    token may only be reset in the context that created it, so the bind and the
+    reset have to be scheduled on the same context deliberately.
+    """
     inherited = _BUSINESS_DATE_CONTEXT.get()
     context = BusinessDateContext(
         timezone=timezone or (inherited.timezone if inherited else DEFAULT_TIMEZONE),
         as_of=as_of if as_of is not None else (inherited.as_of if inherited else None),
     )
-    token = _BUSINESS_DATE_CONTEXT.set(context)
+    return context, _BUSINESS_DATE_CONTEXT.set(context)
+
+
+def reset_business_date_context(token: "contextvars.Token") -> None:
+    _BUSINESS_DATE_CONTEXT.reset(token)
+
+
+@contextmanager
+def business_date_context(
+    timezone: Optional[str] = None, as_of: Optional[datetime] = None
+) -> Iterator[BusinessDateContext]:
+    """Bind the profile timezone (and optionally one captured instant)."""
+    context, token = bind_business_date_context(timezone=timezone, as_of=as_of)
     try:
         yield context
     finally:
-        _BUSINESS_DATE_CONTEXT.reset(token)
+        reset_business_date_context(token)
 
 
 def get_current_business_date(now: Optional[datetime] = None) -> str:
