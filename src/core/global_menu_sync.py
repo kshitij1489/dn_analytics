@@ -25,6 +25,7 @@ from src.core.global_menu_schema import (
     GLOBAL_MENU_SCHEMA_VERSION,
     GLOBAL_MENU_MODE,
     GlobalMenuCapabilityStatus,
+    clear_resolved_quarantine,
     quarantine_global_menu_payload,
     require_global_menu_capability,
     resolve_global_menu_quarantine_page,
@@ -681,6 +682,12 @@ def _rule_price_and_policy(
 ) -> Optional[str]:
     price = row.get("price")
     shared_pos = capability.shared_pos_catalog_advertised
+    group_pos_aliases = capability.group_pos_aliases_advertised
+    if capability.pos_policy_conflict:
+        raise _sync_error(
+            "A menu group cannot advertise both shared-POS and group-POS-alias policies",
+            "global_menu_pos_policy_conflict",
+        )
     if kind in _GROUP_LOCATOR_KINDS:
         if scope != "group":
             raise _sync_error(
@@ -694,10 +701,11 @@ def _rule_price_and_policy(
             )
         return None
 
-    if shared_pos:
+    if shared_pos or group_pos_aliases:
         if scope != "group":
+            policy_label = "Shared POS" if shared_pos else "Group POS alias"
             raise _sync_error(
-                f"Shared POS rule {rule_id} must be group-scoped",
+                f"{policy_label} rule {rule_id} must be group-scoped",
                 "global_menu_rule_scope_invalid",
             )
         return _wire_price(price, field=f"mapping_rules[{rule_id}].price")
@@ -754,16 +762,15 @@ def _upsert_rules(
             capability=capability,
         )
         revision = _revision(row.get("server_revision", page_revision))
-        target_item_id = _nonblank(row, "target_global_menu_item_id")
-        _active_rule_target(
+        target_item_id = _active_rule_target(
             conn,
             entity_type="item",
-            entity_id=target_item_id,
+            entity_id=_nonblank(row, "target_global_menu_item_id"),
             group_id=group_id,
         )
         target_variant_id = str(row.get("target_global_variant_id") or "").strip() or None
         if target_variant_id:
-            _active_rule_target(
+            target_variant_id = _active_rule_target(
                 conn,
                 entity_type="variant",
                 entity_id=target_variant_id,
@@ -820,12 +827,20 @@ def _no_variant_sentinel(conn) -> str:
         raise _sync_error(str(exc), "global_menu_projection_invalid") from exc
 
 
-def _shared_pos_projection_plan(
+def _group_pos_projection_plan(
     conn,
     capability: GlobalMenuCapabilityStatus,
 ) -> List[Dict[str, str]]:
-    if not capability.shared_pos_catalog_advertised or not capability.menu_group_id:
+    if capability.pos_policy_conflict:
+        raise _sync_error(
+            "A menu group cannot advertise both shared-POS and group-POS-alias policies",
+            "global_menu_pos_policy_conflict",
+        )
+    if not capability.group_pos_policy_advertised or not capability.menu_group_id:
         return []
+    policy_label = (
+        "Shared POS" if capability.shared_pos_catalog_advertised else "Group POS alias"
+    )
     rows = conn.execute(
         """
         SELECT rule_id, locator_scope, restaurant_id, locator_kind, locator_value,
@@ -849,29 +864,29 @@ def _shared_pos_projection_plan(
         locator_value = str(row[4] or "").strip()
         if scope != "group" or restaurant_id is not None:
             raise _sync_error(
-                f"Shared POS rule {rule_id} is not group-scoped",
+                f"{policy_label} rule {rule_id} is not group-scoped",
                 "global_menu_rule_scope_invalid",
             )
         if not locator_value:
             raise _sync_error(
-                f"Shared POS rule {rule_id} has a blank locator",
+                f"{policy_label} rule {rule_id} has a blank locator",
                 "global_menu_locator_invalid",
             )
         if not row[8]:
             raise _sync_error(
-                f"Shared POS rule {rule_id} is not verified",
+                f"{policy_label} rule {rule_id} is not verified",
                 "global_menu_rule_unverified",
             )
         pair = (kind, locator_value)
         if pair in seen_pairs:
             raise _sync_error(
-                f"Duplicate shared POS locator {kind}:{locator_value}",
+                f"Duplicate group POS locator {kind}:{locator_value}",
                 "global_menu_locator_duplicate",
             )
         previous_kind = seen_values.get(locator_value)
         if previous_kind is not None and previous_kind != kind:
             raise _sync_error(
-                f"Shared POS locator {locator_value} appears as both item and addon",
+                f"Group POS locator {locator_value} appears as both item and addon",
                 "global_menu_locator_kind_collision",
             )
         seen_pairs.add(pair)
@@ -903,21 +918,23 @@ def _shared_pos_projection_plan(
     return plan
 
 
-def materialize_shared_pos_catalog(
+def materialize_group_pos_catalog(
     conn,
     capability: GlobalMenuCapabilityStatus,
     *,
     tombstoned_locators: Sequence[Tuple[str, str]] = (),
 ) -> Dict[str, int]:
-    """Project active shared POS rules into the profile-local menu matrix.
+    """Project active group POS rules into the profile-local menu matrix.
 
+    Shared-locator and reviewed-alias policies use the same local cache shape,
+    but reach this helper only after their distinct capability guards pass.
     Existing availability and eligibility flags are preserved during ordinary
     refreshes. A central tombstone temporarily deactivates its projection while
     remembering local availability so a later rule re-add can restore it.
     """
-    if not capability.shared_pos_catalog_advertised:
+    if not capability.group_pos_policy_advertised:
         return {"rows_materialized": 0, "rows_deactivated": 0}
-    plan = _shared_pos_projection_plan(conn, capability)
+    plan = _group_pos_projection_plan(conn, capability)
     active_locators = {row["locator_value"] for row in plan}
     deactivated = 0
     for kind, locator_value in sorted(
@@ -989,10 +1006,37 @@ def materialize_shared_pos_catalog(
                 row["price"],
             ),
         )
+    if capability.group_pos_aliases_advertised:
+        clear_resolved_quarantine(
+            conn,
+            [
+                f"group-pos-alias:{row['locator_kind']}:{row['locator_value']}"
+                for row in plan
+            ],
+        )
     return {
         "rows_materialized": len(plan),
         "rows_deactivated": deactivated,
     }
+
+
+def materialize_shared_pos_catalog(
+    conn,
+    capability: GlobalMenuCapabilityStatus,
+    *,
+    tombstoned_locators: Sequence[Tuple[str, str]] = (),
+) -> Dict[str, int]:
+    """Backward-compatible revision-1.7 entry point.
+
+    Runtime code uses ``materialize_group_pos_catalog`` so alias support cannot
+    accidentally grow a second projection implementation. Existing callers and
+    tests retain this name without changing revision-1.7 behavior.
+    """
+    return materialize_group_pos_catalog(
+        conn,
+        capability,
+        tombstoned_locators=tombstoned_locators,
+    )
 
 
 def _upsert_links(
@@ -1138,6 +1182,11 @@ def apply_global_menu_payload_page(
     elif stream == "events" and "event_head_seq" in payload:
         payload = _normalize_contract_event_page(payload)
     capability = capability or require_global_menu_capability(conn)
+    if capability.pos_policy_conflict:
+        raise _sync_error(
+            "A menu group cannot advertise both shared-POS and group-POS-alias policies",
+            "global_menu_pos_policy_conflict",
+        )
     _validate_schema_version(payload)
     group_id = _validate_group(payload, capability)
     page_revision = _revision(
@@ -1206,8 +1255,8 @@ def apply_global_menu_payload_page(
                 )
                 _upsert_links(conn, body, event_revision, group_id)
                 apply_local_projection_plan(conn, plan_local_projection(conn))
-                if capability.shared_pos_catalog_advertised:
-                    event_projection = materialize_shared_pos_catalog(
+                if capability.group_pos_policy_advertised:
+                    event_projection = materialize_group_pos_catalog(
                         conn,
                         capability,
                         tombstoned_locators=tombstoned_locators,
@@ -1276,11 +1325,11 @@ def apply_global_menu_payload_page(
                 or (snapshot_section == "rules" and not payload.get("has_more"))
             )
             if (
-                capability.shared_pos_catalog_advertised
+                capability.group_pos_policy_advertised
                 and snapshot_complete
                 and not defer_shared_materialization
             ):
-                projection_stats = materialize_shared_pos_catalog(conn, capability)
+                projection_stats = materialize_group_pos_catalog(conn, capability)
             rows_applied = len(items) + len(variants)
 
         coverage = payload.get("coverage") or {}
@@ -1465,12 +1514,12 @@ def _store_qualified_variant_target(
     return local_id
 
 
-def _shared_assignment_target(
+def _group_pos_assignment_target(
     conn,
     capability: GlobalMenuCapabilityStatus,
     order_item_id: str,
 ) -> Optional[Tuple[str, Optional[str]]]:
-    if not capability.shared_pos_catalog_advertised or not capability.menu_group_id:
+    if not capability.group_pos_policy_advertised or not capability.menu_group_id:
         return None
     rows = conn.execute(
         """
@@ -1487,7 +1536,7 @@ def _shared_assignment_target(
         return None
     if len(rows) != 1:
         raise _sync_error(
-            f"Shared POS locator {order_item_id} appears as both item and addon",
+            f"Group POS locator {order_item_id} appears as both item and addon",
             "global_menu_locator_kind_collision",
         )
     item_id = _active_rule_target(
@@ -1621,6 +1670,29 @@ def _can_apply_reviewed_locator_projection(
     ).fetchone()
     if current is None or tuple(current) == (global_item_id, global_variant_id):
         return False
+    if capability.group_pos_policy_advertised:
+        return conn.execute(
+            """
+            SELECT 1
+            FROM global_menu_mapping_rules
+            WHERE menu_group_id=?
+              AND locator_scope='group'
+              AND restaurant_id IS NULL
+              AND locator_kind IN ('pos-item', 'pos-addon')
+              AND locator_value=?
+              AND target_global_menu_item_id=?
+              AND target_global_variant_id=?
+              AND lifecycle_state='active'
+              AND server_revision <= ?
+            """,
+            (
+                capability.menu_group_id,
+                order_item_id,
+                global_item_id,
+                global_variant_id,
+                server_revision,
+            ),
+        ).fetchone() is not None
     return conn.execute(
         """
         SELECT 1
@@ -1688,10 +1760,10 @@ def apply_global_assignment_rows(
             continue
         global_item_id = str(row.get("global_menu_item_id") or "").strip() or None
         global_variant_id = str(row.get("global_variant_id") or "").strip() or None
-        shared_target = _shared_assignment_target(
+        group_pos_target = _group_pos_assignment_target(
             conn, capability, order_item_id
         )
-        if shared_target is not None:
+        if group_pos_target is not None:
             incoming_item_id = (
                 resolve_redirect_chain(conn, "item", global_item_id)
                 if global_item_id
@@ -1702,10 +1774,18 @@ def apply_global_assignment_rows(
                 if global_variant_id
                 else None
             )
-            if (incoming_item_id, incoming_variant_id) != shared_target:
+            if (incoming_item_id, incoming_variant_id) != group_pos_target:
+                if capability.group_pos_aliases_advertised:
+                    message = (
+                        f"Assignment {order_item_id} conflicts with its reviewed group POS alias"
+                    )
+                    code = "global_menu_group_pos_alias_assignment_conflict"
+                else:
+                    message = f"Assignment {order_item_id} conflicts with its shared POS rule"
+                    code = "global_menu_shared_pos_assignment_conflict"
                 raise _sync_error(
-                    f"Assignment {order_item_id} conflicts with its shared POS rule",
-                    "global_menu_shared_pos_assignment_conflict",
+                    message,
+                    code,
                 )
         last_seq_raw = row.get("last_seq", row.get("assignment_seq", row.get("server_seq")))
         if last_seq_raw is not None and local[2] is not None:
@@ -2105,8 +2185,8 @@ def pull_global_menu_state(
     stream = "snapshot" if state.bootstrap_status != "complete" else "events"
     pages = rows_applied = 0
     if stream == "snapshot":
-        atomic_snapshot = state.shared_pos_catalog_advertised
-        # Revision 1.7 shared catalogs are rebuilt from one pinned four-section
+        atomic_snapshot = state.group_pos_policy_advertised
+        # Group-owned POS policies are rebuilt from one pinned four-section
         # snapshot. Do not resume a page-wise revision-1.6 cache transaction.
         progress = (
             _decode_snapshot_cursor(None)
@@ -2203,7 +2283,7 @@ def pull_global_menu_state(
                         current_capability = resolve_global_menu_capability(
                             conn, allow_profile_sync=allow_profile_sync
                         )
-                        projection_result = materialize_shared_pos_catalog(
+                        projection_result = materialize_group_pos_catalog(
                             conn,
                             current_capability,
                             tombstoned_locators=removed_pos_locators,

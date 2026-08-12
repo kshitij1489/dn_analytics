@@ -358,7 +358,10 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 "skip_global_menu_state": True,
                 "send_shared_pos_observation": bool(
                     global_capability is not None
-                    and global_capability.shared_pos_catalog_advertised
+                    and (
+                        global_capability.shared_pos_catalog_advertised
+                        or global_capability.resolution_advertised
+                    )
                 ),
             }
         )

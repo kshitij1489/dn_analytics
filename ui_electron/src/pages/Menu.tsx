@@ -19,8 +19,9 @@ import {
     hasGlobalMenuCapability,
     hasGlobalMenuMutationCapability,
     hasGlobalMenuResolutionCapability,
-    hasGlobalMenuSharedPosCatalogCapability,
     isGroupOwnedMenuReady,
+    isGlobalMenuAliasReviewAvailable,
+    isGlobalMenuCatalogReadable,
 } from '../globalMenuCapabilities';
 import {
     GlobalIdentityMappedVerificationError,
@@ -29,6 +30,7 @@ import {
     resolutionAttemptKey,
     runResolutionAttempt,
 } from '../menuResolutionRouting';
+import { GlobalMenuAliasResolutionTab } from './GlobalMenuAliasResolutionTab';
 
 // --- Shared Components ---
 
@@ -4034,24 +4036,26 @@ function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
 
 export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
     const { isAllStores, selectedStore } = useStore();
-    const [activeTab, setActiveTab] = useState<'summary' | 'catalog' | 'items' | 'variants' | 'matrix' | 'history' | 'resolutions'>('summary');
+    const [activeTab, setActiveTab] = useState<'summary' | 'catalog' | 'items' | 'variants' | 'matrix' | 'history' | 'aliases' | 'resolutions'>('summary');
     const [globalStatusSelection, setGlobalStatusSelection] = useState<{
         restaurantId: string;
         syncToken?: number;
         status: GlobalMenuStatus;
     } | null>(null);
-    const sharedPosAdvertised = hasGlobalMenuSharedPosCatalogCapability(selectedStore);
+    const globalMenuAdvertised = hasGlobalMenuCapability(selectedStore);
     const globalStatus = globalStatusSelection &&
         globalStatusSelection.restaurantId === selectedStore?.restaurant_id &&
         globalStatusSelection.syncToken === lastDbSync
         ? globalStatusSelection.status
         : null;
     const groupOwnedReady = isGroupOwnedMenuReady(selectedStore, globalStatus, isAllStores);
+    const catalogReadable = isGlobalMenuCatalogReadable(selectedStore, globalStatus, isAllStores);
+    const aliasReviewAvailable = isGlobalMenuAliasReviewAvailable(selectedStore, isAllStores);
     const labels = globalMenuViewLabels(groupOwnedReady);
 
     useEffect(() => {
         let cancelled = false;
-        if (isAllStores || !sharedPosAdvertised) return () => { cancelled = true; };
+        if (isAllStores || !globalMenuAdvertised) return () => { cancelled = true; };
         endpoints.menu.globalStatus()
             .then(response => {
                 if (!cancelled && selectedStore) {
@@ -4066,18 +4070,21 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
                 if (!cancelled) setGlobalStatusSelection(null);
             });
         return () => { cancelled = true; };
-    }, [isAllStores, selectedStore?.restaurant_id, sharedPosAdvertised, lastDbSync]);
-    const displayedActiveTab = !groupOwnedReady && (activeTab === 'catalog' || activeTab === 'history')
-        ? 'summary'
-        : activeTab;
+    }, [isAllStores, selectedStore?.restaurant_id, globalMenuAdvertised, lastDbSync]);
+    const displayedActiveTab = (
+        (activeTab === 'catalog' && !catalogReadable) ||
+        (activeTab === 'history' && !groupOwnedReady) ||
+        (activeTab === 'aliases' && !aliasReviewAvailable)
+    ) ? 'summary' : activeTab;
 
     const menuTabs = [
         { id: 'summary' as const, label: '📊 Summary' },
-        ...(groupOwnedReady ? [{ id: 'catalog' as const, label: `📚 ${labels.catalog}` }] : []),
+        ...(catalogReadable ? [{ id: 'catalog' as const, label: '📚 Group Catalog' }] : []),
         { id: 'items' as const, label: '📋 Menu Items' },
         { id: 'variants' as const, label: '📏 Variants' },
         { id: 'matrix' as const, label: `🕸️ ${labels.matrix}` },
         ...(groupOwnedReady ? [{ id: 'history' as const, label: `🕘 ${labels.history}` }] : []),
+        ...(aliasReviewAvailable ? [{ id: 'aliases' as const, label: '🔗 POS Alias Review' }] : []),
         { id: 'resolutions' as const, label: '✨ Resolutions' },
     ];
 
@@ -4098,11 +4105,12 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
             </div>
 
             {displayedActiveTab === 'summary' && <SummaryTab lastDbSync={lastDbSync} />}
-            {displayedActiveTab === 'catalog' && groupOwnedReady && <GroupCatalogTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'catalog' && catalogReadable && <GroupCatalogTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'items' && <MenuItemsTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} groupOwnedReady={groupOwnedReady} />}
             {displayedActiveTab === 'history' && groupOwnedReady && <GroupHistoryTab lastDbSync={lastDbSync} />}
+            {displayedActiveTab === 'aliases' && aliasReviewAvailable && <GlobalMenuAliasResolutionTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'resolutions' && (
                 <SingleStoreOnly what="Menu resolutions">
                     <ResolutionsTab lastDbSync={lastDbSync} showHistory={!groupOwnedReady} />

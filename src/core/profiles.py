@@ -422,6 +422,21 @@ def registered_profile_authorization(
     it must not inherit authorization state from some other registered path.
     """
     restaurant_id = validate_restaurant_id(restaurant_id)
+    main_path = ""
+    if analytics_conn is not None:
+        database_rows = analytics_conn.execute("PRAGMA database_list").fetchall()
+        main_path = next(
+            (
+                str(database_row[2])
+                for database_row in database_rows
+                if database_row[1] == "main"
+            ),
+            "",
+        )
+        # In-memory and anonymous support databases can never be a registered
+        # profile file. Return before touching the durable control registry.
+        if not main_path:
+            return None
     ensure_control_schema()
     conn = get_control_connection()
     try:
@@ -436,13 +451,6 @@ def registered_profile_authorization(
             return None
         if analytics_conn is None:
             return str(row[0])
-        database_rows = analytics_conn.execute("PRAGMA database_list").fetchall()
-        main_path = next(
-            (str(database_row[2]) for database_row in database_rows if database_row[1] == "main"),
-            "",
-        )
-        if not main_path:
-            return None
         if Path(main_path).expanduser().resolve() != Path(row[1]).expanduser().resolve():
             return None
         return str(row[0])

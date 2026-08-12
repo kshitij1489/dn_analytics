@@ -7,6 +7,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from tests.profile_test_helpers import bind_test_profile
 
@@ -471,7 +472,78 @@ class MenuBootstrapShipperTests(unittest.TestCase):
             _hash_bootstrap_observation({"a": 1, "b": 2}, [reverse_row]),
         )
 
-    def test_unconfirmed_observation_is_retried_without_persisting_hash(self) -> None:
+    def test_alias_observation_preserves_itemcode_and_addon_null(self) -> None:
+        from src.core.menu_catalog_seed import build_group_pos_alias_observation
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute("ALTER TABLE order_items ADD COLUMN itemcode TEXT")
+        conn.execute(
+            "UPDATE order_items SET itemcode='  Tiramisu  ' WHERE petpooja_itemid='101'"
+        )
+        conn.execute(
+            "INSERT INTO menu_item_variants VALUES ('addon-1', 'item_a', 'variant_a', 0, 1, 1)"
+        )
+        conn.execute("INSERT INTO order_item_addons VALUES (1, 1, 'addon-1', 25)")
+
+        rows = build_group_pos_alias_observation(conn)
+
+        self.assertEqual(rows[0]["locator_type"], "pos_addon")
+        self.assertIsNone(rows[0]["itemcode"])
+        self.assertEqual(rows[1]["itemcode"], "Tiramisu")
+
+    @patch(
+        "src.core.global_menu_schema.resolve_global_menu_capability",
+        return_value=SimpleNamespace(
+            shared_pos_catalog_advertised=False,
+            active=True,
+            resolution_advertised=True,
+        ),
+    )
+    def test_shipper_selects_only_alias_channel_and_requires_matching_ack(
+        self, _capability
+    ) -> None:
+        from src.core import menu_bootstrap_shipper
+
+        conn = self._make_catalog_db()
+        self.addCleanup(conn.close)
+        conn.execute("ALTER TABLE order_items ADD COLUMN itemcode TEXT")
+        conn.execute("UPDATE order_items SET itemcode='Tiramisu'")
+        refused = MagicMock(status_code=200)
+        refused.json.return_value = {"shared_pos_catalog_updated": True}
+        accepted = MagicMock(status_code=200)
+        accepted.json.return_value = {
+            "group_pos_alias_observation_updated": True
+        }
+
+        with patch("requests.post", side_effect=[refused, accepted]) as post:
+            first = menu_bootstrap_shipper.upload_pending(
+                conn, endpoint="http://fake/ingest"
+            )
+            second = menu_bootstrap_shipper.upload_pending(
+                conn, endpoint="http://fake/ingest"
+            )
+
+        self.assertFalse(first["sent"])
+        self.assertTrue(second["sent"])
+        payload = post.call_args.kwargs["json"]
+        self.assertIn("group_pos_alias_observation", payload)
+        self.assertNotIn("shared_pos_catalog", payload)
+        self.assertEqual(
+            payload["group_pos_alias_observation"][0]["itemcode"], "Tiramisu"
+        )
+
+    @patch(
+        "src.core.global_menu_schema.resolve_global_menu_capability",
+        return_value=SimpleNamespace(
+            shared_pos_catalog_advertised=True,
+            active=True,
+            resolution_advertised=True,
+        ),
+    )
+    def test_unconfirmed_observation_is_retried_without_persisting_hash(
+        self, _capability
+    ) -> None:
         from src.core import menu_bootstrap_shipper
 
         conn = self._make_catalog_db()
@@ -505,7 +577,17 @@ class MenuBootstrapShipperTests(unittest.TestCase):
                 ).fetchone()
             )
 
-    def test_sends_seed_only_role_and_skips_unchanged_id_maps(self) -> None:
+    @patch(
+        "src.core.global_menu_schema.resolve_global_menu_capability",
+        return_value=SimpleNamespace(
+            shared_pos_catalog_advertised=True,
+            active=True,
+            resolution_advertised=True,
+        ),
+    )
+    def test_sends_seed_only_role_and_skips_unchanged_id_maps(
+        self, _capability
+    ) -> None:
         from src.core import menu_bootstrap_shipper
 
         conn = self._make_catalog_db()

@@ -499,13 +499,12 @@ select one. The wire shape is frozen in
 [central_server_analytics_app_api_contract.md](../contracts/central_server_analytics_app_api_contract.md)
 §25 (revision 1.6).
 
-As of 2026-08-10, the desktop contains an additive projection and an adapter for
-the frozen revision 1.6 global-menu shapes. Client and central implementation are
-complete; the client mutation/resolution workflows and the central P2.7 hardening
-gate are done. This section records a complete dormant client, **not** production
-activation — the rollout remains open (§17.3). The production registry advertises
-no menu-group capability, so the resolver selects `legacy_restaurant_v1` and
-existing menu behavior remains unchanged. `SYSTEM_CONTEXT.md` and
+As of 2026-08-12, the desktop and central service implement the additive global
+menu projection through contract revision 1.8, including reviewed outlet POS
+aliases. This section records a complete dormant implementation, **not** production
+activation — the rollout remains open (§17.3 and §17.6). Until the production
+registry advertises a menu capability, the resolver selects `legacy_restaurant_v1`
+and existing menu behavior remains unchanged. `SYSTEM_CONTEXT.md` and
 `SESSION_AND_ALL_STORES.md` Part B deliberately still describe legacy
 restaurant-scoped behavior as what runs for that reason.
 
@@ -601,10 +600,10 @@ stay separate, reversible operator decisions.
 
 ### 17.3 Activation stop gate (open)
 
-Nothing is deployed or enabled. Until activation starts,
-`GET /analytics/restaurants/` reports `menu_group_id: null` and
-`menu_capabilities: []`, and every `/global-menu/` route answers
-`400 global_menu_not_enabled`. The operator procedure is owned by the central repository (`db.dachnona`) —
+Runtime code and additive schema may be deployed dormant, but no POS policy is
+enabled by code or membership alone. Until an operator configures and reconciles
+a policy, the policy capability remains absent. The operator procedure is owned
+by the central repository (`db.dachnona`) —
 that runbook is the authoritative gate; do not activate from this doc.
 Summary of what it requires, in order: maintenance window and recoverable
 snapshot → deploy central code/schema with capability off → reconciliation
@@ -666,3 +665,48 @@ copy of the shared contract or fixtures.
 inferred from assignments, which misses never-sold variants and weakens merge-time
 conflict detection. A plain foreign key would be wrong if a variant like "Large" is
 reusable across items; an explicit association table is the likely shape. Undecided.
+
+### 17.6 Revision-1.8 reviewed outlet-alias workflow
+
+`global_menu_group_pos_aliases_v1` is distinct from and mutually exclusive with
+revision 1.7's `global_menu_shared_pos_catalog_v1`. Group 1 uses aliases because
+its outlets share logical products and many provider itemcodes, but not numeric
+Petpooja item/addon identifiers.
+
+The desktop implementation has four boundaries:
+
+1. `menu_catalog_seed.build_group_pos_alias_observation` derives deterministic
+   sold-locator evidence from the selected profile. It preserves raw itemcode,
+   emits exact decimal strings, and the shipper sends exactly one observation
+   channel. Omission retains central evidence; explicit `[]` records observed-empty.
+2. `global_menu_alias_resolution.py` is the only decision transport. Queue,
+   preview, commit and timeout-status calls require the editor credential; plan
+   and reconciliation-status reads use the selected restaurant's resolution
+   authorization. Responses are group/schema/digest/state validated and central
+   error payloads remain machine-readable.
+3. The POS Alias Review tab is available during shadow under
+   `global_menu_resolution_v1`, before alias activation. It shows private outlet
+   evidence beside targets loaded only from the local global snapshot. The
+   authority/current canonical price is shown separately from outlet-observed
+   prices; the selected outlet is never a canonical-price fallback, and a
+   difference requires its own explicit confirmation. The tab also requires a
+   reason and target confirmation, previews before commit, and reloads stale
+   evidence. A click writes no local menu, assignment, history or fact row.
+4. After the central digest-pinned reconciliation advertises the alias capability,
+   snapshot/event projection materializes many locator rules onto one redirect-
+   resolved canonical item/variant. Assignments and facts remain profile-scoped;
+   unknown later locators quarantine rather than creating local authority.
+
+Release/rollout sequence: deploy central migration/runtime dormant; deploy the
+compatible desktop; Sync DB Dach & Nona and Super Mart separately; configure only
+`GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS`; review all queue rows; archive a ready plan,
+fresh backup checksum and immutable preflight; execute the exact digest; Sync DB
+both profiles again; compare catalog/history digests and coverage; then advance
+`shadow → aggregating → active` one rung at a time. Never run the saved revision
+1.7 shared-POS plan, reset central facts, or infer a policy from membership.
+
+On a stale preview/commit, no decision was saved: refresh the queue and review the
+new evidence. On an uncertain POST, the client looks up the same mutation UUID
+before allowing another semantic commit. Rollback withdraws the alias allowlist or
+returns the group to `provisioning`; retain decisions, rules, runs, events,
+assignments and facts and fix forward.

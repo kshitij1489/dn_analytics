@@ -2,6 +2,11 @@ import axios from 'axios';
 import type {
     AppUser,
     GlobalMenuCatalogResponse,
+    GlobalMenuAliasCommitResponse,
+    GlobalMenuAliasDecisionRequest,
+    GlobalMenuAliasPreviewResponse,
+    GlobalMenuAliasQueuePage,
+    GlobalMenuAliasReconciliationStatus,
     GlobalMenuPreview,
     GlobalMenuPreviewReference,
     GlobalMenuStatus,
@@ -480,6 +485,18 @@ export const endpoints = {
         }) => api.post<GlobalMenuResolutionContext>('/menu/global/resolution-context', data),
         globalMutationStatus: (mutationId: string) =>
             api.get(`/menu/global/mutations/${encodeURIComponent(mutationId)}`),
+        globalAliasQueue: (params?: { status?: string; after?: string; limit?: number }) =>
+            api.get<GlobalMenuAliasQueuePage>('/menu/global/alias-resolutions', { params }),
+        globalAliasPreview: (data: GlobalMenuAliasDecisionRequest) =>
+            api.post<GlobalMenuAliasPreviewResponse>('/menu/global/alias-resolutions/preview', data),
+        globalAliasCommit: (data: GlobalMenuAliasDecisionRequest & { mutation_id: string; preview_digest: string }) =>
+            api.post<GlobalMenuAliasCommitResponse>('/menu/global/alias-resolutions/commit', data),
+        globalAliasDecisionStatus: (mutationId: string) =>
+            api.get<GlobalMenuAliasCommitResponse>(`/menu/global/alias-resolutions/${encodeURIComponent(mutationId)}`),
+        globalAliasReconciliationPlan: () =>
+            api.get<Record<string, unknown>>('/menu/global/alias-reconciliation/plan'),
+        globalAliasReconciliationStatus: () =>
+            api.get<GlobalMenuAliasReconciliationStatus>('/menu/global/alias-reconciliation/status'),
         suspectMappings: () => api.get('/menu/resolutions/suspect-mappings'),
         dismissSuspectMapping: (anomalyId: number) => api.post(`/menu/resolutions/suspect-mappings/${anomalyId}/dismiss`),
     },

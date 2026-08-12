@@ -1,342 +1,418 @@
-# Temporary Analytics Implementation Plan: Shared Petpooja Menu Group
+# Temporary Analytics Implementation Plan: Group 1 Canonical Menu and POS Aliases
 
-**Status:** analytics implementation complete; Phases A–F complete on 2026-08-12; coordinated central stop gate, profile resets and activation remain open
-**Frozen wire contract:** `contracts/central_server_analytics_app_api_contract.md`, revision 1.7, especially §9 and §25  
-**Golden fixtures:** `contracts/fixtures/1/`  
-**Deployment model:** one controlled desktop installation containing the Dach & Nona and Super Mart restaurant profiles  
-**Created:** 2026-08-11  
-**Simplified:** 2026-08-11  
-**Remove after:** both rebuilt profiles pass the rollout checks, the evidence is recorded in permanent docs, and the temporary central plan is retired
+**Status:** revision-1.8 central and Analytics runtime implementation completed 2026-08-12; coordinated dormant deployment, production evidence, initial reconciliation and lifecycle rollout remain open
+
+**Frozen wire contract:** `contracts/central_server_analytics_app_api_contract.md`, revision 1.8, especially §9 and §25.12
+
+**Golden fixtures:** `contracts/fixtures/1/global_menu_alias_fixtures.json`; revision-1.7 fixtures remain unchanged
+
+**Central plan:** `../db.dachnona/TEMP_SHARED_POS_MENU_GROUP_CENTRAL_IMPLEMENTATION_PLAN.md`
+
+**Deployment model:** one controlled desktop installation containing the Dach & Nona and Super Mart restaurant profiles
+
+**Created:** 2026-08-11
+
+**Rewritten for revision 1.8:** 2026-08-12
+
+**Remove after:** Group 1 is active under the alias policy, rollout evidence is recorded in permanent documentation and both temporary plans are retired
 
 ## 1. Outcome
 
-Dach & Nona and Super Mart must behave as two restaurant profiles backed by one shared menu-group catalog:
+Dach & Nona and Super Mart must consume one Group 1 canonical menu even though Petpooja issued different numeric item/addon locators to each outlet.
 
-- one canonical item list, variant list, redirect set, POS item/variant mapping and current price per Petpooja locator;
-- identical Group Catalog, Menu Matrix and Group History in either profile after sync;
-- restaurant-local orders, quantities, revenue, availability and eligibility;
-- one group-wide history containing eligible legacy events plus future global mutations;
-- no separate `GlobalMenuItemVariant` table;
-- no restaurant-only canonical menu edits after the group reaches `shadow`.
+- Dach & Nona remains the reviewed source of canonical items, variants and redirect history.
+- Multiple reviewed outlet POS locators may resolve to the same global item/variant pair.
+- A stable provider `itemcode` may suggest a parent item when current group evidence makes it unique; it never guesses a variant.
+- Both profiles cache the same canonical items, variants, redirects, itemcode rules, active group POS aliases and unified history.
+- The UI renders one row per canonical item/variant, not one row per POS alias.
+- Orders, assignments, quantities, revenue, availability and eligibility remain restaurant-scoped.
+- Alias decisions are stored centrally and do not mutate local menu rows, assignments or history when the operator clicks approve.
+- Unknown future locators fail closed into the central unresolved/quarantine workflow.
 
-The central server is the durable authority. Each local SQLite profile is a rebuildable cache and analytics projection.
+Example:
 
-| Data | Analytics storage | Authority |
+```text
+itemcode:Tiramisu
+pos_item:1283777806  ─┐
+pos_item:1312789339  ─┴─> one canonical Classic Tiramisu item/variant
+```
+
+The central server is durable authority. Each local SQLite profile is a rebuildable cache and restaurant-specific analytics projection.
+
+| Data | Analytics storage/presentation | Authority |
 |---|---|---|
 | Canonical items | `global_menu_items` | central menu group |
 | Canonical variants | `global_variants` | central menu group |
-| Allowed item/variant pair, Petpooja key and current price | `global_menu_mapping_rules` | central menu group |
-| Local item/variant projection | `menu_items`, `variants` and global link tables | rebuildable cache |
-| POS assignment/cache row | existing `menu_item_variants` | rebuildable per-profile projection |
+| POS aliases and itemcodes | `global_menu_mapping_rules` | central menu group |
 | Redirects | `global_menu_redirects` | central menu group |
 | Convergence events | `global_menu_events` | central menu group |
 | Human audit history | `global_menu_history` | central unified history endpoint |
-| Orders and sales | existing order tables | selected restaurant / POS replay |
+| Alias observations | uploaded private evidence; not a shared local catalog | selected restaurant |
+| Alias decisions | central queue/API; UI view only | central menu group |
+| Local catalog projection | `menu_items`, `variants`, link tables and `menu_item_variants` | rebuildable cache |
+| Orders, assignments and sales facts | existing restaurant tables | selected restaurant |
 
-## 2. Clean-rebuild assumptions and stop gate
+## 2. Why revision 1.7 is not the Group 1 policy
 
-This plan deliberately does **not** implement an in-place revision-1.6 data migration. It is valid only while all of the following remain true:
+Revision 1.7 `global_menu_shared_pos_catalog_v1` requires the same numeric Petpooja locator to mean the same item, variant and price wherever it appears. Group 1 does not satisfy that invariant: Dach & Nona and Super Mart share logical products and many `itemcode` values, but their numeric locator sets do not overlap.
 
-1. There is one controlled desktop installation in use.
-2. Its Dach & Nona and Super Mart profile databases may be reset and rebuilt during a coordinated maintenance window.
-3. Central already holds, or will hold before reset, the complete canonical catalog, variants, redirects, assignments, prices and unified history required by revision 1.7.
-4. The required restaurant order history can be replayed through the supported POS/order-ingest path.
-5. `analytics-control.db`, app-global configuration and the restaurant registry are preserved.
-6. `data/cluster_state_backup.json`, `data/id_maps_backup.json` and every other recovery/export artifact are preserved.
+Therefore:
 
-Before resetting either profile, record and verify:
+1. Keep revision-1.7 shared-POS behavior and fixtures unchanged for a future genuinely identical-locator group.
+2. Do not advertise or emulate `global_menu_shared_pos_catalog_v1` for Group 1.
+3. Implement the separate `global_menu_group_pos_aliases_v1` client behavior.
+4. Never activate shared behavior from menu-group membership, cached rules or settings inferred by the client.
+5. Do not execute or consume the saved revision-1.7 Group 1 reconciliation plan.
 
-- central snapshot counts and digest for items, variants, redirects and mapping rules;
-- price-bearing rule count and absence of malformed/duplicate POS locators;
-- unified history counts for Dach & Nona and Super Mart legacy rows;
-- assignment coverage for both restaurants;
-- POS replay availability for the required order period;
-- current per-profile order, revenue, menu, assignment and eligibility baselines;
-- recoverable copies of both profile SQLite files.
+Revision 1.8 is additive and keeps wire `schema_version: 1`.
 
-If any check fails, stop. Do not reset the local databases; restore the in-place migration phase instead.
+## 3. Current Analytics baseline
 
-## 3. Decisions that must not drift
+Already available from revisions 1.6/1.7 and retained:
 
-1. The clean rebuild removes compatibility migration work; it does not remove the new schema required by a fresh database.
-2. `global_menu_shared_pos_catalog_v1` is the only switch that makes `pos_item` and `pos_addon` group-scoped and price-bearing.
-3. `GlobalMenuMappingRule` is the shared catalog entry. Do not add a pair model, pair id or fifth snapshot section.
-4. `price` is a two-decimal decimal string on the wire and a decimal/numeric value in storage. Never pass it through binary floating point.
-5. A rule with no global variant projects to the deterministic no-variant sentinel because `menu_item_variants.variant_id` is non-null.
-6. Shared projection may replace current item id, variant id and catalog price in `menu_item_variants`; later refreshes must preserve restaurant-local availability and eligibility fields.
-7. Historical order-line prices, totals and revenue are facts and must never be rewritten from catalog price.
-8. Legacy `merge_history` is not copied into the new cache. Central supplies eligible legacy and global rows through the unified history endpoint; legacy rows are never presented as undoable.
-9. Snapshot, event, assignment and history application is idempotent and cursor-safe. A failed page never advances its cursor.
-10. Capability absence preserves legacy behavior. Cached price-bearing data never enables shared behavior by itself.
-11. The frozen revision-1.7 observation/reconciliation protocol remains in scope. `shared_pos_catalog` is a parity and activation input, not a local-to-central ground-truth migration.
+- local global-menu schema, snapshot/event/assignment application and redirect handling;
+- canonical menu and unified history caches;
+- server-authoritative global mutation flow;
+- restaurant selection and profile-scoped sync;
+- shared-POS code guarded by `global_menu_shared_pos_catalog_v1`;
+- recoverable profile archive/reset workflow;
+- revision-1.8 twin contract and `global_menu_alias_fixtures.json`, byte-identical to central (all four twin artifacts verified with `cmp`);
+- fixture ownership tests in `tests/test_global_menu_alias_contract_v18.py`, covering all 23 fixtures.
 
-## 4. Rebuild data flow
+Completed in Analytics Phase C:
 
-```text
-central registry + revision-1.7 menu-group authority
-                         │
-                         ├─ status / catalog snapshot / event tail
-                         ├─ assignment snapshot
-                         └─ unified history
-                         ▼
-fresh profile schema → global caches → deterministic local projection
-                         │
-POS order replay ────────┤
-                         ▼
-restaurant-local analytics, availability and eligibility
-```
+- distinct alias advertised/ready status, mutual-exclusion failure and frontend capability gates;
+- group-scoped POS rule acceptance under either valid policy with policy-specific assignment parity errors;
+- redirect-resolved, many-to-one alias projection through snapshot and event sync;
+- two-profile convergence with restaurant-local assignment/availability state preserved;
+- shadow canonical-catalog access before alias activation;
+- fail-closed unknown-locator quarantine without restaurant-local canonical creation.
 
-There is no single whole-database download. The rebuild composes central domain pulls with POS order ingestion.
+Implemented for revision 1.8:
+
+- alias observation generation/upload and acknowledgement handling;
+- central alias queue/preview/commit/status/plan client operations, including the editor credential on the queue read and the `{"v","g","locator_type","locator_value"}` exclusive cursor;
+- the operator resolution UI;
+- alias-aware readiness, diagnostics and sync behavior;
+- focused backend/frontend tests and packaging verification.
+
+All revision-1.8 fixtures are now owned by live client/transport/projection tests. This proves the dormant implementation, not production activation: coordinated deployment, live observations, review, backup/digest evidence and reconciliation remain operator gates.
+
+## 4. Locked Analytics invariants
+
+1. `global_menu_group_pos_aliases_v1` and `global_menu_shared_pos_catalog_v1` are distinct and mutually exclusive policies.
+2. The alias capability is absent until central commits the initial reconciliation. Before then, `global_menu_resolution_v1` must still permit canonical target selection and alias review.
+3. The client never accepts or sends a caller-selected `menu_group_id`; the selected `X-Restaurant-ID` resolves group scope centrally.
+4. `group_pos_alias_observation` and `shared_pos_catalog` are separate evidence channels and must never occur in the same bootstrap request.
+5. Raw locator and `itemcode` values are trimmed but otherwise preserved. Do not case-fold or synthesize provider identifiers.
+6. Decimal price and variant values use exact two-decimal strings. Never round-trip them through binary floating point.
+7. `itemcode` identifies only a parent item unless exact current evidence proves an unambiguous variant.
+8. Candidate reasons are visible suggestions. Name or itemcode matching never silently approves a decision.
+9. Decision preview/commit writes no local `menu_items`, variants, merge history or assignments.
+10. Only central's digest-pinned reconciliation changes rules/assignments and activates the alias capability.
+11. Group-scoped aliases may be many-to-one. Local presentation deduplicates by redirect-resolved global item/variant.
+12. Assignments and facts remain restaurant-filtered even though every member receives the group alias rules.
+13. A known alias resolves consistently in every member; a contradictory assignment is a parity error.
+14. An unknown later locator is unresolved/quarantined. It never falls back to restaurant-owned canonical creation.
+15. Historical order prices, totals, revenue and legacy merge events are immutable.
+16. Snapshot, event, assignment, decision and history operations are idempotent and cursor-safe. Failure never advances a cursor or displays false success.
+17. Normal rollout uses Sync DB. No local or central fact reset is required.
 
 ## 5. Boundary with the central repository
 
-Analytics development can begin from frozen fixtures. The destructive cutover cannot begin until the central implementation and data checks pass.
+Analytics can implement against frozen revision-1.8 fixtures, but activation depends on the central implementation.
 
-| Central dependency | Analytics behavior before it exists | Required before reset/activation |
+| Central dependency | Analytics behavior before it exists | Required rollout evidence |
 |---|---|---|
-| §9 accepts `shared_pos_catalog` and returns `shared_pos_catalog_updated` | mocked fixture tests | live contract test passes |
-| snapshot/event mapping rules include `price` | parser/projector fixture tests | exact serializers deployed |
-| `GET global-menu/history` | history pull remains gated | endpoint and data-count checks pass |
-| price mutation preview/commit | UI remains gated | central mutation tests pass |
-| `global_menu_shadow_write_blocked` | desktop blocks early | central remains final guard |
-| `global_menu_shared_pos_catalog_v1` | no shared-POS behavior | advertised only after reviewed reconciliation |
+| §9 accepts `group_pos_alias_observation` | fixture-driven shipper tests | live acknowledgement is `group_pos_alias_observation_updated: true` |
+| Alias resolution queue | UI remains gated with an actionable unavailable state | authenticated group-filtered evidence loads |
+| Decision preview/commit/status | mocked client and UI tests | stale and timeout paths pass live contract tests |
+| Reconciliation plan/status | read-only diagnostics remain gated | exact digests/counts render without client reinterpretation |
+| Alias-aware snapshot/events/assignments | parser/projector fixture tests | central serializers and filtering pass |
+| `global_menu_group_pos_aliases_v1` | no alias projection readiness | advertised only after one applied `pos_aliases` run |
 
-Central deploys additive schema and dormant endpoints first. The shared-POS capability is the final activation switch.
+Central deploys additive schema and dormant endpoints first. Analytics must be deployed before Group 1 alias observations are collected. Capability activation is controlled only by central policy plus a successful initial reconciliation.
 
 ## 6. Analytics implementation phases
 
-### Phase A — Own revision 1.7 and the fresh-database schema
+### Phase A — Maintain the frozen revision-1.8 contract gate
 
-Files:
+Primary files:
 
 - `contracts/central_server_analytics_app_api_contract.md`
-- `contracts/fixtures/1/*.json`
-- `database/schema_sqlite.sql`
-- `src/core/global_menu_schema.py`
-- `tests/test_global_menu_phase1.py`
-- `tests/test_unscoped_routes_and_schema_ownership.py`
-- `ui_electron/src/globalMenuCapabilities.test.ts`
+- `contracts/fixtures/1/global_menu_alias_fixtures.json`
+- `contracts/fixtures/1/README.md`
+- `tests/test_global_menu_alias_contract_v18.py`
 
 Tasks:
 
-1. Give every new revision-1.7 fixture an analytics test owner: shared observation, price-bearing rule, status fields, history page, price preview, shadow refusal and allowed-restaurants capability.
-2. Add `price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0)` to the canonical `global_menu_mapping_rules` definition.
-3. Add `history_cursor TEXT` to the canonical `global_menu_state` definition.
-4. Add the canonical `global_menu_history` table and ordering index required by §25.10.
-5. Add the shared-POS capability constant and advertised/ready properties to `GlobalMenuCapabilityStatus`.
-6. Add the new table/columns to `GLOBAL_MENU_TABLES` validation.
-7. Test a fresh database and repeated schema application.
-8. Do **not** add revision-1.6 `ALTER TABLE` upgrades, cached-row preservation migrations or old-profile migration tests.
+1. Keep the Analytics contract and alias fixture byte-identical to the central copies.
+2. Keep every revision-1.7 fixture meaning unchanged.
+3. Pin every new fixture to a real client parser, service, route or UI test as runtime implementation lands.
+4. Preserve exact capability names, error codes, cursor rules, digest fields, idempotency behavior and `schema_version: 1`.
+5. Reject unreviewed contract drift before runtime changes continue.
 
-Exit criterion: a newly created profile has the complete revision-1.7 schema, fixture ownership is explicit, and shared behavior remains off without the capability.
+Exit criterion: parity commands pass and every revision-1.8 fixture has executable Analytics ownership, not only structural assertions.
 
-### Phase B — Export the contract-required observation
+### Phase B — Build and upload truthful alias observations
 
-Files:
+Primary files:
 
 - `src/core/menu_catalog_seed.py`
 - `src/core/menu_bootstrap_shipper.py`
-- `tests/test_menu_assignment_bootstrap.py`
+- `src/core/global_menu_schema.py`
+- related bootstrap tests
 
 Tasks:
 
-1. Add a pure `build_shared_pos_catalog(conn)` helper over active `menu_item_variants`, `menu_items`, `variants` and raw POS evidence.
-2. Emit exact §9 fields in deterministic `(locator_type, locator_value)` order.
-3. Reject locator-kind collisions, negative/non-finite decimals and malformed values.
-4. Serialize variant value and price as exact two-decimal strings.
-5. Hash `id_maps + shared_pos_catalog`, so a price-only change uploads.
-6. Persist the hash only after success and `shared_pos_catalog_updated: true`.
-7. Keep `cluster_state` as `seed_only`; the observation is not canonical authority.
+1. Add a pure deterministic `build_group_pos_alias_observation(conn)` over actually observed raw order/addon evidence.
+2. Emit the exact §9 fields: locator kind/value, raw nullable `itemcode`, local diagnostic ids, item/variant identity and current observed price.
+3. Do not describe sold evidence as a complete active Petpooja catalog.
+4. Preserve raw `petpooja_itemid`, addon id and provider `itemcode`; reject duplicate kind/value rows and cross-kind locator collisions.
+5. Serialize decimals as exact two-decimal strings and sort rows deterministically.
+6. Select exactly one observation channel:
+   - use `shared_pos_catalog` only when the selected store advertises the revision-1.7 shared-POS capability;
+   - otherwise, for the Group 1 resolution/alias workflow, send `group_pos_alias_observation` as the dormant review evidence;
+   - never put both keys in one request.
+7. Include the selected observation and its channel name in the bootstrap hash so identity, itemcode or price-only changes upload.
+8. Persist the hash only after the matching acknowledgement field is `true`.
+9. Treat omission differently from explicit `[]`; never erase prior evidence accidentally.
+10. Keep `cluster_state` as `seed_only`; an observation is not canonical authority.
 
-Tests cover item/addon/no-variant rows, deterministic hash, price-only change, unchanged skip, refusal retry, invalid decimals and inactive mappings.
+Tests cover items, addons, no-variant rows, raw itemcode preservation, deterministic ordering/hash, price-only and itemcode-only changes, unchanged skip, explicit empty, wrong acknowledgement, retries, invalid decimals, duplicates, cross-kind collisions and strict single-channel payloads.
 
-### Phase C — Pull and materialize the shared catalog
+### Phase C — Add alias capability and policy-aware projection — **complete 2026-08-12**
 
-Files:
+Primary files:
 
+- `src/core/global_menu_schema.py`
 - `src/core/global_menu_sync.py`
 - `src/core/global_menu_identity.py`
-- `src/core/global_menu_schema.py`
-- `src/core/menu_assignment_apply.py` only if a reusable guarded upsert is needed
-- `tests/test_global_menu_phase1.py`
+- `src/api/routers/menu.py`
+- `ui_electron/src/globalMenuCapabilities.ts`
+- `ui_electron/src/types/api.ts`
+- related backend/frontend tests
 
 Tasks:
 
-1. Require valid two-decimal price only for group-scoped POS rules under `global_menu_shared_pos_catalog_v1`; require `null` in other modes.
-2. Reject/quarantine wrong scope, missing capability, invalid price, locator-kind collisions, missing/tombstoned targets and unresolved redirects.
-3. Apply the four snapshot sections against one pinned watermark.
-4. After the complete snapshot, materialize one transaction:
-   - resolve redirect chains;
-   - create deterministic local item/variant owners;
-   - use the no-variant sentinel when required;
-   - upsert `menu_item_variants.order_item_id = locator_value`;
-   - set current item, variant, price, active and verified state;
-   - preserve restaurant-local eligibility/availability on later refreshes.
-5. Roll back the materialization batch and quarantine the payload on failure; keep the previous complete projection usable.
-6. Route price-bearing event deltas and tombstones through the same projector.
-7. Never update historical order rows from catalog changes.
+1. Add the `global_menu_group_pos_aliases_v1` constant and explicit advertised/ready status fields.
+2. Fail closed if a store advertises both alias and shared-POS capabilities.
+3. Keep canonical items, variants and redirects readable under `global_menu_v1`/`global_menu_resolution_v1` during shadow, before alias readiness.
+4. Accept group-scoped `pos_item`/`pos_addon` rules under either valid POS policy, while preserving their different readiness/status semantics.
+5. Resolve every item/variant target through redirects and reject missing, inactive or out-of-group targets.
+6. Materialize many locator rules onto one deterministic canonical local item/variant projection without duplicate canonical rows.
+7. Keep restaurant assignments filtered; reject a local assignment that contradicts an active reviewed group alias.
+8. Apply known future aliases immediately through normal snapshot/event/assignment sync.
+9. Surface unknown aliases as quarantine/unresolved diagnostics; never create a restaurant-local canonical identity automatically.
+10. Preserve restaurant-local availability/eligibility and all historical order values during projection refresh.
+11. Make snapshot and event application transactional, idempotent and cursor-safe.
+12. Generalize existing shared-POS helpers only where semantics truly overlap; retain policy-specific guards and error codes.
 
-Tests use two blank profile databases and prove identical catalog/matrix projection, inherited peer rows, no-variant handling, idempotence, price convergence, eligibility preservation on refresh and unchanged historical revenue.
+Tests use two profile databases and prove many distinct POS ids converge to one canonical pair, canonical rows are deduplicated, both profiles converge on catalog/history digests, assignments remain isolated, redirects converge, known aliases link, unknown aliases quarantine, contradictory assignments fail, capability absence preserves old behavior and both policy capabilities together fail closed.
 
-### Phase D — Pull and expose unified history
+Implementation evidence: `tests/test_global_menu_alias_contract_v18.py` applies the frozen many-alias snapshot and reconciliation event through the real projector, exercises two independent SQLite profiles, redirect survivors, assignment isolation/parity refusal and unknown-locator fail-closed ingest. The revision-1.7 global-menu suite remains green, and frontend capability tests cover shadow catalog access plus mutually exclusive alias/shared readiness.
 
-Files:
+### Phase D — Implement the central alias-resolution client
 
-- `src/core/global_menu_history.py`
-- `src/core/services/cloud_pull_orchestrator.py`
+Primary files:
+
+- focused new core alias-resolution client/service module
+- `src/core/central_api.py` or the existing scoped request abstraction
 - `src/api/routers/menu.py`
-- `tests/test_global_menu_phase1.py`
-
-Tasks:
-
-1. Pull `/desktop-analytics-sync/global-menu/history` with the contract's opaque paging semantics.
-2. Strictly validate and upsert rows by `history_id`.
-3. Advance `history_cursor` only after a complete valid page commits.
-4. Treat history failure as a visible warning, not a catalog-authority failure.
-5. Read global-mode `/menu/merge/history` from `global_menu_history` while preserving the frontend envelope.
-6. Expose undo only when both `is_undoable` and `mutation_id` are present and the current capability permits it.
-7. Never copy local `merge_history` into the new table.
-
-Tests prove both blank profiles hydrate the same ordered history, retries are idempotent, malformed pages retain the old cursor/data, and legacy rows have no false undo action.
-
-### Phase E — Add shared mutations and group-owned UI
-
-Files:
-
-- `src/core/global_menu_mutation.py`
-- `src/api/routers/menu.py`
-- `src/core/queries/menu_queries.py`
 - `ui_electron/src/api.ts`
+- `ui_electron/src/types/api.ts`
+- related API/service tests
+
+Required operations:
+
+- paged `GET global-menu/alias-resolutions` with status filter and opaque cursor;
+- `POST global-menu/alias-resolutions/preview`;
+- `POST global-menu/alias-resolutions/commit`;
+- `GET global-menu/alias-resolutions/{mutation_id}` after an uncertain commit;
+- read-only `GET global-menu/alias-reconciliation/plan`;
+- read-only `GET global-menu/alias-reconciliation/status`.
+
+Tasks:
+
+1. Use selected restaurant sync authorization on every call and editor credentials on protected decision operations.
+2. Never expose a client-supplied menu-group scope parameter.
+3. Strictly validate fixture-pinned rows, digests, prices, candidate reasons, decision states, conflicts and pagination.
+4. Carry expected group revision and observation digest through preview and commit.
+5. Generate one UUID mutation id per semantic commit and reuse it only for byte-equivalent retry.
+6. On timeout, look up that mutation id before offering another commit.
+7. Map revision, observation and preview conflicts to `refresh_alias_resolution`; map mutation-id conflicts to a new mutation id.
+8. Do not apply decision responses to local menu, assignment or history tables.
+9. Preserve central error codes and machine-readable fields for the UI; do not reduce them to ambiguous prose.
+
+Tests cover queue pagination, filters, invalid cursor, preview writes nothing locally, commit/replay, timeout lookup, unknown/malformed mutation id, stale revision/evidence, changed preview digest, mutation-id collision, authentication/editor gating and restaurant switching.
+
+### Phase E — Build the alias resolution UI
+
+Primary files:
+
 - `ui_electron/src/pages/Menu.tsx`
-- focused backend and React tests
+- `ui_electron/src/globalMenuCapabilities.ts`
+- `ui_electron/src/api.ts`
+- `ui_electron/src/types/api.ts`
+- focused frontend tests
 
-Backend tasks:
+Tasks:
 
-1. Normalize `global_locator.price_update` as `{locator_type, locator_value, price}`.
-2. Under the shared capability, send group scope, `confirm_group_wide: true` and price for POS mapping changes.
-3. Reuse preview → confirmation → commit → timeout reconciliation.
-4. Apply accepted responses/events through the common projector.
-5. From `shadow`, block every local canonical merge, undo, rename, retype, variant merge and price write before local mutation construction.
-6. Keep assignment verify/reopen and other contract-approved restaurant facts available.
-7. Audit bulk, indirect and utility entry points for guard bypasses.
+1. Show the alias-review experience when `global_menu_resolution_v1` is available, without waiting for alias capability activation.
+2. Load canonical targets from the local global snapshot, never from the selected restaurant's local menu.
+3. Present source evidence and canonical target side by side: restaurant, raw locator, raw itemcode, item/type, variant dimensions and outlet price. Show the authority/current canonical price separately, never default it from the selected outlet, and require its own confirmation when prices differ.
+4. Display candidate reason (`exact_existing_alias`, `unique_itemcode`, `exact_identity`, `manual`) and conflicts explicitly.
+5. Require visible operator confirmation; never bulk-approve or silently accept a name/itemcode suggestion.
+6. Allow pending drafts and approved decisions according to the contract, with reviewer reason and attribution.
+7. Preview before commit, refresh after success and reconcile uncertain commits by mutation id.
+8. On stale evidence/revision/preview, show that the earlier choice was not saved and reload current evidence/targets.
+9. Distinguish pending, approved, stale, applied and quarantined states.
+10. Keep canonical create/merge operations separate. A truly new product must be created through a reviewed global mutation before its locator is mapped.
+11. Keep restaurant switching from changing the canonical target list while source evidence remains clearly restaurant-labelled.
+12. Deduplicate Group Catalog/Menu Matrix by canonical global item/variant and do not render every alias as another product.
+13. Keep All Stores read-only and never expose private cross-restaurant evidence outside the authorized resolution view.
 
-UI tasks:
+Acceptance: approving a decision changes only central decision state; local menu rows, merge history, assignments and facts remain byte/count stable until central reconciliation and subsequent sync.
 
-1. Label the shared views **Group Catalog**, **Menu Matrix** and **Group History** when ready.
-2. Render active global catalog rows and active group POS rules with current price.
-3. Keep Store Resolution and analytics restaurant-specific.
-4. Show history origin/source and truthful undo availability.
-5. Hide or disable canonical local controls in shadow; route active edits through global preview.
-6. Keep All Stores read-only and behind the existing aggregation-ready gate.
+### Phase F — Integrate sync, status and diagnostics
 
-Acceptance: switching profiles changes store analytics but not the group catalog, matrix or history; a price mutation converges to both profiles and changes no historical order value.
-
-### Phase F — Clean rebuild, sync orchestration and diagnostics
-
-Files:
+Primary files:
 
 - `src/core/services/cloud_pull_orchestrator.py`
-- `src/core/db/reset.py`
-- the sync operation coordinator
-- diagnostics queries and focused profile/sync tests
+- `src/core/services/sync_service.py`
+- sync operation coordinator/routes
+- diagnostics/status queries
+- related profile and sync tests
 
-The operator reset path must archive and recreate the captured profile without first opening or validating the old revision-1.6 schema. The ordinary updated runtime must not attempt to use that old profile before the clean rebuild.
+Tasks:
 
-Required rebuild order for each physical profile:
+1. Pull canonical snapshot data for resolution during shadow even when neither POS-policy capability is ready.
+2. Upload the selected profile's alias observation after its local order/catalog evidence is settled.
+3. Do not use All Stores for rollout evidence; sync Dach & Nona and Super Mart individually.
+4. After activation, pull the same group catalog, redirects, itemcodes, aliases and unified history into both profiles.
+5. Pull only the selected restaurant's assignments and facts.
+6. Expose policy, initial reconciliation state/digests, canonical/alias/verified coverage, pending/stale/quarantined counts and per-restaurant observation coverage.
+7. Treat `0/0` as incomplete for every activation gate.
+8. Keep history failure a visible warning rather than a catalog-authority mutation.
+9. Preserve old cursors/data on malformed or failed pages.
+10. Verify no code path interprets group membership alone as shared-POS or alias readiness.
 
-1. Pass the central and recoverability stop gate in §2.
-2. Archive the current profile SQLite file; preserve `analytics-control.db` and recovery exports.
-3. Reset only the selected physical profile through the existing profile-scoped reset path.
-4. Create and bind the fresh canonical schema.
-5. Refresh registry/capabilities and pull global status.
-6. Pull the complete global catalog snapshot and materialize rules.
-7. Drain the global event tail from the pinned snapshot watermark.
-8. Replay/import that restaurant's POS orders.
-9. Pull/apply the restaurant assignment snapshot after order rows exist.
-10. Pull/cache group history; report failure as a warning.
-11. Send the current §9 observation after local order/catalog state settles.
-12. Run the same sequence for the other restaurant profile.
+Exit criterion: both profiles converge on the same canonical catalog/history digests, each retains only its own assignments/facts, all status gates render truthfully and no unexplained quarantine remains.
 
-Diagnostics must expose bootstrap state, catalog revision, mapping count, price count, assignment coverage, history count/cursor and quarantine count.
+### Phase G — Test, build and package
 
-Exit criterion: both rebuilt profiles have identical group catalog/matrix/history digests, separate restaurant analytics, complete required assignments and no unexplained quarantine.
+Minimum backend coverage:
 
-## 7. Test commands
+- revision-1.7 behavior remains unchanged without alias capability;
+- alias observation raw fields, hashing, omission/empty semantics and profile privacy;
+- canonical target availability before alias readiness;
+- alias queue/preview/commit/status and timeout behavior;
+- many POS ids to one canonical pair and repeated-itemcode variant ambiguity;
+- redirect convergence, deduplication and policy mutual exclusion;
+- known future alias linking and unknown alias quarantine;
+- no decision-click mutation of local authority/facts;
+- normal sync and optional archive/reset remain profile-scoped and recoverable.
 
-Run focused suites during implementation:
+Minimum frontend coverage:
 
-```bash
-python3 -m unittest tests.test_global_menu_phase1
-python3 -m unittest tests.test_menu_assignment_bootstrap
-python3 -m unittest tests.test_menu_mutation_commit
-python3 -m unittest tests.test_sync_operations
-python3 -m unittest tests.test_unscoped_routes_and_schema_ownership
-```
+- capability gates and mutual exclusion;
+- canonical target picker source;
+- evidence/target visual separation;
+- explicit candidate confirmation;
+- stale/conflicting commit handling;
+- state labels and restaurant switching;
+- no duplicate canonical rows and no membership-only shared-POS activation.
 
-Run frontend capability, menu-table, mutation and history tests through the existing package scripts. Before handoff, run the broader backend/unit suite used by CI and `git diff --check`.
-
-Contract parity check:
+Run the focused suites established by the implementation, then the repository's broader Python suite, frontend unit tests, TypeScript/Vite build, packaged-backend build and Electron macOS ARM64 package. Finish with:
 
 ```bash
 cmp contracts/central_server_analytics_app_api_contract.md ../db.dachnona/contracts/desktop_analytics_app/central_server_analytics_app_api_contract.md
-diff -qr contracts/fixtures/1 ../db.dachnona/contracts/desktop_analytics_app/fixtures/1
+cmp contracts/fixtures/1/global_menu_alias_fixtures.json ../db.dachnona/contracts/desktop_analytics_app/fixtures/1/global_menu_alias_fixtures.json
+python3 -m unittest tests.test_global_menu_alias_contract_v18
+git diff --check
 ```
 
-## 8. Coordinated cutover
+Use the exact current package scripts documented by this repository for broader tests and packaging.
 
-Do not reset or activate this from analytics alone.
+## 7. Coordinated rollout
 
-1. Central deploys revision-1.7 schema, reads, mutations and contract tests without advertising the shared capability.
-2. Analytics passes fixture-driven tests and is ready to create a fresh revision-1.7 profile schema.
-3. Upload the contract-required observations from both current profiles and verify central digests.
-4. Central completes and records the reviewed shared-POS reconciliation.
-5. Verify central snapshot, price, history and assignment counts against the §2 baselines.
-6. Central advertises `global_menu_shared_pos_catalog_v1` in `shadow`.
-7. Archive and reset Dach & Nona; rebuild it using Phase F and verify its baselines.
-8. Archive and reset Super Mart; rebuild it using Phase F and verify its baselines.
-9. Compare the two group catalog/matrix/history digests and restaurant-local analytics.
-10. Enable aggregation and mutations one rung at a time only after both checks pass.
-11. Retain the archived profile databases until the rollout has remained stable through the agreed observation window.
+Do not activate this from Analytics alone.
+
+1. Capture fresh central backup/checksum and read-only baselines. Keep Group 1 `shadow` and absent from both POS-policy settings.
+2. Verify revision-1.8 contract/fixture parity in both repositories.
+3. Deploy dormant central schema/endpoints without advertising alias capability.
+4. Deploy the compatible Analytics build.
+5. Sync Dach & Nona individually, then Super Mart individually, and verify raw alias observations against Petpooja evidence samples.
+6. Configure Group 1 only in `GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS`; confirm shared-POS remains absent and alias capability is still absent.
+7. Load and review the central plan/queue. Resolve all pending aliases; treat itemcode and exact identity as suggestions and review ambiguous variants/prices manually.
+8. Re-run the plan until unresolved, stale and blocking counts are zero. Review projected assignment changes and immutable-fact checksums.
+9. After a second fresh backup, central executes the exact digest-pinned `reconcile_global_menu_group_aliases` plan.
+10. Verify one applied `pos_aliases` run/event/revision, preserved assignment counts and unchanged facts/history.
+11. Confirm `global_menu_group_pos_aliases_v1` is advertised to both members and `global_menu_shared_pos_catalog_v1` remains absent.
+12. Sync Dach & Nona, then Super Mart. Compare catalog/history digests, assignment coverage and quarantine counts.
+13. Advance `shadow` to `aggregating`, observe, then `active` only after canonical, alias-decision and verified-assignment gates all pass.
+
+Normal rollout does not reset either local profile. After central activation, an operator may optionally archive/reset only the five-day Super Mart profile and Sync DB from cursor zero as a clean-rebuild proof. Record the archive path and preserve `analytics-control.db` and recovery exports. Never delete central facts, `core_event`, orders or order lines.
+
+## 8. Stop conditions
+
+Stop before central execute or lifecycle advancement if:
+
+- Group 1 is not `shadow`;
+- a fresh backup/checksum or preflight evidence is missing;
+- central and Analytics contracts or alias fixtures differ;
+- either client advertises/infers shared-POS behavior for Group 1;
+- both POS-policy capabilities appear together;
+- authority catalog, redirect or observation digest changes after review;
+- any decision is unresolved, ambiguous, stale or blocking;
+- a locator has contradictory meaning or kind;
+- the plan proposes dropped assignments or changes to orders/facts/history;
+- the plan digest differs from the reviewed digest;
+- Analytics cannot load the canonical target catalog during shadow;
+- either profile duplicates canonical rows, leaks restaurant facts or hides quarantine.
 
 ## 9. Rollback
 
-If projection or parity is wrong:
+Before initial reconciliation, rollback is withdrawal of the dormant Analytics build/central code or policy configuration; no alias authority should exist.
 
-1. central withdraws `global_menu_shared_pos_catalog_v1` and higher capabilities;
-2. stop sync and do not overwrite archived profile databases;
-3. if local continuity is required, restore the archived pre-reset profile databases together with the previous analytics build that understands their schema;
-4. retain additive central records and new empty/rebuilt profiles for diagnosis;
-5. do not delete recovery artifacts or rewrite order facts;
-6. fix centrally, publish a corrected snapshot/event revision and repeat the stop gate before another rebuild.
+After successful reconciliation:
 
-## 10. Documentation cleanup
+1. central withdraws `GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS` or returns Group 1 to `provisioning` to stop capability advertisement;
+2. stop affected sync operations if projection is unsafe;
+3. retain central alias rules, decisions, run/event evidence, assignments and facts for diagnosis;
+4. retain local caches or archived profiles; do not destructively rewrite them;
+5. fix forward through reviewed central mutation/alias workflows and publish a corrected snapshot/event revision;
+6. re-enable only after status, snapshots and both profiles agree.
 
-Already done ahead of the rollout, because they describe shipped code rather than rollout outcomes:
+Do not delete global ids, redirects, legacy events, decisions, applied runs, assignments or facts as rollback.
 
-- `docs/FILE_INVENTORY.md` carries the history module, the diagnostics query module and the profile reset path;
-- the `docs/INDEX.md` status snapshot records analytics Phases A–F as complete with the cutover still open.
+## 10. Permanent documentation and cleanup
 
-Both entries must be re-checked against the rollout evidence during the cleanup below; neither is a substitute for it.
+After successful rollout, update:
 
-After both rebuilt profiles pass:
+- `docs/MENU_SYNC_ARCHITECTURE.md` with alias ownership, resolution flow, sync order and quarantine behavior;
+- the Analytics sync/resolution runbook with decision preview/commit/timeout handling;
+- capability and lifecycle documentation with the mutually exclusive POS policies and three activation gates;
+- `docs/FILE_INVENTORY.md` for any new focused modules;
+- `docs/INDEX.md` status snapshot;
+- `contracts/README.md` twin-sync checklist if required;
+- rollout evidence index with backup, observation, plan, result, catalog and history digests.
 
-- update `docs/MENU_SYNC_ARCHITECTURE.md` with the final ownership, pull order and runbook;
-- update `docs/SYSTEM_CONTEXT.md` with the shared-POS price exception and clean-rebuild cutover decision;
-- re-verify `docs/FILE_INVENTORY.md` and the `docs/INDEX.md` status snapshot against the recorded rollout evidence;
-- update `contracts/README.md` only if the twin-sync checklist changed — its revision-1.6 client/server row is still the pre-1.7 text.
-
-Then remove this temporary plan and the central temporary plan in the same coordinated cleanup change.
+Delete this temporary Analytics plan and the central temporary plan only after permanent documentation is reviewed and Group 1 is active.
 
 ## 11. Definition of done
 
-- Revision-1.7 contract copies and fixtures are byte-identical across repositories.
-- Both profile rebuilds start from the fresh canonical schema; no revision-1.6 local data migration is required.
-- Both profiles hydrate the same active global catalog, POS mapping/price set and unified history from central.
-- Required POS orders and restaurant assignments are restored with pre-reset totals accounted for.
-- Super Mart assignments have complete global identity where the reviewed shared locator provides authority.
-- Legacy history is visible without fabricated undoability.
-- Shadow mode cannot create restaurant-only canonical divergence.
-- A price mutation changes current catalog price in both profiles and no historical order value.
-- Store analytics remain separated and All Stores remains read-only/appropriately gated.
-- Archived pre-reset databases remain available through the rollback window.
-- Permanent docs are updated and both temporary plans are retired.
+- Revision-1.8 contract and alias fixture copies are byte-identical across repositories.
+- Raw locator plus raw `itemcode` observations are private, profile-scoped and acknowledged durably.
+- Operators resolve aliases against the canonical global target catalog during shadow.
+- Decisions are audited, digest-bound and do not mutate local authority on click.
+- Multiple outlet POS ids resolve to one canonical item/variant without duplicate menu rows.
+- Both profiles converge on identical canonical catalog and unified-history digests.
+- Assignments, orders and facts remain restaurant-isolated and historical values are unchanged.
+- Known aliases link normally; unknown aliases quarantine without guessing.
+- `global_menu_group_pos_aliases_v1` appears only after one successful initial reconciliation.
+- `global_menu_shared_pos_catalog_v1` remains absent for Group 1.
+- Canonical, alias-decision and verified-assignment coverage gates pass before `active`.
+- Normal rollout completes without a required profile reset; any optional reset is archived, recoverable and profile-scoped.
+- Backend/frontend tests, builds, package verification and parity checks pass.
+- Permanent runbooks/evidence are complete and temporary plans are retired.

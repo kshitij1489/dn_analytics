@@ -46,7 +46,7 @@ class ClusterMatch(NamedTuple):
       fuzzy-suggested  — new item, difflib suggested a verified item (score-based)
       new              — brand-new item, no suggestion
       unmatched        — no resolvable menu_item (empty/blank name)
-      restaurant-pos / group-itemcode / global-alias — a server-approved
+      restaurant-pos / group-pos / group-itemcode / global-alias — a server-approved
                          global-menu rule selected the canonical projection
     match_confidence is 0..100 (fuzzy = difflib ratio * 100; exact hits = 100).
     An itemcode hit uses 100.0: this is provenance confidence, not is_verified.
@@ -230,13 +230,17 @@ class OrderItemCluster:
         cursor = self.conn.cursor()
         try:
             global_capability = resolve_global_menu_capability(self.conn)
-            if global_capability.resolution_ready:
+            if (
+                global_capability.resolution_ready
+                or global_capability.group_pos_aliases_ready
+            ):
                 global_match = resolve_global_identity_for_ingest(
                     self.conn,
                     order_item_id=order_item_id,
                     raw_name=name,
                     itemcode=itemcode,
                     is_addon=is_addon,
+                    capability=global_capability,
                 )
                 if global_match.resolved and global_match.local_menu_item_id:
                     variant_id = global_match.local_variant_id
@@ -272,6 +276,35 @@ class OrderItemCluster:
                         global_match.provenance,
                         100.0,
                     )
+                if global_capability.group_pos_aliases_advertised:
+                    # Alias-policy misses are central review work. Keep the raw
+                    # order fact with NULL local identity and the quarantine
+                    # recorded by the resolver; never mint an outlet catalog row.
+                    return ClusterMatch(
+                        None,
+                        str(order_item_id),
+                        None,
+                        None,
+                        global_match.provenance,
+                        0.0,
+                    )
+
+            if global_capability.group_pos_aliases_advertised:
+                # The central policy is active but the local projection is not
+                # ready (or the registry advertised an invalid policy pair).
+                # Falling through would create restaurant-owned canonical state.
+                return ClusterMatch(
+                    None,
+                    str(order_item_id),
+                    None,
+                    None,
+                    (
+                        "global-menu-pos-policy-conflict"
+                        if global_capability.pos_policy_conflict
+                        else "group-pos-alias-not-ready"
+                    ),
+                    0.0,
+                )
 
             # 1. Check if mapping already exists
             cursor.execute("""

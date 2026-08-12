@@ -239,7 +239,9 @@ def build_cluster_state(conn) -> Dict[str, Dict[str, list]]:
         cursor.close()
 
 
-def build_shared_pos_catalog(conn) -> list[Dict[str, Any]]:
+def build_shared_pos_catalog(
+    conn, *, include_itemcode: bool = False
+) -> list[Dict[str, Any]]:
     """
     Build the complete active §9 shared-POS observation from SQLite.
 
@@ -250,12 +252,25 @@ def build_shared_pos_catalog(conn) -> list[Dict[str, Any]]:
     """
     cursor = conn.cursor()
     try:
+        order_item_columns = {
+            str(row[1])
+            for row in cursor.execute("PRAGMA table_info(order_items)").fetchall()
+        }
+        itemcode_expression = (
+            "oi.itemcode" if "itemcode" in order_item_columns else "NULL"
+        )
         cursor.execute(
-            """
+            f"""
             WITH item_evidence AS (
                 SELECT
                     'pos_item' AS locator_type,
                     TRIM(CAST(oi.petpooja_itemid AS TEXT)) AS locator_value,
+                    CASE
+                        WHEN {itemcode_expression} IS NULL
+                          OR TRIM(CAST({itemcode_expression} AS TEXT)) = ''
+                        THEN NULL
+                        ELSE TRIM(CAST({itemcode_expression} AS TEXT))
+                    END AS itemcode,
                     oi.unit_price AS observed_price,
                     ROW_NUMBER() OVER (
                         PARTITION BY TRIM(CAST(oi.petpooja_itemid AS TEXT))
@@ -270,6 +285,7 @@ def build_shared_pos_catalog(conn) -> list[Dict[str, Any]]:
                 SELECT
                     'pos_addon' AS locator_type,
                     TRIM(CAST(a.petpooja_addonid AS TEXT)) AS locator_value,
+                    NULL AS itemcode,
                     a.price AS observed_price,
                     ROW_NUMBER() OVER (
                         PARTITION BY TRIM(CAST(a.petpooja_addonid AS TEXT))
@@ -283,17 +299,18 @@ def build_shared_pos_catalog(conn) -> list[Dict[str, Any]]:
                   AND TRIM(CAST(a.petpooja_addonid AS TEXT)) <> ''
             ),
             pos_evidence AS (
-                SELECT locator_type, locator_value, observed_price
+                SELECT locator_type, locator_value, itemcode, observed_price
                 FROM item_evidence
                 WHERE evidence_rank = 1
                 UNION ALL
-                SELECT locator_type, locator_value, observed_price
+                SELECT locator_type, locator_value, itemcode, observed_price
                 FROM addon_evidence
                 WHERE evidence_rank = 1
             )
             SELECT
                 evidence.locator_type,
                 evidence.locator_value,
+                evidence.itemcode,
                 mapping.menu_item_id,
                 mapping.variant_id,
                 item.menu_item_id AS joined_menu_item_id,
@@ -336,50 +353,61 @@ def build_shared_pos_catalog(conn) -> list[Dict[str, Any]]:
                     f"{prior_kind!r} and {locator_type!r}"
                 )
 
-            menu_item_id = _clean_required_text(row[2], "menu_item_id")
-            if row[4] is None:
+            raw_itemcode = row[2]
+            menu_item_id = _clean_required_text(row[3], "menu_item_id")
+            if row[5] is None:
                 raise ValueError(
                     f"Mapping {locator_value!r} references missing menu item "
                     f"{menu_item_id!r}"
                 )
-            raw_variant_id = row[3]
+            raw_variant_id = row[4]
             no_variant = _is_no_variant_id(raw_variant_id)
             variant_id = (
                 None
                 if no_variant
                 else _clean_required_text(raw_variant_id, "variant_id")
             )
-            joined_variant_id = row[7]
+            joined_variant_id = row[8]
             if variant_id is not None and joined_variant_id is None:
                 raise ValueError(
                     f"Mapping {locator_value!r} references missing variant {variant_id!r}"
                 )
 
-            catalog.append(
-                {
-                    "locator_type": locator_type,
-                    "locator_value": locator_value,
-                    "menu_item_id": menu_item_id,
-                    "variant_id": variant_id,
-                    "item_name": _clean_required_text(row[5], "item_name"),
-                    "item_type": _clean_required_text(row[6], "item_type"),
-                    "variant_name": None if no_variant else _clean_optional_text(row[8]),
-                    "variant_unit": None if no_variant else _clean_optional_text(row[9]),
-                    "variant_value": (
-                        None
-                        if no_variant
-                        else _decimal_string(
-                            row[10],
-                            field_name="variant_value",
-                            max_digits=12,
-                            allow_none=True,
-                        )
-                    ),
-                    "price": _decimal_string(
-                        row[11], field_name="price", max_digits=10
-                    ),
-                }
-            )
+            normalized_row = {
+                "locator_type": locator_type,
+                "locator_value": locator_value,
+                "menu_item_id": menu_item_id,
+                "variant_id": variant_id,
+                "item_name": _clean_required_text(row[6], "item_name"),
+                "item_type": _clean_required_text(row[7], "item_type"),
+                "variant_name": None if no_variant else _clean_optional_text(row[9]),
+                "variant_unit": None if no_variant else _clean_optional_text(row[10]),
+                "variant_value": (
+                    None
+                    if no_variant
+                    else _decimal_string(
+                        row[11],
+                        field_name="variant_value",
+                        max_digits=12,
+                        allow_none=True,
+                    )
+                ),
+                "price": _decimal_string(
+                    row[12], field_name="price", max_digits=10
+                ),
+            }
+            if include_itemcode:
+                normalized_row["itemcode"] = (
+                    _clean_optional_text(raw_itemcode)
+                    if locator_type == "pos_item"
+                    else None
+                )
+            catalog.append(normalized_row)
         return catalog
     finally:
         cursor.close()
+
+
+def build_group_pos_alias_observation(conn) -> list[Dict[str, Any]]:
+    """Build truthful sold-locator evidence with raw provider itemcodes."""
+    return build_shared_pos_catalog(conn, include_itemcode=True)

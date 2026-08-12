@@ -22,6 +22,7 @@ from src.core.config.client_learning_config import (
 )
 from src.core.menu_catalog_seed import (
     build_cluster_state,
+    build_group_pos_alias_observation,
     build_id_maps,
     build_shared_pos_catalog,
 )
@@ -32,11 +33,17 @@ LAST_PUSH_HASH_KEY = "menu_bootstrap_last_push_hash"
 
 
 def _hash_bootstrap_observation(
-    id_maps: Dict[str, Any], shared_pos_catalog: list[Dict[str, Any]]
+    id_maps: Dict[str, Any],
+    observation_rows: list[Dict[str, Any]],
+    observation_channel: str = "shared_pos_catalog",
 ) -> str:
     return hashlib.sha256(
         json.dumps(
-            {"id_maps": id_maps, "shared_pos_catalog": shared_pos_catalog},
+            {
+                "id_maps": id_maps,
+                "observation_channel": observation_channel,
+                "observation_rows": observation_rows,
+            },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -70,11 +77,26 @@ def upload_pending(
     try:
         id_maps = build_id_maps(conn)
         cluster_state = build_cluster_state(conn)
-        shared_pos_catalog = build_shared_pos_catalog(conn)
+        from src.core.global_menu_schema import resolve_global_menu_capability
+
+        capability = resolve_global_menu_capability(conn, allow_profile_sync=True)
+        if capability.shared_pos_catalog_advertised:
+            observation_channel = "shared_pos_catalog"
+            observation_rows = build_shared_pos_catalog(conn)
+        elif capability.active and capability.resolution_advertised:
+            observation_channel = "group_pos_alias_observation"
+            observation_rows = build_group_pos_alias_observation(conn)
+        else:
+            observation_channel = ""
+            observation_rows = []
     except Exception as e:
         return {"sent": False, "error": str(e)}
 
-    observation_hash = _hash_bootstrap_observation(id_maps, shared_pos_catalog)
+    observation_hash = _hash_bootstrap_observation(
+        id_maps,
+        observation_rows,
+        observation_channel,
+    )
     if not force:
         try:
             row = conn.execute(
@@ -83,7 +105,12 @@ def upload_pending(
             if row and str(row[0]).strip() == observation_hash:
                 return {
                     "sent": False,
-                    "skipped": "id_maps + shared_pos_catalog unchanged",
+                    "skipped": (
+                        f"id_maps + {observation_channel} unchanged"
+                        if observation_channel
+                        else "id_maps unchanged"
+                    ),
+                    "observation_channel": observation_channel or None,
                     "error": None,
                 }
         except Exception:
@@ -92,9 +119,10 @@ def upload_pending(
     payload: Dict[str, Any] = {
         "id_maps": id_maps,
         "cluster_state": cluster_state,
-        "shared_pos_catalog": shared_pos_catalog,
         "snapshot_role": SNAPSHOT_ROLE,
     }
+    if observation_channel:
+        payload[observation_channel] = observation_rows
     if uploaded_by:
         payload["uploaded_by"] = uploaded_by
     if uploaded_from:
@@ -117,12 +145,18 @@ def upload_pending(
                 "sent": False,
                 "error": "Menu bootstrap response was not valid JSON",
             }
+        acknowledgement_field = (
+            f"{observation_channel}_updated" if observation_channel else None
+        )
         if not isinstance(response_payload, dict) or (
-            response_payload.get("shared_pos_catalog_updated") is not True
+            acknowledgement_field is not None
+            and response_payload.get(acknowledgement_field) is not True
         ):
             return {
                 "sent": False,
-                "error": "Server did not confirm shared_pos_catalog update",
+                "error": (
+                    f"Server did not confirm {observation_channel} update"
+                ),
             }
     except Exception as e:
         return {"sent": False, "error": str(e)}
@@ -140,4 +174,8 @@ def upload_pending(
     except Exception:
         conn.rollback()
 
-    return {"sent": True, "error": None}
+    return {
+        "sent": True,
+        "observation_channel": observation_channel or None,
+        "error": None,
+    }

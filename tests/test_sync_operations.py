@@ -686,6 +686,9 @@ class SyncConcurrencyGuardTests(unittest.TestCase):
             return_value={"status": "running"},
         ), patch.object(
             operations, "get_profile_connection", return_value=(Mock(), "ok")
+        ), patch(
+            "src.core.analytics_scope.excluded_federation_profiles",
+            return_value=(),
         ):
             operations.run_sync(
                 operations.SyncRunRequest(restaurant_id=ALL_STORES_TOKEN),

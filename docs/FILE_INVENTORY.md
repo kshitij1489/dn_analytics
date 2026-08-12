@@ -2,7 +2,7 @@
 
 > **For AI agents:** A grouped, annotated map of the files that matter, so you can jump to the right one without grepping the whole tree. Grouped by **concern**, not by folder — the same concern often spans `services/`, `src/core/`, and `utils/`. Start at [INDEX.md](./INDEX.md) for task routing; use this to locate the file once you know the task.
 >
-> **Last updated:** 2026-08-12 (revision-1.7 shared-POS analytics implementation complete; coordinated activation open). When you add/rename a load-bearing module, add it here.
+> **Last updated:** 2026-08-12 (revision-1.8 group-POS-alias runtime complete; coordinated activation open). When you add/rename a load-bearing module, add it here.
 
 Legend: 🧠 durable artifact (never delete casually) · ⚙️ core logic · 🌐 cloud sync · 🖥️ API · 🎨 frontend · 🧪 test/fixture.
 
@@ -30,6 +30,9 @@ Legend: 🧠 durable artifact (never delete casually) · ⚙️ core logic · �
 | `src/core/queries/customer_metric_sources.py` | Profile-qualified customer order atoms for combined customer metrics. |
 | `src/core/services/all_stores_sync.py` | Sequential All Stores Sync DB coordinator (per-store outcomes, partial/failed semantics). |
 | `src/core/central_api.py` | Revision-1.2 scoped/unscoped headers and typed central error decoding. |
+| `src/core/global_menu_alias_resolution.py` | 🌐 Revision-1.8 scoped alias queue/preview/commit/timeout-status and reconciliation diagnostics; strict response validation, editor gating, no local writes. |
+| `src/core/menu_catalog_seed.py` / `menu_bootstrap_shipper.py` | 🌐 Deterministic shared-POS or group-alias observations; exactly one capability-selected channel and matching durable acknowledgement. |
+| `ui_electron/src/pages/GlobalMenuAliasResolutionTab.tsx` | 🎨 Private outlet evidence vs canonical target review, explicit confirmation, preview/commit, stale refresh and reconciliation counts. |
 
 ## Order ingest (POS → local rows)
 

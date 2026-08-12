@@ -147,7 +147,9 @@ def collect_shared_pos_observation_warnings(
     summary: Dict[str, Any],
 ) -> List[Tuple[str, str]]:
     """The settled-state §9 observation is warning-only outside a clean rebuild."""
-    block = summary.get("shared_pos_observation")
+    block = summary.get("shared_pos_observation") or summary.get(
+        "group_pos_alias_observation"
+    )
     message = _block_error_message(block)
     if not message:
         return []
@@ -257,6 +259,7 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu_assignments": None,
         "global_menu_history": None,
         "shared_pos_observation": None,
+        "group_pos_alias_observation": None,
         "forecasts": None,
     }
 
@@ -319,20 +322,38 @@ def _run_best_effort_cloud_pulls_locked(
             }
         if (
             send_shared_pos_observation
-            and global_capability.shared_pos_catalog_advertised
+            and (
+                global_capability.shared_pos_catalog_advertised
+                or global_capability.resolution_advertised
+            )
             and not _block_error_message(summary["global_menu"])
             and not _block_error_message(summary["global_menu_assignments"])
         ):
             try:
                 from src.core.client_learning_shipper import run_scoped_uploads
 
-                _announce(on_phase, "Sending shared POS observation...")
-                summary["shared_pos_observation"] = run_scoped_uploads(
+                is_shared = global_capability.shared_pos_catalog_advertised
+                summary_key = (
+                    "shared_pos_observation"
+                    if is_shared
+                    else "group_pos_alias_observation"
+                )
+                _announce(
+                    on_phase,
+                    "Sending shared POS observation..."
+                    if is_shared
+                    else "Sending group POS alias evidence...",
+                )
+                summary[summary_key] = run_scoped_uploads(
                     conn, auth=auth_key
                 )
             except Exception as e:
                 logger.exception("Shared POS observation upload failed")
-                summary["shared_pos_observation"] = {
+                summary[
+                    "shared_pos_observation"
+                    if global_capability.shared_pos_catalog_advertised
+                    else "group_pos_alias_observation"
+                ] = {
                     "status": "error",
                     "error": str(e),
                 }
@@ -437,6 +458,7 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu_assignments",
         "global_menu_history",
         "shared_pos_observation",
+        "group_pos_alias_observation",
         "menu_assignments_bootstrap",
         "menu_bootstrap",
         "menu_mapping_verifications",
