@@ -30,6 +30,9 @@ const getCloudSectionError = (section: any): string | null => {
   return typeof section.error === 'string' && section.error ? section.error : null;
 };
 
+/** What the backend returns when a Sync DB is already writing the restaurant. */
+type SyncConflictDetail = { code?: string; error?: string; job_id?: string | null };
+
 /** Stores an All Stores job could not finish, named so a partial run is never silent. */
 const getFailedSyncStores = (job: JobResponse | null): { restaurant_name?: string; restaurant_id?: string; error?: string; status?: string }[] => {
   const stats = job?.stats;
@@ -285,6 +288,14 @@ function AppContent() {
     } catch (err) {
       console.error(err);
       setSyncingStoreName(null);
+      // The backend refuses a second Sync DB for a restaurant that one is
+      // already writing. That is not a failure worth an error popup.
+      const response = (err as { response?: { status?: number; data?: { detail?: SyncConflictDetail } } })?.response;
+      const detail = response?.data?.detail;
+      if (response?.status === 409 && detail?.code === 'sync_already_running') {
+        setPopup({ type: 'info', message: detail.error || 'Sync DB is already running.' });
+        return false;
+      }
       setPopup({ type: 'error', message: "Failed to start sync" });
       return false;
     } finally {
@@ -454,6 +465,21 @@ function AppContent() {
                   height: '100%',
                   transition: 'width 0.3s ease'
                 }} />
+              </div>
+            )}
+
+            {/* Current sync phase. The bar sits still through every cloud round
+                trip, so the step name is the only thing separating a slow
+                server from a hung one. */}
+            {job && polling && job.message && (
+              <div style={{
+                fontSize: '11px',
+                color: 'var(--text-color)',
+                opacity: 0.75,
+                textAlign: 'center',
+                marginTop: '4px',
+              }}>
+                {job.message}
               </div>
             )}
 

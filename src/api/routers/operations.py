@@ -1,4 +1,6 @@
-from typing import Optional
+import queue
+import threading
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -29,6 +31,96 @@ router = APIRouter()
 
 class SyncRunRequest(BaseModel):
     restaurant_id: str
+
+
+class _SyncSlot:
+    """One in-flight Sync DB job's claim on the restaurants it will write."""
+
+    __slots__ = ("keys", "job_id", "released")
+
+    def __init__(self, keys: Sequence[str]) -> None:
+        self.keys = tuple(keys)
+        self.job_id: Optional[str] = None
+        self.released = False
+
+
+_SYNC_SLOTS_LOCK = threading.Lock()
+_ACTIVE_SYNC_SLOTS: Dict[str, _SyncSlot] = {}
+
+
+def _slot_is_live(slot: _SyncSlot) -> bool:
+    if slot.released:
+        return False
+    if slot.job_id is None:
+        # Claimed, thread not started yet: the request that owns it is still
+        # inside run_sync.
+        return True
+    job = JobManager.get_job(slot.job_id)
+    # A job the manager never registered, or one that already finished or
+    # failed, holds nothing — its slot is stale bookkeeping.
+    return bool(job) and job.get("status") == "running"
+
+
+def _claim_sync_slot(
+    keys: Sequence[str],
+) -> Tuple[Optional[_SyncSlot], Optional[Tuple[str, Optional[str]]]]:
+    """Reserve every restaurant a job will write, or name the holder of the first clash."""
+    with _SYNC_SLOTS_LOCK:
+        for key in keys:
+            held = _ACTIVE_SYNC_SLOTS.get(key)
+            if held is None:
+                continue
+            if _slot_is_live(held):
+                return None, (key, held.job_id)
+            for stale_key in held.keys:
+                if _ACTIVE_SYNC_SLOTS.get(stale_key) is held:
+                    del _ACTIVE_SYNC_SLOTS[stale_key]
+        slot = _SyncSlot(keys)
+        for key in keys:
+            _ACTIVE_SYNC_SLOTS[key] = slot
+        return slot, None
+
+
+def _release_sync_slot(slot: _SyncSlot) -> None:
+    with _SYNC_SLOTS_LOCK:
+        slot.released = True
+        for key in slot.keys:
+            if _ACTIVE_SYNC_SLOTS.get(key) is slot:
+                del _ACTIVE_SYNC_SLOTS[key]
+
+
+def _sync_already_running(conflict: Tuple[str, Optional[str]]) -> HTTPException:
+    key, job_id = conflict
+    scope = "All Stores" if key == ALL_STORES_TOKEN else key
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": f"Sync DB is already running for {scope}",
+            "code": "sync_already_running",
+            "job_id": job_id,
+        },
+    )
+
+
+def _start_guarded_sync_job(factory, keys: Sequence[str]) -> str:
+    """Start one Sync DB job, holding a claim on `keys` until it finishes."""
+    slot, conflict = _claim_sync_slot(keys)
+    if slot is None:
+        raise _sync_already_running(conflict)
+
+    def guarded():
+        try:
+            yield from factory()
+        finally:
+            _release_sync_slot(slot)
+
+    try:
+        job_id = JobManager.start_job(guarded)
+    except BaseException:
+        _release_sync_slot(slot)
+        raise
+    slot.job_id = job_id
+    return job_id
 
 
 def _format_menu_pull_failure(errors: list) -> str:
@@ -82,6 +174,49 @@ def _global_failure_code(messages) -> Optional[str]:
         ):
             return candidate
     return None
+
+
+def _iter_cloud_pull(conn, options: Dict[str, Any], template: SyncStatus):
+    """Yield one status per cloud pull step, then return the pull summary.
+
+    The pull is a long chain of round trips to one host. Run it on a worker
+    thread so the step it is on can be reported while it waits — a slow server
+    reads as a named phase instead of a progress bar that stopped moving.
+    """
+    phases: "queue.Queue[Optional[str]]" = queue.Queue()
+    outcome: Dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            outcome["result"] = run_best_effort_cloud_pulls(
+                conn, on_phase=phases.put, **options
+            )
+        except BaseException as exc:  # re-raised on the consuming thread
+            outcome["error"] = exc
+        finally:
+            phases.put(None)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        while True:
+            message = phases.get()
+            if message is None:
+                break
+            yield SyncStatus(
+                "info",
+                message,
+                progress=template.progress,
+                current=template.current,
+                total=template.total,
+            )
+    finally:
+        # Even when the consumer abandons this generator, the pull has to be
+        # done with the connection before the caller closes it.
+        worker.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["result"]
 
 
 def _menu_items_empty(conn) -> bool:
@@ -203,7 +338,7 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
         return
 
     final_stats = dict(final_status.stats or {})
-    yield SyncStatus(
+    cloud_phase_template = SyncStatus(
         "info",
         "Order sync complete. Pulling cloud data...",
         progress=final_status.progress or 1.0,
@@ -211,6 +346,7 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
         total=final_status.total,
         stats=final_stats,
     )
+    yield cloud_phase_template
 
     cloud_pull_options = {
         "skip_menu_bootstrap": menu_bootstrap_pulled,
@@ -226,7 +362,7 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 ),
             }
         )
-    cloud = run_best_effort_cloud_pulls(conn, **cloud_pull_options)
+    cloud = yield from _iter_cloud_pull(conn, cloud_pull_options, cloud_phase_template)
     final_message = final_status.message or "Sync complete"
     menu_pull_errors = list(collect_menu_pull_errors(cloud))
     customer_pull_errors = list(collect_customer_pull_errors(cloud))
@@ -385,7 +521,10 @@ def run_sync(request: SyncRunRequest, scope: AnalyticsScope = Depends(get_analyt
 
             yield from iter_all_stores_sync(captured)
 
-        job_id = JobManager.start_job(all_stores_wrapper)
+        job_id = _start_guarded_sync_job(
+            all_stores_wrapper,
+            (ALL_STORES_TOKEN, *(profile.restaurant_id for profile in captured)),
+        )
         return {
             "job_id": job_id,
             "status": "queued",
@@ -457,7 +596,7 @@ def run_sync(request: SyncRunRequest, scope: AnalyticsScope = Depends(get_analyt
         finally:
             conn.close()
 
-    job_id = JobManager.start_job(sync_wrapper)
+    job_id = _start_guarded_sync_job(sync_wrapper, (profile.restaurant_id,))
     return {
         "job_id": job_id,
         "status": "queued",

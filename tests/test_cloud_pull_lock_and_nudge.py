@@ -3,6 +3,7 @@ Phase C5: shared pull lock (scheduler vs Sync DB job).
 """
 
 import sqlite3
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -15,8 +16,11 @@ from src.core.services.cloud_pull_orchestrator import (
 from tests.profile_test_helpers import bind_test_profile
 
 
-def _conn_with_cloud_config(url=None):
-    conn = sqlite3.connect(":memory:")
+def _conn_with_cloud_config(url=None, *, cross_thread=False):
+    # Profile connections are opened with check_same_thread=False in
+    # src/core/db/connection.py; the lock tests that hand a connection to a
+    # worker thread need the same affordance.
+    conn = sqlite3.connect(":memory:", check_same_thread=not cross_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE system_config (key TEXT PRIMARY KEY, value TEXT)")
     bind_test_profile(conn)
@@ -97,6 +101,64 @@ class CloudPullLockTests(unittest.TestCase):
         self.assertTrue(summary["skipped"])
         self.assertFalse(summary["attempted"])
         self.assertIn("in progress", summary["reason"])
+
+    def test_blocking_pull_runs_when_the_lock_is_free(self) -> None:
+        import threading
+
+        conn = _conn_with_cloud_config(cross_thread=True)
+        self.addCleanup(conn.close)
+        outcome = {}
+
+        def run() -> None:
+            with patch(
+                "src.core.services.cloud_pull_orchestrator._run_best_effort_cloud_pulls_locked",
+                return_value={"attempted": False},
+            ):
+                outcome["summary"] = run_best_effort_cloud_pulls(conn, blocking=True)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=10)
+        self.assertFalse(worker.is_alive(), "blocking pull deadlocked on the free lock")
+        self.assertEqual(outcome["summary"]["attempted"], False)
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        CLOUD_PULL_LOCK.release()
+
+    def test_blocking_pull_names_the_wait_before_queueing_behind_the_holder(self) -> None:
+        import threading
+
+        conn = _conn_with_cloud_config(cross_thread=True)
+        self.addCleanup(conn.close)
+        phases = []
+        outcome = {}
+
+        def run() -> None:
+            with patch(
+                "src.core.services.cloud_pull_orchestrator._run_best_effort_cloud_pulls_locked",
+                return_value={"attempted": False},
+            ):
+                outcome["summary"] = run_best_effort_cloud_pulls(
+                    conn, blocking=True, on_phase=phases.append
+                )
+
+        self.assertTrue(CLOUD_PULL_LOCK.acquire(blocking=False))
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            # The waiting job reports itself before it blocks.
+            for _ in range(100):
+                if phases:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(
+                phases, ["Waiting for the background cloud sync to finish..."]
+            )
+            self.assertNotIn("summary", outcome)
+        finally:
+            CLOUD_PULL_LOCK.release()
+        worker.join(timeout=10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(outcome["summary"]["attempted"], False)
 
     def test_pull_releases_lock_after_run(self) -> None:
         conn = _conn_with_cloud_config()

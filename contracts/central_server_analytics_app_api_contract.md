@@ -1,9 +1,10 @@
 # Dachnona Cloud Sync API Contract — Version 1
 
-**Contract revision:** 1.7
+**Contract revision:** 1.8
 **Contract version:** 1 (fixture directory: `contracts/desktop_analytics_app/fixtures/1/`)
 **Audience:** Dachnona backend engineers / Codex agent implementing or maintaining the cloud-side sync work
 **Status:** **Revisions through 1.6 are implemented** on the Dachnona central server (`backend/desktop_analytics_app_sync/`) and in the desktop client. **Revision 1.7 is frozen for coordinated implementation and is not active yet.** Baseline collaboration sync (Sections 5–15), assignment/verification sync (**Section 17**), analytics telemetry ingest (**Section 18**), server-authoritative menu commits (**Section 19**), normalized catalog (**Section 20**), and server-authoritative customer commits (**Section 21**) are implemented. Sync is **strict-only as of 2026-07-09**: the central server is the sole source of truth and the legacy batched ingest endpoints (`POST …/customer-merges/ingest`, `…/menu-merges/ingest`, `…/menu-mapping-verifications/ingest`) have been **removed** — interactive/client mutations land exclusively through the server-authoritative commit endpoints (§19, §21), while the operator-only baseline import remains available for cutover/recovery. Strict mode had been live in prod for both scopes since 2026-07-07 (the removed endpoints previously returned HTTP 426 when the scope flag was set); the per-scope `strict_mode_enabled` gate column and its `set_menu_strict_mode`/`set_customer_strict_mode` commands are gone. The `strict_mode_enabled` response key was **removed in revision 1.2**: it existed only so already-deployed clients kept committing, and its stated removal condition — every install running the always-strict release — was confirmed before this build shipped. **Section 22 is implemented except the §22.8 standalone weather read** (`GET …/forecasts/weather`), which is still unrouted; weather rows ship inline as `weather_rows` on §22.6 bootstrap and §22.7 delta. **Section 23 (restaurant selection and the raw analytics streams) is implemented** as of revision 1.1, and is a **breaking change**: `X-Restaurant-ID` is required on every scoped route with no default and no query-parameter alternative, the four `/analytics/` streams filter on the restaurant that owns each row's current parent header, the child streams drop the ambiguous `order_pk`/`order_item_pk` fields in favour of `event_id` plus order-line identity, and `GET /analytics/restaurants/` is the desktop's profile selector source. A revision-1.0 client does not work against 1.1; there is no compatibility mode. **Revision 1.2 removes every remaining backward-compatibility affordance** — the `strict_mode_enabled` response key, the client-supplied `order_line_key` / `petpooja_order_id` / `petpooja_itemid` on assignment writes (now `400`), the inert `legacy=1` / `scope_key` query parameters (now `400`), the `forecasts/bootstrap` route alias (now `404`), and the collapsed-`menu_item_id` filter that shaped the assignment snapshot around one desktop release's local catalog. The full list is **§24**. The central server carries no backward compatibility at all: a 1.1 client does not work against 1.2, and that is the intended state — the desktop is rebuilt against this revision, not accommodated by it. Forecasting is server-authored and downstream-only: the central nightly job (`backend/forecasting/`) trains and publishes, and clients pull via `forecasts/status` / `forecasts/delta` / `forecasts/central-bootstrap`. Desktop clients never upload forecasts. **Revisions 1.1 and 1.2 are live on the central server as of 2026-08-08**, the two-restaurant cutover that made `X-Restaurant-ID` mandatory; desktop client traffic stays blocked at the edge until the client is rebuilt against this revision. **Revision 1.3 introduced Section 25. Revision 1.4 froze its production wire**: versioned snapshot/event/assignment envelopes, one `after` / `next_cursor` vocabulary, complete semantic event deltas and group validation on assignment pulls. **Revision 1.5 closed the first set of gaps a pre-activation review found. Revision 1.6 closed the remaining undo, lifecycle, event-scope and backfill gaps. Revision 1.7 adds the intentionally narrow shared-Petpooja policy used by this company**: group-scoped POS IDs, one canonical price per shared POS entry, exact cross-store bootstrap reconciliation, a unified group history read, and shadow-mode refusal of restaurant-only canonical edits. It deliberately reuses `GlobalMenuMappingRule` and does **not** add `GlobalMenuItemVariant`.
+**Revision 1.8 status (supersedes the historical implementation wording in the preceding status paragraph):** revisions through 1.7 are implemented; this additive revision is frozen for coordinated implementation and is not active or advertised. Revision 1.7 wire meanings remain unchanged. Revision 1.8 adds `global_menu_group_pos_aliases_v1` for one canonical group menu with multiple reviewed outlet-specific POS locators, private alias observations with raw `itemcode`, a centrally audited resolution queue, digest-pinned decision preview/commit/status, initial-reconciliation plan/status reads, and fail-closed quarantine for later unknown locators.
 **Scope:** Full `desktop_analytics_app_sync` wire contract: collaboration replay streams (Sections 5–15, 17), menu bootstrap ingest/pull, analytics telemetry ingest (Section 18), server-authoritative menu commits (Section 19), normalized catalog (Section 20), server-authoritative customer commits (Section 21), downstream-only central forecasting sync (Section 22), restaurant selection plus the raw `/analytics/` streams (Section 23), and global menu groups (Section 25).
 **Base path:** All sync routes are mounted at `/desktop-analytics-sync/` (see `config/urls.py`). Trailing slashes are optional on every route. **Exception:** the raw analytics streams and the allowed-restaurants endpoint (**Section 23**) are mounted at `/analytics/` and authenticated with `X-API-Key`, not the sync Bearer token.
 
@@ -229,7 +230,7 @@ Mounted at `/analytics/`, **not** `/desktop-analytics-sync/`, and authenticated 
 | `GET` | `/analytics/discounts/` | Discount lines, filtered through their current parent header |
 | `GET` | `/analytics/restaurants/` | Restaurants this credential may select — the desktop profile selector source (§23.6) |
 
-### 5.10 Global menu groups (§25 — revision 1.7 frozen, inert until advertised)
+### 5.10 Global menu groups (§25 — revision 1.8 additive alias contract frozen)
 
 Restaurants that share a business menu belong to one server-managed menu group. Membership comes from the settings restaurant registry, never from a client. Every route below still sends `X-Restaurant-ID`; the server derives the group.
 
@@ -242,8 +243,14 @@ Restaurants that share a business menu belong to one server-managed menu group. 
 | `POST` | `global-menu/mutations/preview` | Group-wide impact of one mutation, writing nothing (§25.8.1) |
 | `POST` | `global-menu/mutations/commit` | Strict global mutation commit (§25.8.2) |
 | `GET` | `global-menu/mutations/{mutation_id}` | Replay one accepted mutation after a POST timeout (§25.8.3) |
+| `GET` | `global-menu/alias-resolutions` | Paged central alias-review queue (§25.12.4) |
+| `POST` | `global-menu/alias-resolutions/preview` | Validate one draft/approval without writing (§25.12.5) |
+| `POST` | `global-menu/alias-resolutions/commit` | Idempotently store one audited draft/approval (§25.12.6) |
+| `GET` | `global-menu/alias-resolutions/{mutation_id}` | Reconcile an uncertain decision commit (§25.12.7) |
+| `GET` | `global-menu/alias-reconciliation/plan` | Deterministic initial alias plan and digest (§25.12.8) |
+| `GET` | `global-menu/alias-reconciliation/status` | Initial run, capability and quarantine status (§25.12.9) |
 
-The two `mutations/` POST routes additionally require the `X-Global-Menu-Key` editor credential (§25.3).
+The two `mutations/` POST routes and both alias-resolution POST routes additionally require the `X-Global-Menu-Key` editor credential (§25.3). Alias reads require `global_menu_resolution_v1`; the alias capability itself is deliberately absent until the initial reconciliation commits.
 
 ## 6. Recommended Persistence Shape
 
@@ -635,7 +642,7 @@ The server returns **`events` + `next_cursor` only** (no `items` / `cursor_after
 - `Authorization: Bearer <token>` when configured
 - `Content-Type: application/json`
 - **Required:** `id_maps` (object), `cluster_state` (object)
-- **Optional:** `uploaded_by`, `uploaded_from`, `snapshot_role`, `shared_pos_catalog`
+- **Optional:** `uploaded_by`, `uploaded_from`, `snapshot_role`, `shared_pos_catalog`, `group_pos_alias_observation`
 
 ```json
 {
@@ -680,6 +687,34 @@ The server returns **`events` + `next_cursor` only** (no `items` / `cursor_after
   - Django setting `MENU_BOOTSTRAP_TRUST_CLIENT_CLUSTER_STATE=false` → same as `seed_only` for cluster state (ops toggle; materialized `order_item_assignments` is ground truth for clustering).
 - First-ever push may seed `cluster_state` even when `snapshot_role` is `seed_only` (no prior latest row).
 - `shared_pos_catalog`, when present, is a **complete active restaurant observation snapshot**, not a merge-forward map. The desktop exports active `menu_item_variants` rows joined to their item/variant metadata. The server validates unique `(locator_type, locator_value)`, rejects one `locator_value` appearing under both POS kinds (the desktop assignment key has no kind column), accepts only `pos_item`/`pos_addon`, normalizes decimal `variant_value`/`price` strings, and replaces the scope's previous observation atomically. It is retained even when `snapshot_role: "seed_only"` suppresses `cluster_state`, because §25.9 compares member observations before one group bootstrap. Omitting the key preserves the previous observation; an explicit empty array replaces it with empty. The server must not expose one restaurant's observation through `menu-bootstrap/latest`; only the group-owned, reviewed projection is shared through §25.
+- `group_pos_alias_observation` is the separate revision-1.8 observation for §25.12. It describes POS locators actually observed by this restaurant; it is not represented as a complete provider catalog. Each row has the same diagnostic identity fields as `shared_pos_catalog` plus nullable raw provider `itemcode` (`null` for addons). The raw `locator_value` and `itemcode` are trimmed but otherwise preserved; `itemcode` is never case-folded or rewritten on ingest. Decimal fields are normalized exactly as above. Omission preserves the prior latest alias observation, while explicit `[]` replaces it with observed-empty. Duplicate `(locator_type, locator_value)` rows and a value appearing under both POS kinds are `400`. The append-only ingest row retains every submitted observation, and the latest row replaces only this field under the same row lock as the bootstrap update.
+- `shared_pos_catalog` and `group_pos_alias_observation` are distinct evidence channels. A client sends at most one of them in a request. A group cannot be configured for both §25.9 shared-locator policy and §25.12 alias policy.
+- Neither private observation is returned by `menu-bootstrap/latest`. The alias resolution queue exposes only editor-authorized, group-filtered evidence through §25.12.4.
+
+Revision-1.8 alias observation example (the existing revision-1.7 example above remains frozen):
+
+```json
+{
+  "id_maps": {},
+  "cluster_state": {},
+  "snapshot_role": "seed_only",
+  "group_pos_alias_observation": [
+    {
+      "locator_type": "pos_item",
+      "locator_value": "1312789339",
+      "itemcode": "Tiramisu",
+      "menu_item_id": "item_classic_tiramisu",
+      "variant_id": null,
+      "item_name": "Classic Tiramisu",
+      "item_type": "Dessert",
+      "variant_name": null,
+      "variant_unit": null,
+      "variant_value": null,
+      "price": "290.00"
+    }
+  ]
+}
+```
 
 #### Success response (HTTP `200`)
 
@@ -688,6 +723,8 @@ The server returns **`events` + `next_cursor` only** (no `items` / `cursor_after
 ```
 
 `shared_pos_catalog_updated` is always present in revision 1.7 and is `false` when the request omitted that key.
+
+A revision-1.8 response additionally carries `group_pos_alias_observation_updated`. It is `true` when the request supplied the key, including explicit `[]`, and `false` on omission. The field acknowledges only durable observation replacement; it does not approve an alias, write a mapping rule, change an assignment, or advance a global event cursor.
 
 Validation failure → HTTP `400` (serializer errors).
 
@@ -2298,6 +2335,8 @@ That tuple is the allowed item/variant pair. **There is no `GlobalMenuItemVarian
 
 Prices on historical order lines remain immutable restaurant facts. The shared rule controls only the current catalog price projected into `menu_item_variants.price`; it never rewrites an order's `unit_price`, `total_price`, quantity or revenue.
 
+Revision 1.8 adds a second, mutually exclusive policy for a group that shares one logical menu but whose POS provider issued different numeric locators per outlet. `global_menu_group_pos_aliases_v1` means multiple reviewed group-scoped `pos_item`/`pos_addon` rules may resolve to the same canonical item/variant pair. `itemcode` may suggest or, when unique across all current evidence, identify the parent global item; it never guesses a variant. This policy does not create a second outlet catalog or redirect graph, and it never makes orders, assignments or analytics facts group-owned.
+
 ### 25.2 Identity and revision
 
 - A global item/variant id is **server-issued and immutable**. It is never derived from a display name: a rename changes metadata, not identity, so historical analytics keyed on it do not split.
@@ -2317,6 +2356,8 @@ A group advances through four rungs, each a deliberate operator action (`manage.
 | `active` | `+ global_menu_mutations_v1` | Also author global mutations. |
 
 `global_menu_shared_pos_catalog_v1` is an orthogonal policy capability, not a fifth lifecycle rung. It is advertised beside the capabilities for every non-provisioning member only when the server registry enables the policy **and** the executed bootstrap recorded a passing shared-POS validation. Its absence preserves revision-1.6 locator and price ownership exactly. A client must gate group POS projection and shared-price behavior on this capability; membership in a menu group alone is insufficient.
+
+`global_menu_group_pos_aliases_v1` is a different orthogonal policy capability. `GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS` and `GLOBAL_MENU_SHARED_POS_GROUPS` are mutually exclusive for one group; overlapping settings are a deployment validation failure, not precedence. The alias capability is advertised to every non-provisioning member only when the alias policy is configured and exactly one successful initial `pos_aliases` reconciliation is recorded. Settings alone never advertise it. Before that commit, a shadow member continues to advertise `global_menu_v1` and `global_menu_resolution_v1`, so the editor can load the canonical target catalog and resolve the queue without activating alias projection.
 
 A group climbs **one rung at a time** — the server refuses a jump, because each rung is the evidence the next one rests on, and `provisioning` straight to `active` would advertise group-wide editing over a catalog nobody has bootstrapped or checked. Coming back down is unrestricted: rollback is withdrawing capability (§25.11), and an operator stopping a bad rollout does not step through the rungs they are retreating from.
 
@@ -2346,6 +2387,8 @@ Scope follows from the locator kind and is not a free choice. `pos_item` / `pos_
 
 The POS default above applies when `global_menu_shared_pos_catalog_v1` is absent. With that capability, `pos_item` and `pos_addon` reverse to **group-only** scope and take precedence over restaurant assignments: one Petpooja id is one group catalog entry, and a conflicting restaurant row is a parity error rather than a separate valid meaning. The database must permit both structurally while enforcing scope qualification and the group-POS-price shape; policy-aware service validation under the menu-group lock makes the mutually exclusive choice. A shared-POS group refuses restaurant-scoped POS rules, while a normal group refuses group-scoped POS rules. `itemcode` and `alias` behavior is unchanged.
 
+For `global_menu_group_pos_aliases_v1`, resolution precedence is: (1) reviewed group POS alias, (2) a compatible existing assignment, (3) a unique group `itemcode` parent rule, (4) a reviewed group alias/name rule, (5) unresolved quarantine. All targets are redirect-resolved. A reviewed alias is group-owned and resolves identically for every member that later sends it, but assignments remain restaurant rows. An existing assignment contradicting the reviewed alias is a parity error. A later unseen locator is quarantined and appears in §25.12.4/§25.12.9; it never silently falls back to a restaurant-owned canonical identity.
+
 ### 25.5 `GET global-menu/snapshot`
 
 | Param | Default | Rules |
@@ -2357,6 +2400,7 @@ The POS default above applies when `global_menu_shared_pos_catalog_v1` is absent
 - Paged **per section**: the four collections have different key spaces, and one merged cursor would make "resume where I left off" depend on the order the server concatenated them.
 - **Omission is never deletion.** Redirected and tombstoned entities are served explicitly with their `lifecycle_state`.
 - **Rules are filtered to the requesting restaurant** — every group-scoped rule plus that restaurant's own restaurant-scoped ones. In a shared-POS group, all active POS rules are group-scoped and every member therefore receives the same complete catalog entry set and prices.
+- Canonical `items`, `variants` and `redirects` remain readable whenever `global_menu_v1` is advertised, including alias-policy `shadow` before `global_menu_group_pos_aliases_v1` is ready. A client must not gate the canonical target picker on either POS-policy capability. Before alias activation, unresolved source observations are available only from the group-authorized resolution queue, not as canonical snapshot rows.
 - A rule row always carries nullable `price`. It is a base-10 JSON string with two fractional digits (for example `"290.00"`), never a binary float. It is required and non-negative for group-scoped `pos_item`/`pos_addon`, and `null` for aliases, itemcodes and restaurant-scoped POS rules.
 - Every response has `schema_version: 1`, `menu_group_id`, `menu_group_revision`, `section`, `rows`, `next_cursor`, `has_more`, and `snapshot_watermark: {event_seq, menu_group_revision}`. `next_cursor` is the value sent as the next request's `after`; `has_more` is authoritative.
 - The watermark is captured **before** each page is read. The client pins the first page's watermark for the complete four-section snapshot, rejects a group change mid-snapshot, and tails from that pinned `event_seq`. A concurrent commit is therefore re-delivered rather than missed.
@@ -2378,6 +2422,8 @@ Each event payload is a complete semantic delta: `action`, authoritative `items`
 Lifecycle rung, advertised capabilities, group revision, catalog counts, and per-restaurant coverage. `verified_coverage_complete` is the gate in §25.3; it is `false` while a restaurant has no verified assignments at all, and `has_verified_assignments` says which of the two situations a `false` is. Internal scope keys never appear — restaurants are identified by `restaurant_id` (§23.6).
 
 For `global_menu_shared_pos_catalog_v1`, `catalog` also carries `shared_pos_entries` and `shared_pos_catalog_digest`. Each restaurant row carries `shared_pos_entries_observed`, `shared_pos_entries_matching`, `shared_pos_entries_missing`, `shared_pos_peer_extras`, `shared_pos_identity_mismatches`, `shared_pos_price_mismatches`, and `shared_pos_catalog_complete`. Peer omissions are inherited from authority and are informative, not blocking; `shared_pos_catalog_complete` means the digest is non-empty, every observed peer entry matches, and there are no peer extras or identity/price mismatches. Group `shared_pos_catalog_complete` is true only when every member is complete. `aggregating` and `active` require both this flag and the existing verified-assignment coverage. Counts and the digest are computed from canonicalized locator/type/item/variant/price tuples; order volume is not part of the digest.
+
+For `global_menu_group_pos_aliases_v1`, status additionally separates `canonical_catalog_complete`, `alias_decision_coverage_complete`, and `verified_coverage_complete`; all three are required for `aggregating`/`active`, and `0/0` satisfies none of them. `alias_decision_coverage_complete` requires a non-empty observation union with every current locator covered by an approved, non-stale decision and no blocking conflict. Group and restaurant status include observed, approved, pending, stale and quarantined alias counts. These fields remain present while the alias policy is configured even before the alias capability is advertised.
 
 ### 25.8 Preview and strict mutation commit
 
@@ -2492,4 +2538,78 @@ The server projects this unified page from the existing restaurant `MenuMergeEve
 
 ### 25.11 Rollback
 
-Rollback is **disabling capability, not downgrading data**. Returning a group to `provisioning` withdraws every advertised capability and leaves stored global identity intact; the additive `global_*` columns and tables stay through at least one rollback window. The coordinated client is rebuilt or reset against revision 1.7; no older global-menu wire is supported once the policy is enabled.
+Rollback is **disabling capability, not downgrading data**. Returning a group to `provisioning` withdraws every advertised capability and leaves stored global identity intact; the additive `global_*` columns and tables stay through at least one rollback window. A shared-locator client is rebuilt or reset against revision 1.7; an alias-policy client is rebuilt against revision 1.8. No older global-menu wire is supported once its corresponding policy is enabled.
+
+### 25.12 Group-owned POS aliases (revision 1.8 additive)
+
+This section does not alter revision-1.7 `global_menu_shared_pos_catalog_v1`. It defines a separate policy for one canonical group menu with multiple reviewed outlet-specific POS locators.
+
+#### 25.12.1 Capability, policy and authorization
+
+- Capability: `global_menu_group_pos_aliases_v1`.
+- Deployment allowlist: `GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS`.
+- A group in both alias and shared-POS allowlists is invalid configuration and advertises neither POS-policy capability.
+- Queue, preview, plan and status reads require sync Bearer authorization, a selected member restaurant and `global_menu_resolution_v1`.
+- Decision preview/commit/status additionally require the §25.3 editor credential and grant. A caller never supplies `menu_group_id`; `X-Restaurant-ID` resolves it.
+- The alias capability remains absent until one digest-pinned initial reconciliation commits. Removing policy or returning to `provisioning` withdraws it without deleting evidence.
+
+#### 25.12.2 Stable values and digests
+
+- `locator_type` is `pos_item` or `pos_addon`; `locator_value` is the trimmed raw provider id.
+- `itemcode` is the trimmed raw provider value or `null`. It identifies a parent item only when current group evidence makes it unique.
+- `observation_digest`, `catalog_digest`, `redirect_digest`, `preview_digest`, `plan_digest` and `result_digest` are lowercase SHA-256 hex strings over RFC-8785/JCS canonical JSON encoded as UTF-8. Hash input excludes display-only timestamps and includes every semantic field named by the relevant response.
+- A locator's `observation_digest` covers its normalized evidence rows sorted by `(restaurant_id, locator_type, locator_value, menu_item_id, variant_id-or-empty)`. Any evidence change makes an earlier decision stale.
+- Prices and variant values are base-10 strings with exactly two fractional digits; JSON floats are invalid.
+- Candidate reasons are `exact_existing_alias`, `unique_itemcode`, `exact_identity`, or `manual`. Exact normalized names are suggestions only. A repeated/ambiguous itemcode, ambiguous variant, cross-kind locator collision, corrupt redirect, missing/out-of-group target or stale approved evidence is blocking.
+
+#### 25.12.3 Decision state
+
+One current decision exists per `(menu_group_id, locator_type, locator_value)`. `decision_status` is `pending`, `approved`, `rejected_stale`, or `superseded`. A pending draft may carry a candidate target but is never used by reconciliation. An approved decision requires a current observation digest, redirect-resolved active global item, optional active variant belonging to that item, canonical price, method, reviewer attribution and non-blank reason.
+
+Saving a decision writes no mapping rule or assignment, advances no group revision/event cursor, and never changes local restaurant menu rows. Rule/assignment changes happen only in the initial transactional reconciliation described in §25.12.8.
+
+#### 25.12.4 `GET global-menu/alias-resolutions`
+
+Query parameters:
+
+| Param | Default | Rules |
+|---|---|---|
+| `status` | `all` | One of `all`, `pending`, `approved`, `stale`, `quarantined` |
+| `after` | — | Opaque cursor from `next_cursor` |
+| `limit` | `100` | Integer 1–500 |
+
+Rows are ordered bytewise by `(locator_type, locator_value)`. The cursor is base64url without padding of UTF-8 JSON `{"v":1,"locator_type":"…","locator_value":"…"}`. Invalid/unsupported cursors are `400 invalid_page_parameter`. The response has `schema_version`, group id/revision, current union `observation_digest`, `rows`, `next_cursor`, and `has_more`.
+
+Every row carries locator identity, `resolution_state`, `observation_digest`, source `evidence`, nullable deterministic `candidate`, nullable current `decision`, and machine-readable `conflicts`. Evidence includes source restaurant id/name, raw itemcode, local ids for diagnostics, item/variant identity and price. The queue is private group-resolution evidence and is never returned by bootstrap latest or ordinary snapshot/event reads.
+
+`resolution_state` is `pending`, `approved`, `stale`, `applied`, or `quarantined`. After initial activation, a newly observed unknown locator is `quarantined` with conflict code `unknown_group_pos_alias`; it remains unresolved until reviewed and applied through a later contract-defined corrective workflow. Revision 1.8 does not silently extend initial-reconciliation execute semantics to recurring bulk writes.
+
+#### 25.12.5 `POST global-menu/alias-resolutions/preview`
+
+Request fields are `schema_version: 1`, `expected_menu_group_revision`, `locator_type`, `locator_value`, `expected_observation_digest`, `requested_status` (`pending` or `approved`), nullable target global ids, nullable canonical price for a draft and required canonical price for approval, `decision_method`, and reviewer `reason`.
+
+Preview writes nothing. HTTP `200` returns normalized current evidence/target, `revision_current`, `observation_current`, `commit_allowed`, conflicts and `preview_digest`. A stale revision/evidence digest is reported with the current values and `commit_allowed: false`, so the UI can refresh without parsing prose. Preview follows redirects before returning the target.
+
+#### 25.12.6 `POST global-menu/alias-resolutions/commit`
+
+The commit repeats every preview semantic field and adds UUID `mutation_id`, exact `preview_digest`, `uploaded_by`, and `uploaded_from`. It re-derives the preview under the menu-group lock. Stale group revision returns `409 global_menu_alias_revision_conflict`; stale observation returns `409 global_menu_alias_observation_conflict`; changed preview content returns `409 global_menu_alias_preview_conflict`. Each carries `recommended_action: "refresh_alias_resolution"`, current revision/digest, and no write.
+
+First success is HTTP `200`, `status: "applied"`, `idempotent_replay: false`. Retrying the byte-equivalent semantic request with the same `mutation_id` returns the originally stored response with `idempotent_replay: true`; it creates no second decision/audit row. Reusing a mutation id for different semantic content is `409 global_menu_alias_mutation_conflict`. Idempotency excludes transport-only JSON key order and includes reviewer attribution/reason.
+
+#### 25.12.7 `GET global-menu/alias-resolutions/{mutation_id}`
+
+Used after a POST timeout. A known id returns the stored commit result with `idempotent_replay: true`; an unknown well-formed UUID is `404 global_menu_alias_mutation_not_found`; a malformed id is `400 global_menu_alias_mutation_invalid`. This read requires the editor credential because its evidence/reviewer metadata is private.
+
+#### 25.12.8 `GET global-menu/alias-reconciliation/plan`
+
+This is a read-only deterministic build of the same plan consumed by `reconcile_global_menu_group_aliases`; it never creates a run or changes authority. The response includes authority id, group revision, member observation digests, catalog/redirect digests, counts for proposed POS alias and unique-itemcode rules, affected assignments by restaurant, superseded restaurant rules, decisions used, unresolved/stale/blocking conflicts, projected verified coverage, immutable fact counts/checksums, `execution_ready`, and `plan_digest`.
+
+The execute command must rebuild and byte-compare the semantic plan under one transaction/advisory lock and additionally require `--execute`, `--confirm RECONCILE_GLOBAL_MENU_GROUP_ALIASES`, `--expect-plan-digest`, shadow status, alias-only policy, a fresh backup/preflight, zero unresolved/stale/blocking decisions, and no prior successful `pos_aliases` run. It preserves assignment row counts and immutable orders/order lines/facts/history, advances one revision/event, and only its committed success makes the capability advertisable.
+
+#### 25.12.9 `GET global-menu/alias-reconciliation/status`
+
+Returns `policy` (`alias_configured`, `shared_pos_configured`, `capability_advertised`), `initial_reconciliation` (`not_started`, `applied`, or `failed`, nullable run/event/revision and plan/result digests), canonical/alias/verified coverage gates, group alias counts, quarantine count, and per-restaurant observation/decision/assignment coverage. It is a status read, not an execute endpoint. `0/0` is never complete.
+
+#### 25.12.10 Fixture freeze and compatibility
+
+Exact revision-1.8 shapes are in `fixtures/1/global_menu_alias_fixtures.json`. Existing revision-1.7 fixtures are unchanged. A revision-1.7 client ignores the additive bootstrap acknowledgement and never sees alias capability on a group that has not completed this workflow. `schema_version` remains `1` because all new shapes are new optional fields or new routes/capability values; there is no incompatible reinterpretation of an existing field.

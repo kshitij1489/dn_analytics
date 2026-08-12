@@ -20,9 +20,19 @@ pull failures are surfaced to Sync DB callers.
 
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _announce(on_phase: Optional[Callable[[str], None]], message: str) -> None:
+    """Name the step about to run so a slow server reads as progress, not a hang."""
+    if on_phase is None:
+        return
+    try:
+        on_phase(message)
+    except Exception:
+        logger.debug("Cloud pull phase callback failed", exc_info=True)
 
 MERGE_EVENTS_LIMIT = 100
 
@@ -153,6 +163,7 @@ def run_best_effort_cloud_pulls(
     skip_global_menu_state: bool = False,
     send_shared_pos_observation: bool = False,
     already_locked: bool = False,
+    on_phase: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Run cloud pull steps when their pull URLs are configured.
@@ -175,16 +186,23 @@ def run_best_effort_cloud_pulls(
             skip_menu_bootstrap=skip_menu_bootstrap,
             skip_global_menu_state=skip_global_menu_state,
             send_shared_pos_observation=send_shared_pos_observation,
+            on_phase=on_phase,
         )
         result["restaurant_id"] = restaurant_id
         return result
-    if not CLOUD_PULL_LOCK.acquire(blocking=blocking):
-        return {
-            "attempted": False,
-            "skipped": True,
-            "reason": f"another cloud pull is in progress (requested {restaurant_id})",
-            "restaurant_id": restaurant_id,
-        }
+    if not CLOUD_PULL_LOCK.acquire(blocking=False):
+        if not blocking:
+            return {
+                "attempted": False,
+                "skipped": True,
+                "reason": f"another cloud pull is in progress (requested {restaurant_id})",
+                "restaurant_id": restaurant_id,
+            }
+        # Queued behind the 5-minute scheduler cycle or another store's pull.
+        # Say so before blocking: the wait is otherwise indistinguishable from
+        # a stalled request.
+        _announce(on_phase, "Waiting for the background cloud sync to finish...")
+        CLOUD_PULL_LOCK.acquire()
     try:
         result = _run_best_effort_cloud_pulls_locked(
             conn,
@@ -192,6 +210,7 @@ def run_best_effort_cloud_pulls(
             skip_menu_bootstrap=skip_menu_bootstrap,
             skip_global_menu_state=skip_global_menu_state,
             send_shared_pos_observation=send_shared_pos_observation,
+            on_phase=on_phase,
         )
         result["restaurant_id"] = restaurant_id
         return result
@@ -206,6 +225,7 @@ def _run_best_effort_cloud_pulls_locked(
     skip_menu_bootstrap: bool = False,
     skip_global_menu_state: bool = False,
     send_shared_pos_observation: bool = False,
+    on_phase: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     from src.core.config.cloud_sync_config import get_cloud_sync_config
     from src.core.customer_merge_sync import get_customer_merge_pull_endpoint
@@ -265,6 +285,7 @@ def _run_best_effort_cloud_pulls_locked(
             }
         else:
             try:
+                _announce(on_phase, "Pulling global menu rules...")
                 summary["global_menu"] = pull_global_menu_state(
                     conn, auth=auth_key, allow_profile_sync=True
                 )
@@ -273,6 +294,7 @@ def _run_best_effort_cloud_pulls_locked(
                 summary["global_menu"] = {"status": "error", "error": str(e)}
         if not _block_error_message(summary["global_menu"]):
             try:
+                _announce(on_phase, "Pulling menu assignments...")
                 summary["global_menu_assignments"] = pull_global_assignment_snapshot(
                     conn, auth=auth_key, allow_profile_sync=True
                 )
@@ -285,6 +307,7 @@ def _run_best_effort_cloud_pulls_locked(
         try:
             from src.core.global_menu_history import pull_global_menu_history
 
+            _announce(on_phase, "Pulling menu history...")
             summary["global_menu_history"] = pull_global_menu_history(
                 conn, auth=auth_key, allow_profile_sync=True
             )
@@ -303,6 +326,7 @@ def _run_best_effort_cloud_pulls_locked(
             try:
                 from src.core.client_learning_shipper import run_scoped_uploads
 
+                _announce(on_phase, "Sending shared POS observation...")
                 summary["shared_pos_observation"] = run_scoped_uploads(
                     conn, auth=auth_key
                 )
@@ -317,6 +341,7 @@ def _run_best_effort_cloud_pulls_locked(
     if not (global_capability is not None and global_capability.active) and ep_boot and not skip_menu_bootstrap:
         summary["attempted"] = True
         try:
+            _announce(on_phase, "Pulling menu catalog...")
             summary["menu_bootstrap"] = fetch_and_apply_menu_bootstrap_snapshot(
                 conn,
                 ep_boot,
@@ -331,6 +356,7 @@ def _run_best_effort_cloud_pulls_locked(
     if not (global_capability is not None and global_capability.active) and ep_assignments:
         summary["attempted"] = True
         try:
+            _announce(on_phase, "Seeding menu assignments...")
             summary["menu_assignments_bootstrap"] = bootstrap_menu_assignments_if_needed(
                 conn,
                 ep_assignments,
@@ -350,6 +376,7 @@ def _run_best_effort_cloud_pulls_locked(
                     "Both menu merge and mapping-verification pull endpoints "
                     "must be configured."
                 )
+            _announce(on_phase, "Pulling menu merges and verifications...")
             menu_pull = pull_latest_menu_state(conn, already_locked=True)
             summary["menu_mapping_verifications"] = menu_pull[
                 "menu_mapping_verifications"
@@ -369,6 +396,7 @@ def _run_best_effort_cloud_pulls_locked(
         try:
             from src.core.derived_assignment_flush import flush_pending_derived_assignments
 
+            _announce(on_phase, "Flushing derived assignments...")
             summary["derived_assignment_flush"] = flush_pending_derived_assignments(conn)
         except Exception as e:
             logger.exception("Derived assignment flush failed")
@@ -378,6 +406,7 @@ def _run_best_effort_cloud_pulls_locked(
     if ep_cust:
         summary["attempted"] = True
         try:
+            _announce(on_phase, "Pulling customer merges...")
             summary["customer_merges"] = pull_latest_customer_state(
                 conn,
                 already_locked=True,
@@ -392,6 +421,7 @@ def _run_best_effort_cloud_pulls_locked(
     if ep_forecast:
         summary["attempted"] = True
         try:
+            _announce(on_phase, "Pulling forecasts...")
             summary["forecasts"] = pull_and_apply_forecast_deltas(conn)
         except Exception as e:
             logger.exception("Best-effort forecast pull failed")

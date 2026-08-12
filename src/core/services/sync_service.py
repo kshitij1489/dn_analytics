@@ -76,7 +76,9 @@ def sync_database(conn, cluster=None):
         else:
             start_cursor = get_last_stream_id(conn)
         
-        # Fetch orders
+        # Fetch orders. Named before the call: one page can take minutes when
+        # the central server is slow, and the UI has nothing else to show.
+        yield SyncStatus('info', "Fetching new orders from the POS stream...")
         new_orders, total_available = fetch_stream_raw(
             conn,
             endpoint="orders",

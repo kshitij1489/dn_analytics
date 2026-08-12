@@ -1146,8 +1146,28 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         for conn in connections:
             first = self._pull_fixture(conn)
             second = self._pull_fixture(conn)
-            self.assertEqual(first, {"status": "applied", "pages": 2, "rows_applied": 2})
-            self.assertEqual(second, first)
+            self.assertEqual(
+                first,
+                {
+                    "status": "applied",
+                    "pages": 2,
+                    "rows_applied": 2,
+                    "rows_written": 2,
+                    "rows_pruned": 0,
+                },
+            )
+            # A caught-up install still reads the whole feed — no page proves
+            # the pages below it are unchanged — but it writes nothing.
+            self.assertEqual(
+                second,
+                {
+                    "status": "applied",
+                    "pages": 2,
+                    "rows_applied": 2,
+                    "rows_written": 0,
+                    "rows_pruned": 0,
+                },
+            )
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0],
                 2,
@@ -1174,6 +1194,261 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         self.assertEqual(
             [row[0] for row in digests[0]],
             ["global:1", "legacy:9zz9zz9zz9:legacy-super-2"],
+        )
+
+    def _pull_restated_row(self, conn, index: int) -> Dict[str, Any]:
+        """Re-serve the two-page feed with one row restated by the server.
+
+        Both edits here are live projections the server recomputes per request:
+        a global row's `is_undoable` follows the undo preview, and a legacy
+        row's snapshot global id resolves once the catalog gains one. Either
+        can move on any page without touching the pages above it.
+        """
+        changed = json.loads(json.dumps(self.payload))
+        row = changed["rows"][index]
+        if row["mutation_id"]:
+            row["is_undoable"] = not row["is_undoable"]
+        else:
+            row["source"]["global_item_id"] = "1795ed65318544a9907caab6202b9d42"
+        first_page = {
+            **changed,
+            "rows": changed["rows"][:1],
+            "next_cursor": "opaque-history-page-2",
+            "has_more": True,
+        }
+        second_page = {
+            **changed,
+            "rows": changed["rows"][1:],
+            "next_cursor": None,
+            "has_more": False,
+        }
+
+        def fetch(_conn, _endpoint, *, cursor, **_kwargs):
+            page = first_page if cursor is None else second_page
+            return {"error": None, **page}
+
+        with patch(
+            "src.core.global_menu_history.require_global_menu_capability",
+            return_value=capability(group_id="group-1"),
+        ), patch(
+            "src.core.global_menu_history.get_global_menu_history_endpoint",
+            return_value="https://cloud/global-menu/history",
+        ), patch(
+            "src.core.global_menu_history._fetch_page", side_effect=fetch
+        ):
+            result = pull_global_menu_history(conn, auth="sync-key")
+        return {"result": result, "row": changed["rows"][index]}
+
+    def test_a_changed_row_is_applied_from_any_page_of_the_feed(self) -> None:
+        for index, position in ((0, "head page"), (1, "page below the head")):
+            with self.subTest(position=position):
+                conn = self._connection()
+                self.addCleanup(conn.close)
+                self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+
+                pulled = self._pull_restated_row(conn, index)
+
+                # The drain reaches the changed row even when every page above
+                # it was already cached unchanged.
+                self.assertEqual(
+                    pulled["result"],
+                    {
+                        "status": "applied",
+                        "pages": 2,
+                        "rows_applied": 2,
+                        "rows_written": 1,
+                        "rows_pruned": 0,
+                    },
+                )
+                cached = conn.execute(
+                    "SELECT is_undoable, source FROM global_menu_history WHERE history_id=?",
+                    (pulled["row"]["history_id"],),
+                ).fetchone()
+                self.assertEqual(cached[0], int(pulled["row"]["is_undoable"]))
+                self.assertEqual(
+                    json.loads(cached[1])["global_item_id"],
+                    pulled["row"]["source"]["global_item_id"],
+                )
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT history_cursor FROM global_menu_state WHERE singleton_id=1"
+                    ).fetchone()[0]
+                )
+
+    def test_a_complete_drain_retires_rows_the_projection_stopped_serving(self) -> None:
+        conn = self._connection()
+        self.addCleanup(conn.close)
+        self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+        retired = self.payload["rows"][1]["history_id"]
+
+        # A member leaving the group takes its legacy rows out of the page.
+        remaining = json.loads(json.dumps(self.payload))
+        remaining["rows"] = remaining["rows"][:1]
+        remaining["next_cursor"] = None
+        remaining["has_more"] = False
+
+        with patch(
+            "src.core.global_menu_history.require_global_menu_capability",
+            return_value=capability(group_id="group-1"),
+        ), patch(
+            "src.core.global_menu_history.get_global_menu_history_endpoint",
+            return_value="https://cloud/global-menu/history",
+        ), patch(
+            "src.core.global_menu_history._fetch_page",
+            return_value={"error": None, **remaining},
+        ):
+            result = pull_global_menu_history(conn, auth="sync-key")
+
+        self.assertEqual(
+            result,
+            {
+                "status": "applied",
+                "pages": 1,
+                "rows_applied": 1,
+                "rows_written": 0,
+                "rows_pruned": 1,
+            },
+        )
+        self.assertEqual(
+            [
+                row[0]
+                for row in conn.execute(
+                    "SELECT history_id FROM global_menu_history"
+                ).fetchall()
+            ],
+            [self.payload["rows"][0]["history_id"]],
+        )
+        # Resolution History reads the cache, so the retired row must be gone
+        # from what the user sees, not just from the pull's bookkeeping.
+        active = capability(group_id="group-1")
+        with patch(
+            "src.core.global_menu_schema.resolve_global_menu_capability",
+            return_value=active,
+        ):
+            history = get_merge_history(conn=conn)
+        self.assertEqual(history["total"], 1)
+        self.assertNotIn(
+            retired, [entry["history_id"] for entry in history["entries"]]
+        )
+
+    def test_an_empty_page_never_blanks_the_cached_audit_view(self) -> None:
+        conn = self._connection()
+        self.addCleanup(conn.close)
+        self._pull_fixture(conn)
+        empty = {**self.payload, "rows": [], "next_cursor": None, "has_more": False}
+
+        with patch(
+            "src.core.global_menu_history.require_global_menu_capability",
+            return_value=capability(group_id="group-1"),
+        ), patch(
+            "src.core.global_menu_history.get_global_menu_history_endpoint",
+            return_value="https://cloud/global-menu/history",
+        ), patch(
+            "src.core.global_menu_history._fetch_page",
+            return_value={"error": None, **empty},
+        ):
+            result = pull_global_menu_history(conn, auth="sync-key")
+
+        self.assertEqual(result["rows_pruned"], 0)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
+        )
+
+    def test_a_drain_cut_short_mid_feed_prunes_nothing(self) -> None:
+        conn = self._connection()
+        self.addCleanup(conn.close)
+        self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+
+        # Page 1 is served without the row page 2 carries, then the tail fails.
+        # The unread tail and a retired row look identical from here, so the
+        # cache must be left whole.
+        first_page = {
+            **self.payload,
+            "rows": self.payload["rows"][:1],
+            "next_cursor": "opaque-history-page-2",
+            "has_more": True,
+        }
+
+        def fetch(_conn, _endpoint, *, cursor, **_kwargs):
+            if cursor is None:
+                return {"error": None, **first_page}
+            return {"error": "history tail unreachable"}
+
+        with patch(
+            "src.core.global_menu_history.require_global_menu_capability",
+            return_value=capability(group_id="group-1"),
+        ), patch(
+            "src.core.global_menu_history.get_global_menu_history_endpoint",
+            return_value="https://cloud/global-menu/history",
+        ), patch(
+            "src.core.global_menu_history._fetch_page", side_effect=fetch
+        ):
+            result = pull_global_menu_history(conn, auth="sync-key")
+
+        self.assertEqual(result["status"], "error")
+        self.assertNotIn("rows_pruned", result)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
+        )
+
+    def test_a_drain_cut_short_mid_feed_hydrates_the_tail_on_the_next_pull(self) -> None:
+        conn = self._connection()
+        self.addCleanup(conn.close)
+        first_page = {
+            **self.payload,
+            "rows": self.payload["rows"][:1],
+            "next_cursor": "opaque-history-page-2",
+            "has_more": True,
+        }
+        second_page = {
+            **self.payload,
+            "rows": self.payload["rows"][1:],
+            "next_cursor": None,
+            "has_more": False,
+        }
+
+        def fetch_with_broken_tail(_conn, _endpoint, *, cursor, **_kwargs):
+            if cursor is None:
+                return {"error": None, **first_page}
+            return {"error": "history tail unreachable"}
+
+        def fetch(_conn, _endpoint, *, cursor, **_kwargs):
+            page = first_page if cursor is None else second_page
+            return {"error": None, **page}
+
+        def pull(side_effect):
+            with patch(
+                "src.core.global_menu_history.require_global_menu_capability",
+                return_value=capability(group_id="group-1"),
+            ), patch(
+                "src.core.global_menu_history.get_global_menu_history_endpoint",
+                return_value="https://cloud/global-menu/history",
+            ), patch(
+                "src.core.global_menu_history._fetch_page", side_effect=side_effect
+            ):
+                return pull_global_menu_history(conn, auth="sync-key")
+
+        interrupted = pull(fetch_with_broken_tail)
+        self.assertEqual(interrupted["status"], "error")
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 1
+        )
+
+        # The next drain must still reach the tail the failure left behind: an
+        # unchanged head page is not evidence that the rest ever arrived.
+        recovered = pull(fetch)
+        self.assertEqual(
+            recovered,
+            {
+                "status": "applied",
+                "pages": 2,
+                "rows_applied": 2,
+                "rows_written": 1,
+                "rows_pruned": 0,
+            },
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
         )
 
     def test_malformed_page_retains_previous_cursor_and_data(self) -> None:

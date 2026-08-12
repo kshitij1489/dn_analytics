@@ -1,6 +1,6 @@
 import sqlite3
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from src.api.routers import operations
 from src.core.services.sync_service import SyncStatus
@@ -260,7 +260,57 @@ class SyncOperationsTests(unittest.TestCase):
         self.assertEqual([status.type for status in statuses], ["info", "info", "done"])
         self.assertEqual(statuses[-1].message, "No new orders to sync · Cloud pull finished")
         self.assertEqual(statuses[-1].stats["cloud_pull"], cloud_summary)
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False, already_locked=False)
+        cloud_pull.assert_called_once_with(
+            conn, on_phase=ANY, skip_menu_bootstrap=False, already_locked=False
+        )
+
+    def test_cloud_pull_steps_are_reported_while_the_pull_is_still_running(self) -> None:
+        conn = Mock()
+        sync_statuses = iter(
+            [SyncStatus("done", "No new orders to sync", progress=1.0, stats={"fetched": 0})]
+        )
+
+        def slow_pull(_conn, *, on_phase, **_kwargs):
+            on_phase("Pulling menu history...")
+            on_phase("Pulling customer merges...")
+            return {"attempted": True, "customer_merges": None}
+
+        with patch("src.api.routers.operations.sync_database", return_value=sync_statuses), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            side_effect=slow_pull,
+        ), patch(
+            "src.api.routers.operations._menu_items_empty",
+            return_value=False,
+        ):
+            statuses = list(operations.iter_sync_statuses(conn))
+
+        self.assertEqual(
+            [status.message for status in statuses[:-1]],
+            [
+                "Order sync complete. Pulling cloud data...",
+                "Pulling menu history...",
+                "Pulling customer merges...",
+            ],
+        )
+        self.assertEqual(statuses[-1].type, "done")
+
+    def test_a_failing_cloud_pull_still_raises_through_the_phase_stream(self) -> None:
+        conn = Mock()
+        sync_statuses = iter(
+            [SyncStatus("done", "No new orders to sync", progress=1.0, stats={"fetched": 0})]
+        )
+
+        with patch("src.api.routers.operations.sync_database", return_value=sync_statuses), patch(
+            "src.api.routers.operations.run_best_effort_cloud_pulls",
+            side_effect=RuntimeError("pull exploded"),
+        ), patch(
+            "src.api.routers.operations._menu_items_empty",
+            return_value=False,
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                list(operations.iter_sync_statuses(conn))
+
+        self.assertEqual(str(caught.exception), "pull exploded")
 
     def test_iter_sync_statuses_does_not_run_cloud_pull_after_error(self) -> None:
         conn = Mock()
@@ -312,7 +362,9 @@ class SyncOperationsTests(unittest.TestCase):
 
         bootstrap_pull.assert_called_once()
         order_sync.assert_called_once_with(conn)
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=True, already_locked=False)
+        cloud_pull.assert_called_once_with(
+            conn, on_phase=ANY, skip_menu_bootstrap=True, already_locked=False
+        )
         self.assertEqual(statuses[0].message, "Menu catalog empty — pulling from cloud before order sync...")
         self.assertIn("3 items", statuses[1].message)
         self.assertEqual(statuses[-1].type, "done")
@@ -340,7 +392,9 @@ class SyncOperationsTests(unittest.TestCase):
             statuses = list(operations.iter_sync_statuses(conn))
 
         bootstrap_pull.assert_not_called()
-        cloud_pull.assert_called_once_with(conn, skip_menu_bootstrap=False, already_locked=False)
+        cloud_pull.assert_called_once_with(
+            conn, on_phase=ANY, skip_menu_bootstrap=False, already_locked=False
+        )
         self.assertEqual(statuses[0].message, "Order sync complete. Pulling cloud data...")
         conn.close()
 
@@ -529,6 +583,134 @@ class SyncOperationsTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class SyncConcurrencyGuardTests(unittest.TestCase):
+    """One Sync DB per restaurant: a second press must not race the first."""
+
+    def setUp(self) -> None:
+        operations._ACTIVE_SYNC_SLOTS.clear()
+        self.addCleanup(operations._ACTIVE_SYNC_SLOTS.clear)
+
+    @staticmethod
+    def _profile(restaurant_id: str = "rest-1"):
+        from src.core.profiles import RestaurantProfile
+
+        return RestaurantProfile(
+            restaurant_id=restaurant_id,
+            display_name="Dach & Nona",
+            timezone="Asia/Kolkata",
+            database_path=f"/tmp/{restaurant_id}.db",
+            authorization_state="authorized",
+            is_bound=True,
+            menu_group_id="group-1",
+            menu_capabilities=("global_menu_v1",),
+        )
+
+    def _run(self, profile):
+        from src.core.analytics_scope import restaurant_scope
+
+        return operations.run_sync(
+            operations.SyncRunRequest(restaurant_id=profile.restaurant_id),
+            scope=restaurant_scope(profile),
+        )
+
+    def test_a_second_run_for_a_busy_restaurant_is_refused(self) -> None:
+        from fastapi import HTTPException
+
+        profile = self._profile()
+        captured = []
+
+        with patch.object(
+            operations.JobManager,
+            "start_job",
+            side_effect=lambda factory: captured.append(factory) or "job-1",
+        ), patch.object(
+            operations.JobManager,
+            "get_job",
+            return_value={"status": "running"},
+        ), patch.object(
+            operations, "get_profile_connection", return_value=(Mock(), "ok")
+        ):
+            first = self._run(profile)
+            with self.assertRaises(HTTPException) as caught:
+                self._run(profile)
+
+        self.assertEqual(first["job_id"], "job-1")
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(caught.exception.detail["code"], "sync_already_running")
+        self.assertEqual(caught.exception.detail["job_id"], "job-1")
+
+    def test_the_claim_is_released_once_the_job_generator_finishes(self) -> None:
+        profile = self._profile()
+        captured = []
+
+        with patch.object(
+            operations.JobManager,
+            "start_job",
+            side_effect=lambda factory: captured.append(factory) or "job-1",
+        ), patch.object(
+            operations.JobManager,
+            "get_job",
+            return_value={"status": "running"},
+        ), patch.object(
+            operations, "get_profile_connection", return_value=(Mock(), "ok")
+        ), patch.object(
+            operations,
+            "iter_sync_statuses",
+            side_effect=lambda _conn: iter([SyncStatus("done", "complete")]),
+        ):
+            self._run(profile)
+            list(captured[0]())
+            # The restaurant is free again, so the next press is accepted.
+            second = self._run(profile)
+
+        self.assertEqual(second["job_id"], "job-1")
+        self.assertEqual(len(captured), 2)
+
+    def test_all_stores_and_a_member_restaurant_cannot_run_at_once(self) -> None:
+        from fastapi import HTTPException
+
+        from src.core.analytics_scope import all_stores_scope
+        from src.core.profiles import ALL_STORES_TOKEN
+
+        members = (self._profile("rest-A"), self._profile("rest-B"))
+
+        with patch.object(
+            operations.JobManager,
+            "start_job",
+            side_effect=lambda factory: "job-all",
+        ), patch.object(
+            operations.JobManager,
+            "get_job",
+            return_value={"status": "running"},
+        ), patch.object(
+            operations, "get_profile_connection", return_value=(Mock(), "ok")
+        ):
+            operations.run_sync(
+                operations.SyncRunRequest(restaurant_id=ALL_STORES_TOKEN),
+                scope=all_stores_scope(members),
+            )
+            with self.assertRaises(HTTPException) as caught:
+                self._run(members[1])
+
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(caught.exception.detail["code"], "sync_already_running")
+
+    def test_a_slot_left_by_a_job_the_manager_never_registered_does_not_block(self) -> None:
+        profile = self._profile()
+
+        with patch.object(
+            operations.JobManager, "start_job", side_effect=lambda factory: "job-ghost"
+        ), patch.object(
+            operations.JobManager, "get_job", return_value=None
+        ), patch.object(
+            operations, "get_profile_connection", return_value=(Mock(), "ok")
+        ):
+            self._run(profile)
+            second = self._run(profile)
+
+        self.assertEqual(second["job_id"], "job-ghost")
 
 
 if __name__ == "__main__":

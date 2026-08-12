@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from src.api.routers import operations
 from src.core.services.sync_service import SyncStatus
@@ -470,7 +470,7 @@ class Phase7ValidationTests(unittest.TestCase):
         bootstrap_pull.assert_called_once()
         order_sync.assert_called_once_with(conn)
         cloud_pull.assert_called_once_with(
-            conn, skip_menu_bootstrap=True, already_locked=False
+            conn, on_phase=ANY, skip_menu_bootstrap=True, already_locked=False
         )
         self.assertEqual(statuses[-1].type, "done")
         conn.close()

@@ -311,13 +311,19 @@ If projection or parity is wrong:
 
 ## 10. Documentation cleanup
 
+Already done ahead of the rollout, because they describe shipped code rather than rollout outcomes:
+
+- `docs/FILE_INVENTORY.md` carries the history module, the diagnostics query module and the profile reset path;
+- the `docs/INDEX.md` status snapshot records analytics Phases A–F as complete with the cutover still open.
+
+Both entries must be re-checked against the rollout evidence during the cleanup below; neither is a substitute for it.
+
 After both rebuilt profiles pass:
 
 - update `docs/MENU_SYNC_ARCHITECTURE.md` with the final ownership, pull order and runbook;
 - update `docs/SYSTEM_CONTEXT.md` with the shared-POS price exception and clean-rebuild cutover decision;
-- update `docs/FILE_INVENTORY.md` for the history module;
-- update the `docs/INDEX.md` status snapshot;
-- update `contracts/README.md` only if the twin-sync checklist changed.
+- re-verify `docs/FILE_INVENTORY.md` and the `docs/INDEX.md` status snapshot against the recorded rollout evidence;
+- update `contracts/README.md` only if the twin-sync checklist changed — its revision-1.6 client/server row is still the pre-1.7 text.
 
 Then remove this temporary plan and the central temporary plan in the same coordinated cleanup change.
 

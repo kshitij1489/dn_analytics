@@ -1,0 +1,647 @@
+{
+  "contract_revision": "1.8",
+  "description": "Additive group-owned POS alias wire fixtures. Revision-1.7 shared-locator fixtures remain unchanged.",
+  "fixtures": [
+    {
+      "name": "allowed_restaurants_group_pos_alias_capability",
+      "description": "After one successful initial alias reconciliation, every shadow member advertises the alias policy while shared-POS remains absent.",
+      "endpoint": "GET /analytics/restaurants/",
+      "request_headers": {
+        "X-API-Key": "<ANALYTICS_API_KEYS value>"
+      },
+      "http_status": 200,
+      "payload": {
+        "restaurants": [
+          {
+            "restaurant_id": "1c8w7fp500",
+            "display_name": "Dach & Nona",
+            "timezone": "Asia/Kolkata",
+            "menu_group_id": "group-1",
+            "menu_capabilities": [
+              "global_menu_group_pos_aliases_v1",
+              "global_menu_resolution_v1",
+              "global_menu_v1"
+            ]
+          },
+          {
+            "restaurant_id": "kmov2tngwh",
+            "display_name": "Super Mart",
+            "timezone": "Asia/Kolkata",
+            "menu_group_id": "group-1",
+            "menu_capabilities": [
+              "global_menu_group_pos_aliases_v1",
+              "global_menu_resolution_v1",
+              "global_menu_v1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "menu_bootstrap_group_pos_alias_observation_request",
+      "description": "A private observed-locator snapshot preserves the provider itemcode and does not claim to be a complete POS catalog.",
+      "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh"
+      },
+      "request": {
+        "id_maps": {},
+        "cluster_state": {},
+        "snapshot_role": "seed_only",
+        "group_pos_alias_observation": [
+          {
+            "locator_type": "pos_item",
+            "locator_value": "1312789339",
+            "itemcode": "Tiramisu",
+            "menu_item_id": "item_classic_tiramisu",
+            "variant_id": null,
+            "item_name": "Classic Tiramisu",
+            "item_type": "Dessert",
+            "variant_name": null,
+            "variant_unit": null,
+            "variant_value": null,
+            "price": "290.00"
+          }
+        ],
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-super-1",
+          "install_id": "install-super-1",
+          "device_label": "Super Mart Mac"
+        }
+      }
+    },
+    {
+      "name": "menu_bootstrap_group_pos_alias_observation_response",
+      "description": "The acknowledgement distinguishes alias evidence replacement from the frozen revision-1.7 shared catalog field.",
+      "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
+      "http_status": 200,
+      "payload": {
+        "received": 1,
+        "cluster_state_updated": false,
+        "shared_pos_catalog_updated": false,
+        "group_pos_alias_observation_updated": true
+      }
+    },
+    {
+      "name": "global_menu_alias_resolution_queue_page",
+      "description": "The editor queue presents private source evidence and a deterministic canonical suggestion without treating the source as another canonical menu row.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-resolutions?status=pending&limit=100",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "observation_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rows": [
+          {
+            "locator_type": "pos_item",
+            "locator_value": "1312789339",
+            "resolution_state": "pending",
+            "observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "evidence": [
+              {
+                "restaurant_id": "kmov2tngwh",
+                "restaurant_name": "Super Mart",
+                "itemcode": "Tiramisu",
+                "menu_item_id": "item_classic_tiramisu",
+                "variant_id": null,
+                "item_name": "Classic Tiramisu",
+                "item_type": "Dessert",
+                "variant_name": null,
+                "variant_unit": null,
+                "variant_value": null,
+                "price": "290.00"
+              }
+            ],
+            "candidate": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "global_variant_id": null,
+              "canonical_name": "Classic Tiramisu",
+              "canonical_type": "Dessert",
+              "variant_name": null,
+              "variant_unit": null,
+              "variant_value": null,
+              "canonical_price": "290.00",
+              "reason": "unique_itemcode"
+            },
+            "decision": null,
+            "conflicts": []
+          }
+        ],
+        "next_cursor": "eyJ2IjoxLCJsb2NhdG9yX3R5cGUiOiJwb3NfaXRlbSIsImxvY2F0b3JfdmFsdWUiOiIxMzEyNzg5MzY4In0",
+        "has_more": true
+      }
+    },
+    {
+      "name": "global_menu_alias_decision_preview_approved",
+      "description": "Preview revalidates the exact evidence, group revision and redirect-resolved target while writing nothing.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "expected_menu_group_revision": 5,
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "expected_observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "requested_status": "approved",
+        "global_item_id": "1795ed65318544a9907caab6202b9d42",
+        "global_variant_id": null,
+        "canonical_price": "290.00",
+        "decision_method": "unique_itemcode",
+        "reason": "Provider itemcode and canonical identity match Dach authority."
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "preview",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "expected_menu_group_revision": 5,
+        "revision_current": true,
+        "observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "expected_observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "observation_current": true,
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "requested_status": "approved",
+        "target": {
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": null,
+          "canonical_name": "Classic Tiramisu",
+          "canonical_type": "Dessert",
+          "variant_name": null,
+          "variant_unit": null,
+          "variant_value": null,
+          "canonical_price": "290.00"
+        },
+        "decision_method": "unique_itemcode",
+        "reason": "Provider itemcode and canonical identity match Dach authority.",
+        "conflicts": [],
+        "commit_allowed": true,
+        "preview_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    },
+    {
+      "name": "global_menu_alias_decision_commit_approved",
+      "description": "Commit stores one audited approved decision but does not write a rule, assignment, group revision or semantic event.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "expected_menu_group_revision": 5,
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "expected_observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "requested_status": "approved",
+        "global_item_id": "1795ed65318544a9907caab6202b9d42",
+        "global_variant_id": null,
+        "canonical_price": "290.00",
+        "decision_method": "unique_itemcode",
+        "reason": "Provider itemcode and canonical identity match Dach authority.",
+        "mutation_id": "8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10",
+        "preview_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "uploaded_by": {
+          "employee_id": "0001",
+          "name": "Owner"
+        },
+        "uploaded_from": {
+          "device_id": "device-super-1",
+          "install_id": "install-super-1",
+          "device_label": "Super Mart Mac"
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "applied",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "mutation_id": "8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10",
+        "decision_id": "d1f5ee3b-6d80-4aca-8a63-77cecae2c886",
+        "decision_status": "approved",
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "target": {
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": null,
+          "canonical_price": "290.00"
+        },
+        "decision_method": "unique_itemcode",
+        "reviewer": {
+          "employee": {
+            "employee_id": "0001",
+            "name": "Owner"
+          },
+          "device": {
+            "device_id": "device-super-1",
+            "install_id": "install-super-1",
+            "device_label": "Super Mart Mac"
+          },
+          "reason": "Provider itemcode and canonical identity match Dach authority."
+        },
+        "accepted_at": "2026-08-12T12:00:00Z",
+        "idempotent_replay": false
+      }
+    },
+    {
+      "name": "global_menu_alias_decision_commit_idempotent_replay",
+      "description": "A byte-equivalent semantic retry returns the stored decision result and creates nothing else.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_fixture": "global_menu_alias_decision_commit_approved",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "applied",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "mutation_id": "8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10",
+        "decision_id": "d1f5ee3b-6d80-4aca-8a63-77cecae2c886",
+        "decision_status": "approved",
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "target": {
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": null,
+          "canonical_price": "290.00"
+        },
+        "decision_method": "unique_itemcode",
+        "reviewer": {
+          "employee": {
+            "employee_id": "0001",
+            "name": "Owner"
+          },
+          "device": {
+            "device_id": "device-super-1",
+            "install_id": "install-super-1",
+            "device_label": "Super Mart Mac"
+          },
+          "reason": "Provider itemcode and canonical identity match Dach authority."
+        },
+        "accepted_at": "2026-08-12T12:00:00Z",
+        "idempotent_replay": true
+      }
+    },
+    {
+      "name": "global_menu_alias_decision_status_applied",
+      "description": "A timeout lookup returns the stored commit result using the mutation id, including reviewer audit metadata.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-resolutions/8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "http_status": 200,
+      "payload_fixture": "global_menu_alias_decision_commit_idempotent_replay"
+    },
+    {
+      "name": "error_global_menu_alias_observation_conflict",
+      "description": "A commit against changed evidence writes nothing and tells the client to refresh and re-preview.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_fixture": "global_menu_alias_decision_commit_approved",
+      "http_status": 409,
+      "payload": {
+        "error": "Alias evidence changed after preview.",
+        "code": "global_menu_alias_observation_conflict",
+        "status": "conflict",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "expected_observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "current_observation_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "recommended_action": "refresh_alias_resolution"
+      }
+    },
+    {
+      "name": "global_menu_alias_decision_preview_stale_observation",
+      "description": "Preview reports changed evidence as a non-writing HTTP 200 result so the operator can refresh before confirmation.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/preview",
+      "request_fixture": "global_menu_alias_decision_preview_approved",
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "preview",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "expected_menu_group_revision": 5,
+        "revision_current": true,
+        "observation_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "expected_observation_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "observation_current": false,
+        "locator_type": "pos_item",
+        "locator_value": "1312789339",
+        "requested_status": "approved",
+        "target": {
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": null,
+          "canonical_name": "Classic Tiramisu",
+          "canonical_type": "Dessert",
+          "variant_name": null,
+          "variant_unit": null,
+          "variant_value": null,
+          "canonical_price": "290.00"
+        },
+        "decision_method": "unique_itemcode",
+        "reason": "Provider itemcode and canonical identity match Dach authority.",
+        "conflicts": [
+          {
+            "code": "stale_alias_observation",
+            "message": "Alias evidence changed after this editor loaded it."
+          }
+        ],
+        "commit_allowed": false,
+        "preview_digest": "1212121212121212121212121212121212121212121212121212121212121212"
+      }
+    },
+    {
+      "name": "error_global_menu_alias_revision_conflict",
+      "description": "A stale group revision refuses commit without changing the decision.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_fixture": "global_menu_alias_decision_commit_approved",
+      "http_status": 409,
+      "payload": {
+        "error": "Global menu revision changed after preview.",
+        "code": "global_menu_alias_revision_conflict",
+        "status": "conflict",
+        "menu_group_id": "group-1",
+        "expected_menu_group_revision": 5,
+        "current_menu_group_revision": 6,
+        "recommended_action": "refresh_alias_resolution"
+      }
+    },
+    {
+      "name": "error_global_menu_alias_preview_conflict",
+      "description": "A preview digest that no longer matches the re-derived semantic preview refuses commit.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_fixture": "global_menu_alias_decision_commit_approved",
+      "http_status": 409,
+      "payload": {
+        "error": "Alias decision preview changed before commit.",
+        "code": "global_menu_alias_preview_conflict",
+        "status": "conflict",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "expected_preview_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "current_preview_digest": "1212121212121212121212121212121212121212121212121212121212121212",
+        "recommended_action": "refresh_alias_resolution"
+      }
+    },
+    {
+      "name": "error_global_menu_alias_mutation_conflict",
+      "description": "Reusing a decision mutation id with different semantic content is a non-destructive conflict.",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/alias-resolutions/commit",
+      "request_fixture": "global_menu_alias_decision_commit_approved",
+      "http_status": 409,
+      "payload": {
+        "error": "Alias decision mutation id was already used for different content.",
+        "code": "global_menu_alias_mutation_conflict",
+        "status": "conflict",
+        "menu_group_id": "group-1",
+        "mutation_id": "8c2a5d64-0f31-4a77-bb02-5e9f7c3a1d10",
+        "recommended_action": "use_new_mutation_id"
+      }
+    },
+    {
+      "name": "error_global_menu_alias_mutation_not_found",
+      "description": "Timeout reconciliation distinguishes an unknown well-formed mutation id from a failed commit.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-resolutions/3f0d1b1e-6a4f-4f4d-9f5a-2b8c1d0e7a91",
+      "http_status": 404,
+      "payload": {
+        "error": "Alias decision mutation was not found.",
+        "code": "global_menu_alias_mutation_not_found",
+        "mutation_id": "3f0d1b1e-6a4f-4f4d-9f5a-2b8c1d0e7a91"
+      }
+    },
+    {
+      "name": "error_global_menu_alias_invalid_cursor",
+      "description": "The alias queue refuses malformed or unsupported cursors rather than restarting from the first page.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-resolutions?after=not-a-cursor",
+      "http_status": 400,
+      "payload": {
+        "error": "Invalid cursor.",
+        "code": "invalid_page_parameter"
+      }
+    },
+    {
+      "name": "global_menu_alias_reconciliation_plan",
+      "description": "The read-only deterministic plan exposes every digest, decision and immutable-fact gate consumed by the one-shot command.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-reconciliation/plan",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "authority_restaurant_id": "1c8w7fp500",
+        "menu_group_revision": 5,
+        "observation_digests": {
+          "1c8w7fp500": "3333333333333333333333333333333333333333333333333333333333333333",
+          "kmov2tngwh": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "catalog_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "redirect_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "proposed_group_pos_alias_rules": 495,
+        "proposed_unique_itemcode_rules": 27,
+        "affected_assignments": {
+          "1c8w7fp500": 434,
+          "kmov2tngwh": 61
+        },
+        "superseded_restaurant_rules": 434,
+        "decisions_used": 495,
+        "unresolved_count": 0,
+        "stale_count": 0,
+        "blocking_count": 0,
+        "conflicts": [],
+        "projected_verified_coverage": {
+          "1c8w7fp500": {
+            "linked": 756,
+            "total": 756,
+            "complete": true
+          },
+          "kmov2tngwh": {
+            "linked": 61,
+            "total": 61,
+            "complete": true
+          }
+        },
+        "immutable_facts": {
+          "orders_count": 12500,
+          "order_lines_count": 43820,
+          "facts_count": 43820,
+          "orders_checksum": "5555555555555555555555555555555555555555555555555555555555555555",
+          "order_lines_checksum": "6666666666666666666666666666666666666666666666666666666666666666",
+          "facts_checksum": "7777777777777777777777777777777777777777777777777777777777777777",
+          "legacy_history_checksum": "8888888888888888888888888888888888888888888888888888888888888888"
+        },
+        "execution_ready": true,
+        "plan_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "name": "global_menu_alias_reconciliation_status",
+      "description": "Status distinguishes policy configuration, initial activation, three coverage gates and quarantine without using 0/0 as success.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-reconciliation/status",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 6,
+        "status": "shadow",
+        "policy": {
+          "alias_configured": true,
+          "shared_pos_configured": false,
+          "capability_advertised": true
+        },
+        "initial_reconciliation": {
+          "status": "applied",
+          "run_id": "3f0d1b1e-6a4f-4f4d-9f5a-2b8c1d0e7a91",
+          "plan_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "applied_menu_group_revision": 6,
+          "event_seq": 12
+        },
+        "canonical_catalog_complete": true,
+        "alias_decision_coverage_complete": true,
+        "verified_coverage_complete": true,
+        "alias_counts": {
+          "observed": 495,
+          "approved": 495,
+          "pending": 0,
+          "stale": 0,
+          "applied": 495,
+          "quarantined": 0
+        },
+        "restaurants": [
+          {
+            "restaurant_id": "1c8w7fp500",
+            "observed_aliases": 434,
+            "approved_aliases": 434,
+            "pending_aliases": 0,
+            "stale_aliases": 0,
+            "quarantined_aliases": 0,
+            "verified_assignments": 756,
+            "total_verified_assignments": 756,
+            "verified_coverage_complete": true
+          },
+          {
+            "restaurant_id": "kmov2tngwh",
+            "observed_aliases": 61,
+            "approved_aliases": 61,
+            "pending_aliases": 0,
+            "stale_aliases": 0,
+            "quarantined_aliases": 0,
+            "verified_assignments": 61,
+            "total_verified_assignments": 61,
+            "verified_coverage_complete": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "global_menu_alias_unknown_locator_quarantined",
+      "description": "A later unseen locator is visible and fail-closed after activation; it does not mint restaurant-owned canonical identity.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/alias-resolutions?status=quarantined&limit=100",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 6,
+        "observation_digest": "9999999999999999999999999999999999999999999999999999999999999999",
+        "rows": [
+          {
+            "locator_type": "pos_item",
+            "locator_value": "1399999999",
+            "resolution_state": "quarantined",
+            "observation_digest": "abababababababababababababababababababababababababababababababab",
+            "evidence": [
+              {
+                "restaurant_id": "kmov2tngwh",
+                "restaurant_name": "Super Mart",
+                "itemcode": "NewDessert",
+                "menu_item_id": "item_new_dessert",
+                "variant_id": null,
+                "item_name": "New Dessert",
+                "item_type": "Dessert",
+                "variant_name": null,
+                "variant_unit": null,
+                "variant_value": null,
+                "price": "250.00"
+              }
+            ],
+            "candidate": null,
+            "decision": null,
+            "conflicts": [
+              {
+                "code": "unknown_group_pos_alias",
+                "message": "The locator was first observed after initial alias activation and has no reviewed group alias."
+              }
+            ]
+          }
+        ],
+        "next_cursor": null,
+        "has_more": false
+      }
+    },
+    {
+      "name": "global_menu_shadow_canonical_catalog_for_alias_resolution",
+      "description": "The canonical target catalog remains readable in shadow under global_menu_resolution_v1 before alias capability activation.",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=items&limit=500",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "kmov2tngwh"
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "menu_group_id": "group-1",
+        "menu_group_revision": 5,
+        "snapshot_watermark": {
+          "event_seq": null,
+          "menu_group_revision": 5
+        },
+        "section": "items",
+        "rows": [
+          {
+            "global_item_id": "1795ed65318544a9907caab6202b9d42",
+            "canonical_name": "Classic Tiramisu",
+            "canonical_type": "Dessert",
+            "is_verified": true,
+            "lifecycle_state": "active",
+            "updated_at": "2026-08-12T12:00:00Z"
+          }
+        ],
+        "next_cursor": null,
+        "has_more": false
+      }
+    }
+  ]
+}

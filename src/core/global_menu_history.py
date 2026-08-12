@@ -17,8 +17,26 @@ from src.core.global_menu_schema import (
 from src.core.global_menu_sync import _fetch_page
 
 
-GLOBAL_MENU_HISTORY_PAGE_LIMIT = 100
+GLOBAL_MENU_HISTORY_PAGE_LIMIT = 500
 GLOBAL_MENU_HISTORY_MAX_PAGES = 1000
+# Every column the cached row carries except the key and the local cache stamp.
+# Order matches the INSERT below so a fetched row compares as one tuple.
+_HISTORY_CONTENT_COLUMNS = (
+    "menu_group_id",
+    "source_event_id",
+    "source_kind",
+    "event_type",
+    "origin_restaurant_id",
+    "actor",
+    "attribution",
+    "occurred_at",
+    "server_ingested_at",
+    "source",
+    "target",
+    "mutation_id",
+    "is_undoable",
+    "detail",
+)
 _SOURCE_KINDS = frozenset({"legacy_restaurant_event", "global_menu_event"})
 _RESOLUTION_UNDO_EVENT_TYPES = frozenset(
     {"global_item.create", "global_variant.create", "global_locator.map"}
@@ -66,6 +84,12 @@ def _json_object(value: Any, field: str, *, nullable: bool = False):
         suffix = " or null" if nullable else ""
         raise GlobalMenuHistoryError(f"{field} must be an object{suffix}")
     return dict(value)
+
+
+def _dump_json(value: Optional[Dict[str, Any]]) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _snapshot(value: Any, field: str) -> Optional[Dict[str, Any]]:
@@ -209,21 +233,49 @@ def apply_global_menu_history_page(
     capability: GlobalMenuCapabilityStatus,
     page_cursor: Optional[str],
 ) -> Dict[str, Any]:
-    """Atomically upsert one valid page and its paging checkpoint."""
+    """Atomically upsert one valid page and its paging checkpoint.
+
+    A row whose cached copy already matches the served one byte for byte is
+    left alone, so re-reading an unchanged page writes nothing. ``rows_written``
+    reports the rows that actually changed, which is what tells the drain in
+    ``pull_global_menu_history`` that it has caught up.
+    """
     page = validate_global_menu_history_page(
         payload, capability=capability, page_cursor=page_cursor
     )
+    rows_written = 0
     conn.execute("SAVEPOINT global_menu_history_page")
     try:
         for row in page["rows"]:
+            values = (
+                page["menu_group_id"],
+                row["source_event_id"],
+                row["source_kind"],
+                row["event_type"],
+                row["origin_restaurant_id"],
+                row["actor"],
+                _dump_json(row["attribution"]),
+                row["occurred_at"],
+                row["server_ingested_at"],
+                _dump_json(row["source"]),
+                _dump_json(row["target"]),
+                row["mutation_id"],
+                int(row["is_undoable"]),
+                json.dumps(row["detail"], sort_keys=True, separators=(",", ":")),
+            )
             existing = conn.execute(
-                "SELECT menu_group_id FROM global_menu_history WHERE history_id=?",
+                f"SELECT {', '.join(_HISTORY_CONTENT_COLUMNS)} "
+                "FROM global_menu_history WHERE history_id=?",
                 (row["history_id"],),
             ).fetchone()
-            if existing is not None and str(existing[0]) != page["menu_group_id"]:
-                raise GlobalMenuHistoryError(
-                    f"History row {row['history_id']} is already owned by another menu group"
-                )
+            if existing is not None:
+                if str(existing[0]) != page["menu_group_id"]:
+                    raise GlobalMenuHistoryError(
+                        f"History row {row['history_id']} is already owned by another menu group"
+                    )
+                if tuple(existing) == values:
+                    continue
+            rows_written += 1
             conn.execute(
                 """
                 INSERT INTO global_menu_history (
@@ -249,29 +301,7 @@ def apply_global_menu_history_page(
                     detail=excluded.detail,
                     cached_at=CURRENT_TIMESTAMP
                 """,
-                (
-                    row["history_id"],
-                    page["menu_group_id"],
-                    row["source_event_id"],
-                    row["source_kind"],
-                    row["event_type"],
-                    row["origin_restaurant_id"],
-                    row["actor"],
-                    json.dumps(row["attribution"], sort_keys=True, separators=(",", ":"))
-                    if row["attribution"] is not None
-                    else None,
-                    row["occurred_at"],
-                    row["server_ingested_at"],
-                    json.dumps(row["source"], sort_keys=True, separators=(",", ":"))
-                    if row["source"] is not None
-                    else None,
-                    json.dumps(row["target"], sort_keys=True, separators=(",", ":"))
-                    if row["target"] is not None
-                    else None,
-                    row["mutation_id"],
-                    int(row["is_undoable"]),
-                    json.dumps(row["detail"], sort_keys=True, separators=(",", ":")),
-                ),
+                (row["history_id"], *values),
             )
         checkpoint = page["next_cursor"] if page["has_more"] else None
         update_global_menu_state(conn, history_cursor=checkpoint)
@@ -284,9 +314,55 @@ def apply_global_menu_history_page(
     return {
         "status": "applied",
         "rows_applied": len(page["rows"]),
+        "rows_written": rows_written,
+        "history_ids": [row["history_id"] for row in page["rows"]],
         "next_cursor": page["next_cursor"],
         "has_more": page["has_more"],
     }
+
+
+_HISTORY_SEEN_TABLE = "global_menu_history_seen"
+
+
+def _reset_history_seen(conn) -> None:
+    # A temp table rather than a parameter list: the drain has to name every
+    # served row and the feed is not bounded by SQLite's variable limit.
+    conn.execute(
+        f"CREATE TEMP TABLE IF NOT EXISTS {_HISTORY_SEEN_TABLE} "
+        "(history_id TEXT PRIMARY KEY)"
+    )
+    conn.execute(f"DELETE FROM {_HISTORY_SEEN_TABLE}")
+
+
+def _record_history_seen(conn, history_ids: List[str]) -> None:
+    if not history_ids:
+        return
+    conn.executemany(
+        f"INSERT OR IGNORE INTO {_HISTORY_SEEN_TABLE} (history_id) VALUES (?)",
+        [(history_id,) for history_id in history_ids],
+    )
+
+
+def _prune_unserved_history(conn, *, menu_group_id: str) -> int:
+    """Drop cached rows the completed drain did not see.
+
+    Only ever called after a drain that reached the end of the feed. The page
+    is projected across the group's *current* members, so a restaurant leaving
+    the group retires its legacy rows; without this they would sit in the cache
+    and keep showing in Resolution History forever. An interrupted drain must
+    never reach here — its unread tail is indistinguishable from retired rows.
+    """
+    cursor = conn.execute(
+        f"""
+        DELETE FROM global_menu_history
+        WHERE menu_group_id=?
+          AND history_id NOT IN (SELECT history_id FROM {_HISTORY_SEEN_TABLE})
+        """,
+        (menu_group_id,),
+    )
+    pruned = int(cursor.rowcount or 0)
+    conn.commit()
+    return pruned
 
 
 def pull_global_menu_history(
@@ -296,7 +372,27 @@ def pull_global_menu_history(
     page_limit: int = GLOBAL_MENU_HISTORY_PAGE_LIMIT,
     allow_profile_sync: bool = False,
 ) -> Dict[str, Any]:
-    """Drain the opaque history pages; failures are returned for warning surfaces."""
+    """Drain the whole history feed from its head; failures surface as warnings.
+
+    Two properties of the served feed decide the shape of this loop:
+
+    * It is ordered **newest-first** and `after` pages *backwards* into older
+      rows, so an end-of-feed cursor can never be resumed from — persisting one
+      pins the reader below every entry written later. Every drain therefore
+      starts at the head, and the checkpoint the applier writes is only a
+      within-drain resume point.
+    * A row's rendering is not fixed once served. `is_undoable` reflects
+      whether the undo preview *currently* permits it, and the page is
+      projected across all **current** group members, so admitting a member
+      interleaves its legacy rows deep in the feed (contract §25.10). Changes
+      therefore do not always appear at the head, and no page can be taken as
+      proof that the pages below it are unchanged.
+
+    So the drain always runs to the end of the feed. What it does not do is
+    write: :func:`apply_global_menu_history_page` skips rows whose cached copy
+    already matches, which is where the per-sync cost actually went — a
+    caught-up install re-reads the feed and writes nothing.
+    """
     if page_limit < 1 or page_limit > 500:
         return {"status": "error", "error": "History page limit must be from 1 to 500"}
     capability = require_global_menu_capability(
@@ -308,8 +404,9 @@ def pull_global_menu_history(
     if not endpoint or not auth:
         return {"status": "error", "error": "Global menu history pull is not configured"}
 
-    cursor = capability.history_cursor
-    pages = rows_applied = 0
+    cursor = None
+    pages = rows_applied = rows_written = 0
+    _reset_history_seen(conn)
     for _page_number in range(GLOBAL_MENU_HISTORY_MAX_PAGES):
         page = _fetch_page(
             conn,
@@ -331,13 +428,27 @@ def pull_global_menu_history(
             return {"status": "error", "error": str(exc), "pages": pages}
         pages += 1
         rows_applied += int(result["rows_applied"])
+        rows_written += int(result["rows_written"])
+        _record_history_seen(conn, result["history_ids"])
         cursor = result["next_cursor"]
         if result["has_more"]:
             continue
+        # Complete drain only: every cached row for this group has now either
+        # been re-served or is gone from the projection. A feed that served no
+        # rows at all is the one case left alone — a genuinely empty group and
+        # a server that answered wrongly look identical from here, and blanking
+        # the audit view is the worse of the two outcomes.
+        rows_pruned = (
+            _prune_unserved_history(conn, menu_group_id=capability.menu_group_id)
+            if rows_applied
+            else 0
+        )
         return {
             "status": "applied",
             "pages": pages,
             "rows_applied": rows_applied,
+            "rows_written": rows_written,
+            "rows_pruned": rows_pruned,
         }
     return {
         "status": "error",
