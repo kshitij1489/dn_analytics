@@ -425,7 +425,7 @@
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
-        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Restaurant-ID": "9zz9zz9zz9",
         "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
       },
       "request": {
@@ -661,7 +661,7 @@
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
-        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Restaurant-ID": "9zz9zz9zz9",
         "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
       },
       "request": {
@@ -685,7 +685,7 @@
         "mutation_type": "global_locator.map",
         "menu_group_id": "group-1",
         "menu_group_revision": 1,
-        "origin_restaurant_id": "1c8w7fp500",
+        "origin_restaurant_id": "9zz9zz9zz9",
         "actor": "ops",
         "event_seq": 1,
         "accepted_at": "2026-08-09T08:08:55.056714+00:00",

@@ -1311,19 +1311,21 @@ def update_variant_mapping(
 
 # --- Resolutions ---
 
-@router.get("/resolutions/unverified")
-def get_unverified(conn=Depends(get_db)):
-    """Get list of unresolved menu item + variant pairs."""
+
+def _include_global_identity_gaps(conn) -> bool:
     try:
         from src.core.global_menu_schema import resolve_global_menu_capability
 
-        include_global_identity_gaps = resolve_global_menu_capability(
-            conn
-        ).active
+        return resolve_global_menu_capability(conn).active
     except Exception:
-        include_global_identity_gaps = False
+        return False
+
+
+@router.get("/resolutions/unverified")
+def get_unverified(conn=Depends(get_db)):
+    """Get list of unresolved menu item + variant pairs."""
     df = menu_queries.fetch_unverified_items(
-        conn, include_global_identity_gaps=include_global_identity_gaps
+        conn, include_global_identity_gaps=_include_global_identity_gaps(conn)
     )
     items = df_to_json(df)
     for item in items:
@@ -1342,6 +1344,15 @@ def get_unverified(conn=Depends(get_db)):
             else item.get("name")
         )
     return items
+
+
+@router.get("/resolutions/counts")
+def get_resolution_counts(conn=Depends(get_db)):
+    """Return disjoint local-unverified, globally-unlinked, and mapped counts."""
+    return menu_queries.fetch_resolution_counts(
+        conn,
+        include_global_identity_gaps=_include_global_identity_gaps(conn),
+    )
 
 
 @router.post("/resolutions/resolve")

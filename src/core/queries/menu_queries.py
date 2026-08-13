@@ -356,30 +356,84 @@ def fetch_menu_types(conn):
     # sqlite3.Row access by name 'type'
     return [row['type'] for row in rows]
 
+def _synthetic_global_gap_exclusions(conn) -> list[str]:
+    """Verified catalog-only rows are not unresolved restaurant assignments."""
+    synthetic_candidates = conn.execute(
+        """
+        SELECT order_item_id, menu_item_id, variant_id
+        FROM menu_item_variants
+        WHERE is_verified = 1
+        """
+    ).fetchall()
+    key_index = AssignmentKeyIndex(conn)
+    return [
+        str(order_item_id)
+        for order_item_id, menu_item_id, variant_id in synthetic_candidates
+        if is_synthetic_mapping(
+            str(menu_item_id),
+            str(variant_id) if variant_id is not None else None,
+            str(order_item_id),
+        )
+        and not has_local_pos_backing(conn, str(order_item_id), key_index=key_index)
+    ]
+
+
+def fetch_resolution_counts(
+    conn, *, include_global_identity_gaps: bool = False
+) -> dict[str, int]:
+    """Return a disjoint partition of local mapping rows for the resolution UI."""
+    ignored_synthetic_ids = (
+        _synthetic_global_gap_exclusions(conn)
+        if include_global_identity_gaps
+        else []
+    )
+    synthetic_gap_filter = ""
+    params: list[Any] = [1 if include_global_identity_gaps else 0]
+    if ignored_synthetic_ids:
+        placeholders = ", ".join("?" for _ in ignored_synthetic_ids)
+        synthetic_gap_filter = f"AND mv.order_item_id NOT IN ({placeholders})"
+        params.extend(ignored_synthetic_ids)
+
+    row = conn.execute(
+        f"""
+        WITH classified AS (
+            SELECT CASE
+                WHEN mv.is_verified = 0 THEN 'local_unverified'
+                WHEN ? = 1
+                     AND (gil.global_menu_item_id IS NULL
+                          OR gvl.global_variant_id IS NULL)
+                     {synthetic_gap_filter}
+                    THEN 'globally_unlinked'
+                ELSE 'mapped_verified'
+            END AS resolution_state
+            FROM menu_item_variants mv
+            LEFT JOIN menu_item_global_links gil
+                ON gil.local_menu_item_id = mv.menu_item_id
+            LEFT JOIN variant_global_links gvl
+                ON gvl.local_variant_id = mv.variant_id
+        )
+        SELECT
+            COALESCE(SUM(resolution_state = 'local_unverified'), 0),
+            COALESCE(SUM(resolution_state = 'globally_unlinked'), 0),
+            COALESCE(SUM(resolution_state = 'mapped_verified'), 0)
+        FROM classified
+        """,
+        params,
+    ).fetchone()
+    return {
+        "local_unverified": int(row[0] or 0),
+        "globally_unlinked": int(row[1] or 0),
+        "mapped_verified": int(row[2] or 0),
+    }
+
+
 def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
     """Fetch unresolved menu item + variant rows for the resolutions workflow."""
-    ignored_synthetic_ids: list[str] = []
-    if include_global_identity_gaps:
-        synthetic_candidates = conn.execute(
-            """
-            SELECT order_item_id, menu_item_id, variant_id
-            FROM menu_item_variants
-            WHERE is_verified = 1
-            """
-        ).fetchall()
-        key_index = AssignmentKeyIndex(conn)
-        ignored_synthetic_ids = [
-            str(order_item_id)
-            for order_item_id, menu_item_id, variant_id in synthetic_candidates
-            if is_synthetic_mapping(
-                str(menu_item_id),
-                str(variant_id) if variant_id is not None else None,
-                str(order_item_id),
-            )
-            and not has_local_pos_backing(
-                conn, str(order_item_id), key_index=key_index
-            )
-        ]
+    ignored_synthetic_ids = (
+        _synthetic_global_gap_exclusions(conn)
+        if include_global_identity_gaps
+        else []
+    )
 
     synthetic_gap_filter = ""
     params: list[Any] = [1 if include_global_identity_gaps else 0]

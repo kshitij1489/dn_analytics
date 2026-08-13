@@ -442,6 +442,11 @@ export const endpoints = {
             api.post('/menu/variant-mapping/update', data),
 
         unverified: () => api.get('/menu/resolutions/unverified'),
+        resolutionCounts: () => api.get<{
+            local_unverified: number;
+            globally_unlinked: number;
+            mapped_verified: number;
+        }>('/menu/resolutions/counts'),
         resolve: (data: {
             source_menu_item_id: string,
             source_variant_id: string,

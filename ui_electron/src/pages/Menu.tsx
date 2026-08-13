@@ -75,6 +75,12 @@ interface ResolutionItem {
     assignment_order_item_ids?: string[];
 }
 
+interface ResolutionCounts {
+    local_unverified: number;
+    globally_unlinked: number;
+    mapped_verified: number;
+}
+
 interface SuspectMapping {
     anomaly_id: number;
     order_item_id: string;
@@ -2524,6 +2530,11 @@ function ResolutionsTab({
     const globalResolutionAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
     const globalResolutionOnly = globalResolutionAdvertised && !globalMenuAdvertised;
     const [items, setItems] = useState<ResolutionItem[]>([]);
+    const [resolutionCounts, setResolutionCounts] = useState<ResolutionCounts>({
+        local_unverified: 0,
+        globally_unlinked: 0,
+        mapped_verified: 0,
+    });
     const [lookupItems, setLookupItems] = useState<MenuLookupItem[]>([]);
     const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
     const [typeOptions, setTypeOptions] = useState<string[]>([]);
@@ -2559,6 +2570,12 @@ function ResolutionsTab({
         const rows = res.data as ResolutionItem[];
         setItems(rows);
         return rows;
+    };
+
+    const loadResolutionCounts = async () => {
+        const res = await endpoints.menu.resolutionCounts();
+        setResolutionCounts(res.data);
+        return res.data;
     };
 
     const loadLookupItems = async () => {
@@ -2602,9 +2619,19 @@ function ResolutionsTab({
 
     const refreshAll = async () => {
         setLoading(true);
-        const results = await Promise.allSettled([loadItems(), loadLookupItems(), loadVariantOptions(), loadTypeOptions(), loadHistory()]);
+        const results = await Promise.allSettled([
+            loadItems(),
+            loadResolutionCounts(),
+            loadLookupItems(),
+            loadVariantOptions(),
+            loadTypeOptions(),
+            loadHistory(),
+        ]);
         const failedRefreshes = results
-            .map((result, index) => ({ result, label: ['items', 'lookup', 'variants', 'types', 'history'][index] }))
+            .map((result, index) => ({
+                result,
+                label: ['items', 'counts', 'lookup', 'variants', 'types', 'history'][index],
+            }))
             .filter(({ result }) => result.status === 'rejected')
             .map(({ label, result }) => `${label}: ${getApiErrorMessage((result as PromiseRejectedResult).reason)}`);
 
@@ -3351,11 +3378,11 @@ function ResolutionsTab({
                 Resolve each unclustered or globally unlinked menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
             </p>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-                Local unverified: {items.filter(item => item.resolution_kind !== 'global_identity_gap').length}
+                Local unverified: {resolutionCounts.local_unverified}
                 {' · '}
-                Globally unlinked: {items.filter(item => item.resolution_kind === 'global_identity_gap').length}
+                Globally unlinked: {resolutionCounts.globally_unlinked}
                 {' · '}
-                Mapped / verified: {lookupItems.filter(item => item.is_verified).length}
+                Mapped / verified: {resolutionCounts.mapped_verified}
             </p>
             <SuspectMappingsCard
                 lookupItems={lookupItems}

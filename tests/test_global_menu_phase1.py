@@ -37,6 +37,7 @@ from src.core.global_menu_history import (
 )
 from src.core.global_menu_mutation import (
     GlobalMenuMutationError,
+    _normalize_mutation_payload,
     _headers,
     _apply_accepted_projection,
     build_global_action_from_local,
@@ -68,6 +69,7 @@ from src.core.queries.multi_store_reducers import (
     group_menu_identity_rows,
 )
 from src.core.queries.menu_queries import (
+    fetch_resolution_counts,
     fetch_unverified_items,
 )
 from src.core.services.cloud_pull_orchestrator import CLOUD_PULL_LOCK
@@ -3049,6 +3051,36 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
         self.assertEqual(rows.iloc[0]["resolution_kind"], "global_identity_gap")
         self.assertEqual(rows.iloc[0]["assignment_order_item_ids"], ["7777"])
+        self.assertEqual(
+            fetch_resolution_counts(conn, include_global_identity_gaps=True),
+            {
+                "local_unverified": 0,
+                "globally_unlinked": 1,
+                "mapped_verified": 0,
+            },
+        )
+        conn.execute(
+            "UPDATE menu_item_variants SET is_verified=0 WHERE order_item_id='7777'"
+        )
+        self.assertEqual(
+            fetch_resolution_counts(conn, include_global_identity_gaps=True),
+            {
+                "local_unverified": 1,
+                "globally_unlinked": 0,
+                "mapped_verified": 0,
+            },
+        )
+        conn.execute(
+            "UPDATE menu_item_variants SET is_verified=1 WHERE order_item_id='7777'"
+        )
+        self.assertEqual(
+            fetch_resolution_counts(conn, include_global_identity_gaps=False),
+            {
+                "local_unverified": 0,
+                "globally_unlinked": 0,
+                "mapped_verified": 1,
+            },
+        )
         conn.close()
 
     def test_verified_non_pos_synthetic_rows_are_not_global_identity_gaps(self) -> None:
@@ -3193,6 +3225,20 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         ):
             headers = _headers(Mock(), "sync-key", for_write=True)
         self.assertEqual(headers["X-Global-Menu-Key"], "editor-key")
+
+    def test_pos_mutation_overwrites_a_foreign_restaurant_id(self) -> None:
+        normalized = _normalize_mutation_payload(
+            "global_locator.map",
+            {
+                "locator_type": "pos_item",
+                "locator_value": "7777",
+                "restaurant_id": "rest-2",
+            },
+            capability=capability("rest-1"),
+        )
+        self.assertEqual(normalized["rule_scope"], "restaurant")
+        self.assertEqual(normalized["restaurant_id"], "rest-1")
+        self.assertFalse(normalized["confirm_group_wide"])
 
     def test_missing_editor_credential_remains_an_authorization_error(self) -> None:
         with patch(

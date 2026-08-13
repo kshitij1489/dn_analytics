@@ -116,9 +116,7 @@ def _normalize_mutation_payload(
     locator_type = str(payload.get("locator_type") or "").strip()
     if locator_type in {"pos_item", "pos_addon"}:
         payload["rule_scope"] = "restaurant"
-        payload["restaurant_id"] = str(
-            payload.get("restaurant_id") or capability.restaurant_id or ""
-        ).strip()
+        payload["restaurant_id"] = str(capability.restaurant_id or "").strip()
         payload["confirm_group_wide"] = False
         if not payload["restaurant_id"]:
             raise GlobalMenuMutationError(
@@ -420,11 +418,7 @@ def build_global_action_from_local(
             raise GlobalMenuMutationError(
                 "A group-wide itemcode or alias mapping requires explicit confirmation"
             )
-        restaurant_id = (
-            str(detail.get("restaurant_id") or capability.restaurant_id or "").strip()
-            if is_pos
-            else ""
-        )
+        restaurant_id = str(capability.restaurant_id or "").strip() if is_pos else ""
         if is_pos and not restaurant_id:
             raise GlobalMenuMutationError(
                 "A POS locator mapping requires the selected restaurant id"
