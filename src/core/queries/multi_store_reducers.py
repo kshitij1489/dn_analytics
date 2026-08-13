@@ -356,7 +356,7 @@ def menu_identity_payload(
     variant_field: Optional[str] = None,
     variant_only: bool = False,
 ) -> Dict[str, Any]:
-    """Attach dormant global identity plus the profile's coverage gate."""
+    """Attach global identity when the profile's catalog projection is ready."""
     try:
         from src.core.global_menu_identity import annotate_global_identity_rows
         from src.core.global_menu_schema import resolve_global_menu_capability
@@ -432,7 +432,7 @@ def group_menu_identity_rows(
     contributor_fields: Sequence[str] = (),
     default: Rule = Ignore(),
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Use global IDs only when every included profile passes coverage gates.
+    """Use global IDs only when every included profile is aggregation-ready.
 
     Unlinked rows are never normalized/name-grouped in global mode; their key
     includes restaurant plus local item/variant identity and they remain

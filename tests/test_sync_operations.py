@@ -21,7 +21,9 @@ class SyncOperationsTests(unittest.TestCase):
             menu_group_id="group-1",
             menu_capabilities=(
                 "global_menu_v1",
-                "global_menu_shared_pos_catalog_v1",
+                "global_menu_resolution_v1",
+                "global_menu_aggregation_v1",
+                "global_menu_mutations_v1",
             ),
             clean_rebuild_status="rebuilding",
         )
@@ -67,7 +69,6 @@ class SyncOperationsTests(unittest.TestCase):
         order = []
         capability = Mock(
             active=True,
-            shared_pos_catalog_advertised=True,
         )
         with patch(
             "src.core.config.cloud_sync_config.get_cloud_sync_config",
@@ -85,10 +86,6 @@ class SyncOperationsTests(unittest.TestCase):
             "src.core.global_menu_history.pull_global_menu_history",
             side_effect=lambda *_args, **_kwargs: order.append("history")
             or {"status": "applied"},
-        ), patch(
-            "src.core.client_learning_shipper.run_scoped_uploads",
-            side_effect=lambda *_args, **_kwargs: order.append("observation")
-            or {"sent": True, "error": None},
         ), patch(
             "src.core.menu_bootstrap_sync.get_menu_bootstrap_pull_endpoint",
             return_value=None,
@@ -111,27 +108,24 @@ class SyncOperationsTests(unittest.TestCase):
             summary = _run_best_effort_cloud_pulls_locked(
                 conn,
                 skip_global_menu_state=True,
-                send_shared_pos_observation=True,
             )
 
         duplicate_catalog.assert_not_called()
-        self.assertEqual(order, ["assignments", "history", "observation"])
+        self.assertEqual(order, ["assignments", "history"])
         self.assertEqual(summary["global_menu"]["status"], "already_current")
-        self.assertTrue(summary["shared_pos_observation"]["sent"])
+        self.assertNotIn("shared_pos_observation", summary)
 
     def test_clean_rebuild_runs_catalog_orders_assignments_history_observation_then_finalizes(self) -> None:
         conn = Mock()
         order = []
         active = Mock(
             active=True,
-            shared_pos_catalog_advertised=True,
         )
         cloud_summary = {
             "attempted": True,
             "global_menu": {"status": "already_current"},
             "global_menu_assignments": {"status": "applied"},
             "global_menu_history": {"status": "applied"},
-            "shared_pos_observation": {"sent": True, "error": None},
         }
         diagnostics = {
             "bootstrap_state": "complete",
@@ -151,9 +145,9 @@ class SyncOperationsTests(unittest.TestCase):
             )
 
         def cloud_pull(_conn, **kwargs):
-            order.append("assignments-history-observation")
+            order.append("assignments-history")
             self.assertTrue(kwargs["skip_global_menu_state"])
-            self.assertTrue(kwargs["send_shared_pos_observation"])
+            self.assertNotIn("send_shared_pos_observation", kwargs)
             return cloud_summary
 
         with patch(
@@ -182,7 +176,7 @@ class SyncOperationsTests(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ["catalog-events", "orders", "assignments-history-observation"],
+            ["catalog-events", "orders", "assignments-history"],
         )
         self.assertEqual(terminal.type, "done")
         self.assertEqual(terminal.stats["clean_rebuild_status"], "complete")

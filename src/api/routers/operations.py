@@ -19,7 +19,6 @@ from src.core.services.cloud_pull_orchestrator import (
     collect_forecast_pull_warnings,
     collect_global_menu_history_warnings,
     collect_menu_pull_errors,
-    collect_shared_pos_observation_warnings,
     run_best_effort_cloud_pulls,
 )
 from src.core.client_learning_shipper import run_all as run_client_learning_shippers
@@ -145,17 +144,6 @@ def _format_customer_pull_failure(errors: list) -> str:
     return f"Customer pull failed ({len(errors)} streams); first: {stream}: {message}"
 
 
-def _format_observation_error(block) -> Optional[str]:
-    if not isinstance(block, dict):
-        return "observation result is missing"
-    error = block.get("error")
-    if isinstance(error, str) and error:
-        return error
-    if block.get("status") == "error":
-        return str(error or "observation failed")
-    return None
-
-
 def _global_failure_code(messages) -> Optional[str]:
     for candidate in (
         "invalid_api_key",
@@ -259,18 +247,6 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
     except Exception:
         global_mode_active = False
 
-    if rebuild_in_progress and not (
-        global_capability is not None
-        and global_capability.active
-        and global_capability.shared_pos_catalog_advertised
-    ):
-        yield SyncStatus(
-            "error",
-            "Clean rebuild stopped: the refreshed registry does not advertise the shared POS catalog",
-            code="clean_rebuild_capability_missing",
-        )
-        return
-
     if global_mode_active:
         from src.core.global_menu_sync import pull_global_menu_state
 
@@ -353,18 +329,7 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
         "already_locked": already_locked,
     }
     if global_mode_active:
-        cloud_pull_options.update(
-            {
-                "skip_global_menu_state": True,
-                "send_shared_pos_observation": bool(
-                    global_capability is not None
-                    and (
-                        global_capability.shared_pos_catalog_advertised
-                        or global_capability.resolution_advertised
-                    )
-                ),
-            }
-        )
+        cloud_pull_options["skip_global_menu_state"] = True
     cloud = yield from _iter_cloud_pull(conn, cloud_pull_options, cloud_phase_template)
     final_message = final_status.message or "Sync complete"
     menu_pull_errors = list(collect_menu_pull_errors(cloud))
@@ -405,14 +370,6 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 {"stream": stream, "warning": message}
                 for stream, message in history_pull_warnings
             ]
-        observation_warnings = list(
-            collect_shared_pos_observation_warnings(cloud)
-        )
-        if observation_warnings:
-            final_stats["shared_pos_observation_warnings"] = [
-                {"stream": stream, "warning": message}
-                for stream, message in observation_warnings
-            ]
         if pull_failure_messages:
             final_message = f"{final_message} · {' · '.join(pull_failure_messages)}"
         else:
@@ -421,7 +378,6 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
                 customer_pull_warnings
                 + forecast_pull_warnings
                 + history_pull_warnings
-                + observation_warnings
             )
             for _stream, warning in pull_warnings:
                 final_message = f"{final_message} · Warning: {warning}"
@@ -436,31 +392,15 @@ def iter_sync_statuses(conn, *, already_locked: bool = False):
             diagnostics = fetch_global_menu_diagnostics(conn)
             final_stats["global_menu_diagnostics"] = diagnostics
             if rebuild_in_progress:
-                coverage = diagnostics["assignment_coverage"]
                 if diagnostics["bootstrap_state"] != "complete":
                     rebuild_errors.append("global catalog bootstrap is incomplete")
                 if diagnostics["quarantine_count"]:
                     rebuild_errors.append(
                         f"{diagnostics['quarantine_count']} global menu payload(s) remain quarantined"
                     )
-                if not coverage["complete"]:
-                    rebuild_errors.append(
-                        "assignment coverage is incomplete "
-                        f"({coverage['linked']}/{coverage['total']})"
-                    )
         except Exception as exc:
             if rebuild_in_progress:
                 rebuild_errors.append(f"diagnostics failed: {exc}")
-
-    if rebuild_in_progress:
-        observation = cloud.get("shared_pos_observation")
-        observation_confirmed = bool(
-            isinstance(observation, dict)
-            and not _format_observation_error(observation)
-            and (observation.get("sent") is True or observation.get("skipped"))
-        )
-        if not observation_confirmed:
-            rebuild_errors.append("the settled shared POS observation was not confirmed")
 
     terminal_type = (
         "error"

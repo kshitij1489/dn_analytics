@@ -14,8 +14,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.core.global_menu_schema import (
     GlobalMenuCapabilityStatus,
-    clear_resolved_quarantine,
-    quarantine_global_menu_payload,
     resolve_global_menu_capability,
 )
 from utils.id_generator import generate_deterministic_id
@@ -608,6 +606,8 @@ def _rule_resolution(
         ).fetchone()
         provenance = "restaurant-pos"
     else:
+        if locator_kind in {"pos-item", "pos-addon"}:
+            return None
         row = conn.execute(
             """
             SELECT target_global_menu_item_id, target_global_variant_id, server_revision
@@ -619,10 +619,7 @@ def _rule_resolution(
             """,
             (group_id, locator_kind, normalized),
         ).fetchone()
-        if locator_kind in {"pos-item", "pos-addon"}:
-            provenance = "group-pos"
-        else:
-            provenance = "group-itemcode" if locator_kind == "itemcode" else "global-alias"
+        provenance = "group-itemcode" if locator_kind == "itemcode" else "global-alias"
     if row is None:
         return None
     return _resolution_for_global_ids(
@@ -631,41 +628,6 @@ def _rule_resolution(
         str(row[1]) if row[1] else None,
         provenance=provenance,
         revision=int(row[2]),
-        materialize_no_variant=(provenance == "group-pos" and not row[1]),
-    )
-
-
-def _group_pos_alias_quarantine_key(locator_kind: str, locator_value: Any) -> str:
-    return f"group-pos-alias:{locator_kind}:{str(locator_value or '').strip()}"
-
-
-def _quarantine_unknown_group_pos_alias(
-    conn,
-    *,
-    capability: GlobalMenuCapabilityStatus,
-    locator_kind: str,
-    locator_value: Any,
-    raw_name: Any,
-    itemcode: Any,
-) -> None:
-    raw_locator = str(locator_value or "").strip()
-    quarantine_global_menu_payload(
-        conn,
-        payload_key=_group_pos_alias_quarantine_key(locator_kind, raw_locator),
-        stream="group_pos_alias_resolution",
-        payload={
-            "locator_type": locator_kind.replace("-", "_"),
-            "locator_value": raw_locator,
-            "itemcode": str(itemcode).strip() if itemcode is not None else None,
-            "raw_name": str(raw_name or ""),
-            "restaurant_id": capability.restaurant_id,
-        },
-        error_code="unknown_group_pos_alias",
-        error_message=(
-            f"No reviewed group POS alias exists for {locator_kind}:{raw_locator}"
-        ),
-        menu_group_id=capability.menu_group_id,
-        server_revision=capability.catalog_revision,
     )
 
 
@@ -680,32 +642,11 @@ def resolve_global_identity_for_ingest(
 ) -> GlobalIdentityResolution:
     capability = capability or resolve_global_menu_capability(conn)
     if (
-        not (capability.resolution_ready or capability.group_pos_aliases_ready)
+        not capability.resolution_ready
         or not capability.menu_group_id
         or not capability.restaurant_id
     ):
         return GlobalIdentityResolution(False)
-
-    # Group-owned Petpooja locators are authority and intentionally outrank a
-    # conflicting restaurant assignment. Both POS policies share this lookup;
-    # only alias mode turns a miss into a durable unresolved quarantine.
-    if capability.group_pos_policy_advertised:
-        group_pos = _rule_resolution(
-            conn,
-            group_id=capability.menu_group_id,
-            locator_scope="group",
-            locator_kind="pos-addon" if is_addon else "pos-item",
-            locator_value=order_item_id,
-        )
-        if group_pos:
-            if capability.group_pos_aliases_advertised:
-                clear_resolved_quarantine(
-                    conn,
-                    [_group_pos_alias_quarantine_key(
-                        "pos-addon" if is_addon else "pos-item", order_item_id
-                    )],
-                )
-            return group_pos
 
     # Existing restaurant-qualified local assignment, but only when it is
     # linked to server-issued global identity.
@@ -729,21 +670,18 @@ def resolve_global_identity_for_ingest(
             revision=int(assignment[4] or 0),
         )
 
-    # Normal menu groups retain restaurant-qualified POS ownership. Either
-    # group-owned POS policy must never fall back to a cached restaurant rule.
-    if not capability.group_pos_policy_advertised:
-        pos = _rule_resolution(
-            conn,
-            group_id=capability.menu_group_id,
-            locator_scope="restaurant",
-            restaurant_id=capability.restaurant_id,
-            locator_kind="pos-addon" if is_addon else "pos-item",
-            locator_value=order_item_id,
-        )
-        if pos:
-            return pos
+    pos = _rule_resolution(
+        conn,
+        group_id=capability.menu_group_id,
+        locator_scope="restaurant",
+        restaurant_id=capability.restaurant_id,
+        locator_kind="pos-addon" if is_addon else "pos-item",
+        locator_value=order_item_id,
+    )
+    if pos:
+        return pos
 
-    # 3. Approved group-wide itemcode applies only to regular items.
+    # Approved group-wide itemcode applies only to regular items.
     if not is_addon:
         code = _rule_resolution(
             conn,
@@ -755,7 +693,7 @@ def resolve_global_identity_for_ingest(
         if code:
             return code
 
-    # 4. Approved normalized alias. Fuzzy similarity never enters this table.
+    # Approved normalized alias. Fuzzy similarity never enters this table.
     alias = _rule_resolution(
         conn,
         group_id=capability.menu_group_id,
@@ -765,21 +703,6 @@ def resolve_global_identity_for_ingest(
     )
     if alias:
         return alias
-    if capability.group_pos_aliases_advertised:
-        locator_kind = "pos-addon" if is_addon else "pos-item"
-        _quarantine_unknown_group_pos_alias(
-            conn,
-            capability=capability,
-            locator_kind=locator_kind,
-            locator_value=order_item_id,
-            raw_name=raw_name,
-            itemcode=itemcode,
-        )
-        return GlobalIdentityResolution(
-            False,
-            provenance="unknown-group-pos-alias",
-            server_revision=capability.catalog_revision,
-        )
     return GlobalIdentityResolution(False)
 
 

@@ -72,25 +72,6 @@ class GlobalMenuResolutionContextRequest(BaseModel):
     local_variant_id: Optional[str] = None
 
 
-class GlobalMenuAliasPreviewRequest(BaseModel):
-    schema_version: int = 1
-    expected_menu_group_revision: int
-    locator_type: str
-    locator_value: str
-    expected_observation_digest: str
-    requested_status: str
-    global_item_id: Optional[str] = None
-    global_variant_id: Optional[str] = None
-    canonical_price: Optional[str] = None
-    decision_method: str
-    reason: str
-
-
-class GlobalMenuAliasCommitRequest(GlobalMenuAliasPreviewRequest):
-    mutation_id: str
-    preview_digest: str
-
-
 class MergeRequest(GlobalMenuPreviewReference):
     """Request to merge two menu items"""
     source_id: str

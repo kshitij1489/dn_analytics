@@ -166,7 +166,7 @@
     },
     {
       "name": "allowed_restaurants",
-      "description": "The desktop profile selector source. Both branches advertise the same active shared-Petpooja menu-group capabilities; internal sync_scope_key and credential_ref are never exposed (§23.6, §25.3).",
+      "description": "The desktop profile selector source. Both members of a group that owns a canonical catalog advertise the same four capabilities — there is no rung and no partial grant; internal sync_scope_key and credential_ref are never exposed (§23.6, §25.3).",
       "endpoint": "GET /analytics/restaurants/",
       "request_headers": {
         "X-API-Key": "<ANALYTICS_API_KEYS value>"
@@ -182,7 +182,6 @@
             "menu_capabilities": [
               "global_menu_v1",
               "global_menu_resolution_v1",
-              "global_menu_shared_pos_catalog_v1",
               "global_menu_aggregation_v1",
               "global_menu_mutations_v1"
             ]
@@ -195,7 +194,6 @@
             "menu_capabilities": [
               "global_menu_v1",
               "global_menu_resolution_v1",
-              "global_menu_shared_pos_catalog_v1",
               "global_menu_aggregation_v1",
               "global_menu_mutations_v1"
             ]

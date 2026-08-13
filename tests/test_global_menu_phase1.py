@@ -46,7 +46,6 @@ from src.core.global_menu_mutation import (
 )
 from src.core.global_menu_schema import (
     GLOBAL_MENU_MODE,
-    GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
     GlobalMenuCapabilityError,
     GlobalMenuCapabilityStatus,
     require_global_menu_capability,
@@ -57,7 +56,6 @@ from src.core.global_menu_sync import (
     _fetch_page,
     apply_global_assignment_rows,
     apply_global_menu_payload_page,
-    materialize_shared_pos_catalog,
     pull_global_assignment_snapshot,
     pull_global_menu_status,
     pull_global_menu_state,
@@ -70,8 +68,6 @@ from src.core.queries.multi_store_reducers import (
     group_menu_identity_rows,
 )
 from src.core.queries.menu_queries import (
-    fetch_group_menu_catalog,
-    fetch_group_menu_matrix,
     fetch_unverified_items,
 )
 from src.core.services.cloud_pull_orchestrator import CLOUD_PULL_LOCK
@@ -140,92 +136,6 @@ def capability(
     )
 
 
-def shared_capability(
-    restaurant_id: str = "rest-1",
-    *,
-    revision: int = 0,
-    complete: bool = False,
-    group_id: str = "group-desserts",
-) -> GlobalMenuCapabilityStatus:
-    return capability(
-        restaurant_id,
-        revision=revision,
-        complete=complete,
-        group_id=group_id,
-        capabilities=(
-            "global_menu_v1",
-            "global_menu_resolution_v1",
-            GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-        ),
-    )
-
-
-def shared_catalog_payload(*, revision: int = 7, price: Any = "290.00") -> Dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "menu_group_id": "group-desserts",
-        "catalog_revision": revision,
-        "mutation_revision": revision,
-        "next_cursor": f"snapshot-{revision}",
-        "event_cursor": str(revision),
-        "has_more": False,
-        "coverage": {"linked": 2, "total": 2},
-        "items": [
-            {
-                "global_menu_item_id": "global-vanilla",
-                "canonical_name": "Eggless Vanilla Ice Cream",
-                "canonical_type": "Ice Cream",
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": revision,
-            }
-        ],
-        "variants": [
-            {
-                "global_variant_id": "global-regular",
-                "canonical_name": "Regular Tub",
-                "unit": "GMS",
-                "value": 300,
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": revision,
-            }
-        ],
-        "links": {"menu_items": [], "variants": []},
-        "redirects": [],
-        "mapping_rules": [
-            {
-                "rule_id": "shared-item-1001",
-                "locator_scope": "group",
-                "restaurant_id": None,
-                "locator_kind": "pos-item",
-                "locator_value": "1001",
-                "normalized_locator": "1001",
-                "target_global_menu_item_id": "global-vanilla",
-                "target_global_variant_id": "global-regular",
-                "price": price,
-                "provenance": "reviewed-shared-pos",
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": revision,
-            },
-            {
-                "rule_id": "shared-addon-2001",
-                "locator_scope": "group",
-                "restaurant_id": None,
-                "locator_kind": "pos-addon",
-                "locator_value": "2001",
-                "normalized_locator": "2001",
-                "target_global_menu_item_id": "global-vanilla",
-                "target_global_variant_id": None,
-                "price": "40.00",
-                "provenance": "reviewed-shared-pos",
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": revision,
-            },
-        ],
-    }
 
 
 def profile(restaurant_id: str) -> RestaurantProfile:
@@ -270,9 +180,9 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         }
         self.assertIn("history_cursor", state_columns)
         self.assertIn("price", rule_columns)
-        self.assertTrue(
+        self.assertFalse(
             {"shared_pos_rule_tombstoned", "shared_pos_prior_is_active"}
-            <= mapping_columns
+            & mapping_columns
         )
         self.assertIsNotNone(
             conn.execute(
@@ -543,43 +453,27 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         self.assertEqual(status.mode, "legacy_restaurant_v1")
         self.assertEqual(status.reason, "projection_schema_missing")
 
-    def test_capability_ladder_exposes_narrow_shadow_resolution(self) -> None:
-        shadow = capability(
+    def test_a_narrower_capability_set_exposes_narrower_readiness(self) -> None:
+        resolution_only = capability(
             capabilities=("global_menu_v1", "global_menu_resolution_v1")
         )
-        self.assertTrue(shadow.active)
-        self.assertTrue(shadow.resolution_advertised)
-        self.assertFalse(shadow.aggregation_ready)
-        self.assertFalse(shadow.mutation_ready)
-        aggregating = capability(
+        self.assertTrue(resolution_only.active)
+        self.assertTrue(resolution_only.resolution_advertised)
+        self.assertFalse(resolution_only.aggregation_ready)
+        self.assertFalse(resolution_only.mutation_ready)
+        with_aggregation = capability(
             capabilities=(
                 "global_menu_v1",
                 "global_menu_resolution_v1",
                 "global_menu_aggregation_v1",
             )
         )
-        self.assertTrue(aggregating.resolution_advertised)
-        self.assertTrue(aggregating.aggregation_ready)
-        self.assertFalse(aggregating.mutation_ready)
+        self.assertTrue(with_aggregation.resolution_advertised)
+        self.assertTrue(with_aggregation.aggregation_ready)
+        self.assertFalse(with_aggregation.mutation_ready)
         active = capability()
         self.assertTrue(active.aggregation_ready)
         self.assertTrue(active.mutation_ready)
-
-    def test_shared_pos_capability_is_advertised_separately_and_fails_closed(self) -> None:
-        absent = capability()
-        self.assertFalse(absent.shared_pos_catalog_advertised)
-        self.assertFalse(absent.shared_pos_catalog_ready)
-
-        advertised = capability(
-            capabilities=(*absent.capabilities, GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY)
-        )
-        self.assertTrue(advertised.shared_pos_catalog_advertised)
-        self.assertTrue(advertised.shared_pos_catalog_ready)
-        self.assertTrue(advertised.to_dict()["shared_pos_catalog_ready"])
-
-        bootstrapping = replace(advertised, bootstrap_status="in_progress")
-        self.assertTrue(bootstrapping.shared_pos_catalog_advertised)
-        self.assertFalse(bootstrapping.shared_pos_catalog_ready)
 
 
 class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
@@ -597,14 +491,14 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
         ("global_menu_fixtures.json", "global_menu_events_page"),
         ("global_menu_fixtures.json", "global_menu_status"),
         ("global_menu_fixtures.json", "global_menu_history_page"),
-        ("global_menu_fixtures.json", "global_menu_mutation_preview_price_update"),
+        ("global_menu_fixtures.json", "global_menu_mutation_preview_locator_map"),
         (
             "menu_mutations_fixtures.json",
-            "menu_mutations_commit_request_global_shadow_write",
+            "menu_mutations_commit_request_global_canonical_write",
         ),
         (
             "menu_mutations_fixtures.json",
-            "menu_mutations_commit_response_global_shadow_write_409",
+            "menu_mutations_commit_response_global_canonical_write_409",
         ),
     }
 
@@ -612,67 +506,15 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
         for filename, name in sorted(self.OWNED_FIXTURES):
             self.assertEqual(named_contract_fixture(filename, name)["name"], name)
 
-    def test_shared_pos_observation_and_acknowledgements_are_pinned(self) -> None:
-        request = named_contract_fixture(
-            "menu_bootstrap_fixtures.json", "menu_bootstrap_ingest_request"
-        )["payload"]
-        observation = request["shared_pos_catalog"]
-        self.assertEqual(len(observation), 1)
-        self.assertEqual(
-            set(observation[0]),
-            {
-                "locator_type",
-                "locator_value",
-                "menu_item_id",
-                "variant_id",
-                "item_name",
-                "item_type",
-                "variant_name",
-                "variant_unit",
-                "variant_value",
-                "price",
-            },
-        )
-        self.assertEqual(observation[0]["variant_value"], "500.00")
-        self.assertEqual(observation[0]["price"], "290.00")
-        for name in (
-            "menu_bootstrap_ingest_response",
-            "menu_bootstrap_ingest_response_seed_only_existing",
-        ):
-            response = named_contract_fixture("menu_bootstrap_fixtures.json", name)
-            self.assertIs(response["payload"]["shared_pos_catalog_updated"], True)
-
-    def test_price_bearing_snapshot_and_event_rules_are_pinned(self) -> None:
+    def test_snapshot_and_event_rules_are_restaurant_scoped_and_priceless(self) -> None:
         snapshot = contract_fixture("global_menu_snapshot_rules")["payload"]["rows"][0]
         event = contract_fixture("global_menu_events_page")["payload"]["events"][0]
         event_rule = event["payload"]["mapping_rules"][0]
         for rule in (snapshot, event_rule):
-            self.assertEqual(rule["rule_scope"], "group")
+            self.assertEqual(rule["rule_scope"], "restaurant")
             self.assertEqual(rule["locator_type"], "pos_item")
-            self.assertEqual(rule["price"], "290.00")
-            self.assertIsInstance(rule["price"], str)
-
-    def test_status_fixture_pins_shared_pos_parity_fields(self) -> None:
-        payload = contract_fixture("global_menu_status")["payload"]
-        self.assertIn(
-            GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-            payload["menu_capabilities"],
-        )
-        self.assertTrue(payload["shared_pos_catalog_complete"])
-        self.assertRegex(
-            payload["catalog"]["shared_pos_catalog_digest"], r"^[0-9a-f]{64}$"
-        )
-        expected_fields = {
-            "shared_pos_entries_observed",
-            "shared_pos_entries_matching",
-            "shared_pos_entries_missing",
-            "shared_pos_peer_extras",
-            "shared_pos_identity_mismatches",
-            "shared_pos_price_mismatches",
-            "shared_pos_catalog_complete",
-        }
-        for restaurant in payload["restaurants"]:
-            self.assertTrue(expected_fields.issubset(restaurant))
+            self.assertEqual(rule["restaurant_id"], "1c8w7fp500")
+            self.assertNotIn("price", rule)
 
     def test_history_fixture_fits_the_canonical_cache_and_order(self) -> None:
         payload = contract_fixture("global_menu_history_page")["payload"]
@@ -719,60 +561,25 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
         )
         conn.close()
 
-    def test_price_preview_fixture_is_the_exact_generic_preview_wire(self) -> None:
-        fixture = contract_fixture("global_menu_mutation_preview_price_update")
-        request = fixture["request"]
-        shared_capability = capability(
-            revision=5,
-            group_id="group-1",
-            capabilities=(
-                "global_menu_v1",
-                "global_menu_mutations_v1",
-                GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-            ),
-        )
-        with patch(
-            "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=shared_capability,
-        ), patch(
-            "src.core.global_menu_mutation._urls",
-            return_value=("https://cloud/mutations", "sync-key"),
-        ), patch(
-            "src.core.global_menu_mutation._headers",
-            return_value={"X-Global-Menu-Key": "editor-key"},
-        ), patch(
-            "src.core.global_menu_mutation._request_json",
-            return_value=(200, fixture["payload"]),
-        ) as transport:
-            preview = preview_global_mutation(
-                Mock(),
-                action={
-                    "mutation_type": request["mutation_type"],
-                    "payload": request["payload"],
-                },
-            )
-        self.assertEqual(transport.call_args.kwargs["payload"], request)
-        self.assertEqual(preview["payload"]["price"], "310.00")
-
-    def test_shadow_refusal_fixture_is_machine_actionable(self) -> None:
+    def test_canonical_write_refusal_fixture_is_machine_actionable(self) -> None:
         request = named_contract_fixture(
             "menu_mutations_fixtures.json",
-            "menu_mutations_commit_request_global_shadow_write",
+            "menu_mutations_commit_request_global_canonical_write",
         )
         response = named_contract_fixture(
             "menu_mutations_fixtures.json",
-            "menu_mutations_commit_response_global_shadow_write_409",
+            "menu_mutations_commit_response_global_canonical_write_409",
         )
-        self.assertEqual(request["payload"]["mutation_type"], "menu_merge.applied")
+        self.assertEqual(request["payload"]["mutation_type"], "catalog_update")
         self.assertEqual(response["http_status"], 409)
         self.assertEqual(
-            response["payload"]["code"], "global_menu_shadow_write_blocked"
+            response["payload"]["code"], "global_menu_canonical_write_blocked"
         )
         self.assertEqual(
             response["payload"]["recommended_action"], "use_global_menu_mutations"
         )
 
-    def test_allowed_restaurants_fixture_advertises_one_shared_group_policy(self) -> None:
+    def test_allowed_restaurants_fixture_advertises_one_active_group(self) -> None:
         fixture = named_contract_fixture(
             "analytics_stream_fixtures.json", "allowed_restaurants"
         )
@@ -789,7 +596,6 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
                         {
                             "global_menu_v1",
                             "global_menu_resolution_v1",
-                            GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
                             "global_menu_aggregation_v1",
                             "global_menu_mutations_v1",
                         }
@@ -841,8 +647,8 @@ class PhaseFCleanRebuildDiagnosticsTests(unittest.TestCase):
                 target_global_menu_item_id, target_global_variant_id, price,
                 provenance, is_verified, lifecycle_state, server_revision
             ) VALUES (
-                'rule-1', 'group-1', 'group', NULL, 'pos-item', 'pos-1', 'pos-1',
-                'item-1', 'variant-1', '290.00', 'operator', 1, 'active', 7
+                'rule-1', 'group-1', 'restaurant', '1c8w7fp500', 'pos-item', 'pos-1', 'pos-1',
+                'item-1', 'variant-1', NULL, 'operator', 1, 'active', 7
             )
             """
         )
@@ -853,7 +659,7 @@ class PhaseFCleanRebuildDiagnosticsTests(unittest.TestCase):
                 event_type, occurred_at, server_ingested_at, is_undoable, detail
             ) VALUES (
                 'history-1', 'group-1', 'event-1', 'global_menu_event',
-                'global_locator.price_update', '2026-08-12T00:00:00Z',
+                'global_item.merge', '2026-08-12T00:00:00Z',
                 '2026-08-12T00:00:01Z', 0, '{}'
             )
             """
@@ -873,7 +679,7 @@ class PhaseFCleanRebuildDiagnosticsTests(unittest.TestCase):
         self.assertEqual(first["bootstrap_state"], "complete")
         self.assertEqual(first["catalog_revision"], 7)
         self.assertEqual(first["mapping_count"], 1)
-        self.assertEqual(first["price_count"], 1)
+        self.assertEqual(first["price_count"], 0)
         self.assertEqual(
             first["assignment_coverage"],
             {"linked": 9, "total": 10, "complete": False},
@@ -893,42 +699,42 @@ class PhaseFCleanRebuildDiagnosticsTests(unittest.TestCase):
 
 
 class GlobalMenuCapabilityGuardTests(unittest.TestCase):
-    def test_shadow_resolution_is_ready_before_coverage_is_complete(self) -> None:
-        shadow = replace(
+    def test_resolution_write_is_ready_before_coverage_is_complete(self) -> None:
+        resolution_only = replace(
             capability(
                 capabilities=("global_menu_v1", "global_menu_resolution_v1")
             ),
             coverage_linked=1,
             coverage_total=2,
         )
-        self.assertTrue(shadow.resolution_ready)
-        self.assertFalse(shadow.coverage_complete)
+        self.assertTrue(resolution_only.resolution_ready)
+        self.assertFalse(resolution_only.coverage_complete)
         with patch(
             "src.core.global_menu_schema.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ):
             self.assertIs(
                 require_global_menu_capability(
                     Mock(), for_write=True, allow_resolution_write=True
                 ),
-                shadow,
+                resolution_only,
             )
             with self.assertRaises(GlobalMenuCapabilityError):
                 require_global_menu_capability(Mock(), for_write=True)
 
-    def test_shadow_blocks_legacy_canonical_write_before_mutation_capture(self) -> None:
-        shadow = capability(
+    def test_a_member_without_mutations_blocks_legacy_canonical_writes(self) -> None:
+        resolution_only = capability(
             capabilities=("global_menu_v1", "global_menu_resolution_v1")
         )
         with patch(
             "src.core.global_menu_schema.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ):
             with self.assertRaises(HTTPException) as caught:
                 _ensure_menu_edit_allowed(Mock())
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(
-            caught.exception.detail["code"], "global_menu_shadow_write_blocked"
+            caught.exception.detail["code"], "global_menu_canonical_write_blocked"
         )
 
         from utils import menu_utils
@@ -936,24 +742,24 @@ class GlobalMenuCapabilityGuardTests(unittest.TestCase):
 
         with patch(
             "src.core.global_menu_schema.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ):
             blocked = _strict_mode_edit_blocked_response(Mock())
             replay = _strict_mode_edit_blocked_response(
                 Mock(), emit_sync_event=False
             )
-        self.assertEqual(blocked["code"], "global_menu_shadow_write_blocked")
+        self.assertEqual(blocked["code"], "global_menu_canonical_write_blocked")
         self.assertIsNone(replay)
 
         with patch(
             "src.core.global_menu_schema.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ):
             utility_blocked = menu_utils.update_menu_variant_mapping(
                 Mock(), "item-1", "variant-1", "variant-2"
             )
         self.assertEqual(
-            utility_blocked["code"], "global_menu_shadow_write_blocked"
+            utility_blocked["code"], "global_menu_canonical_write_blocked"
         )
 
     def test_removed_capability_fails_closed_for_writes(self) -> None:
@@ -1009,7 +815,7 @@ class GlobalMenuCapabilityGuardTests(unittest.TestCase):
         self.assertTrue(allowed.active)
         conn.close()
 
-    def test_shadow_ingest_uses_global_resolution_and_not_legacy_itemcode(self) -> None:
+    def test_global_ingest_uses_global_resolution_and_not_legacy_itemcode(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -1022,7 +828,7 @@ class GlobalMenuCapabilityGuardTests(unittest.TestCase):
             "INSERT INTO variants (variant_id, variant_name, is_verified) "
             "VALUES ('global-variant', 'Regular', 1)"
         )
-        shadow = capability(
+        resolution_only = capability(
             capabilities=("global_menu_v1", "global_menu_resolution_v1")
         )
         resolution = GlobalIdentityResolution(
@@ -1038,7 +844,7 @@ class GlobalMenuCapabilityGuardTests(unittest.TestCase):
         cluster = OrderItemCluster(conn)
         with patch(
             "services.clustering_service.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ), patch(
             "services.clustering_service.resolve_global_identity_for_ingest",
             return_value=resolution,
@@ -1525,17 +1331,17 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         self.assertIsNone(legacy_row["global_mutation_id"])
         self.assertLess(global_row["merge_id"], 2**53)
 
-        shadow = capability(
+        resolution_only = capability(
             group_id="group-1",
             capabilities=("global_menu_v1", "global_menu_resolution_v1"),
         )
         with patch(
             "src.core.global_menu_schema.resolve_global_menu_capability",
-            return_value=shadow,
+            return_value=resolution_only,
         ):
-            shadow_history = get_merge_history(conn=conn)
-        self.assertFalse(shadow_history["entries"][0]["is_undoable"])
-        self.assertIsNone(shadow_history["entries"][0]["global_mutation_id"])
+            narrowed_history = get_merge_history(conn=conn)
+        self.assertFalse(narrowed_history["entries"][0]["is_undoable"])
+        self.assertIsNone(narrowed_history["entries"][0]["global_mutation_id"])
 
     def test_global_history_route_does_not_fall_back_on_capability_error(self) -> None:
         conn = self._connection()
@@ -1628,7 +1434,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             stream="snapshot",
             capability=capability(complete=False, group_id="group-1"),
         )
-        self.assertEqual(item_result["rows_applied"], 1)
+        self.assertEqual(item_result["rows_applied"], 2)
         rules_page = contract_fixture("global_menu_snapshot_rules")["payload"]
         rule_result = apply_global_menu_payload_page(
             self.conn,
@@ -1641,460 +1447,31 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                 capabilities=(
                     "global_menu_v1",
                     "global_menu_resolution_v1",
-                    GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
                 ),
             ),
         )
         self.assertEqual(rule_result["status"], "applied")
-        row = self.conn.execute(
+        rows = self.conn.execute(
             """
             SELECT locator_scope, restaurant_id, locator_kind,
                    target_global_menu_item_id
             FROM global_menu_mapping_rules
+            ORDER BY locator_kind, locator_value
             """
-        ).fetchone()
-        self.assertEqual(tuple(row), (
-            "group",
-            None,
-            "pos-item",
-            "1795ed65318544a9907caab6202b9d42",
-        ))
-        projected = self.conn.execute(
-            """
-            SELECT printf('%.2f', price), is_active, addon_eligible,
-                   delivery_eligible, is_verified
-            FROM menu_item_variants WHERE order_item_id='1001'
-            """
-        ).fetchone()
-        self.assertEqual(tuple(projected), ("290.00", 1, 0, 1, 1))
-
-    def test_shared_catalog_materializes_identically_into_two_blank_profiles(self) -> None:
-        other = sqlite3.connect(":memory:")
-        other.row_factory = sqlite3.Row
-        other.execute("PRAGMA foreign_keys=ON")
-        apply_analytics_schema(other)
-        try:
-            projections = []
-            for conn, restaurant_id in ((self.conn, "rest-1"), (other, "rest-2")):
-                result = apply_global_menu_payload_page(
-                    conn,
-                    shared_catalog_payload(),
-                    stream="snapshot",
-                    capability=shared_capability(restaurant_id),
-                )
-                self.assertEqual(result["rows_materialized"], 2)
-                repeat = apply_global_menu_payload_page(
-                    conn,
-                    shared_catalog_payload(),
-                    stream="snapshot",
-                    capability=shared_capability(restaurant_id, revision=7),
-                )
-                self.assertEqual(repeat["rows_materialized"], 2)
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM menu_item_variants").fetchone()[0],
-                    2,
-                )
-                projections.append(
-                    [
-                        tuple(row)
-                        for row in conn.execute(
-                            """
-                            SELECT mv.order_item_id, il.global_menu_item_id,
-                                   COALESCE(vl.global_variant_id, ''),
-                                   v.variant_name, printf('%.2f', mv.price),
-                                   mv.is_active, mv.addon_eligible,
-                                   mv.delivery_eligible, mv.is_verified
-                            FROM menu_item_variants mv
-                            JOIN menu_item_global_links il
-                              ON il.local_menu_item_id=mv.menu_item_id
-                            JOIN variants v ON v.variant_id=mv.variant_id
-                            LEFT JOIN variant_global_links vl
-                              ON vl.local_variant_id=mv.variant_id
-                            ORDER BY mv.order_item_id
-                            """
-                        ).fetchall()
-                    ]
-                )
-            self.assertEqual(projections[0], projections[1])
-            self.assertEqual(
-                projections[0],
-                [
-                    (
-                        "1001",
-                        "global-vanilla",
-                        "global-regular",
-                        "Regular Tub",
-                        "290.00",
-                        1,
-                        0,
-                        1,
-                        1,
-                    ),
-                    (
-                        "2001",
-                        "global-vanilla",
-                        "",
-                        "UNKNOWN",
-                        "40.00",
-                        1,
-                        0,
-                        1,
-                        1,
-                    ),
-                ],
-            )
-        finally:
-            other.close()
-
-    def test_shared_pos_rules_require_capability_scope_and_exact_price(self) -> None:
-        invalid_prices = [None, "290", "290.0", 290.0, "-1.00", "NaN", "01.00"]
-        for invalid_price in invalid_prices:
-            with self.subTest(price=invalid_price):
-                with self.assertRaisesRegex(RuntimeError, "price"):
-                    apply_global_menu_payload_page(
-                        self.conn,
-                        shared_catalog_payload(price=invalid_price),
-                        stream="snapshot",
-                        capability=shared_capability(),
-                    )
-                self.assertEqual(
-                    self.conn.execute("SELECT COUNT(*) FROM global_menu_mapping_rules").fetchone()[0],
-                    0,
-                )
-
-        with self.assertRaisesRegex(RuntimeError, "requires global_menu_shared_pos_catalog_v1"):
-            apply_global_menu_payload_page(
-                self.conn,
-                shared_catalog_payload(),
-                stream="snapshot",
-                capability=capability(complete=False),
-            )
-        wrong_scope = shared_catalog_payload()
-        wrong_scope["mapping_rules"][0].update(
-            {"locator_scope": "restaurant", "restaurant_id": "rest-1"}
-        )
-        with self.assertRaisesRegex(RuntimeError, "must be group-scoped"):
-            apply_global_menu_payload_page(
-                self.conn,
-                wrong_scope,
-                stream="snapshot",
-                capability=shared_capability(),
-            )
-
-    def test_shared_projection_rejects_collisions_and_invalid_targets(self) -> None:
-        collision = shared_catalog_payload()
-        collision["mapping_rules"][1]["locator_value"] = "1001"
-        collision["mapping_rules"][1]["normalized_locator"] = "1001"
-        with self.assertRaisesRegex(RuntimeError, "both item and addon"):
-            apply_global_menu_payload_page(
-                self.conn,
-                collision,
-                stream="snapshot",
-                capability=shared_capability(),
-            )
-
-        missing = shared_catalog_payload()
-        missing["items"] = []
-        with self.assertRaisesRegex(RuntimeError, "resolves to missing"):
-            apply_global_menu_payload_page(
-                self.conn,
-                missing,
-                stream="snapshot",
-                capability=shared_capability(),
-            )
-
-        tombstoned = shared_catalog_payload()
-        tombstoned["items"][0]["lifecycle_state"] = "tombstoned"
-        with self.assertRaisesRegex(RuntimeError, "non-active"):
-            apply_global_menu_payload_page(
-                self.conn,
-                tombstoned,
-                stream="snapshot",
-                capability=shared_capability(),
-            )
-
-    def test_shared_projection_resolves_redirected_rule_targets(self) -> None:
-        payload = shared_catalog_payload()
-        payload["items"].append(
-            {
-                "global_menu_item_id": "global-old-vanilla",
-                "canonical_name": "Vanilla Ice Cream",
-                "canonical_type": "Ice Cream",
-                "is_verified": True,
-                "lifecycle_state": "redirected",
-                "server_revision": 7,
-            }
-        )
-        payload["redirects"] = [
-            {
-                "redirect_id": "redirect-old-vanilla",
-                "entity_type": "item",
-                "source_global_menu_item_id": "global-old-vanilla",
-                "target_global_menu_item_id": "global-vanilla",
-                "server_revision": 7,
-            }
-        ]
-        payload["mapping_rules"][0][
-            "target_global_menu_item_id"
-        ] = "global-old-vanilla"
-        apply_global_menu_payload_page(
-            self.conn,
-            payload,
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        projected = self.conn.execute(
-            """
-            SELECT il.global_menu_item_id
-            FROM menu_item_variants mv
-            JOIN menu_item_global_links il ON il.local_menu_item_id=mv.menu_item_id
-            WHERE mv.order_item_id='1001'
-            """
-        ).fetchone()[0]
-        self.assertEqual(projected, "global-vanilla")
-
-    def test_shared_pos_rule_precedes_a_conflicting_local_assignment(self) -> None:
-        payload = shared_catalog_payload()
-        payload["items"].append(
-            {
-                "global_menu_item_id": "global-chocolate",
-                "canonical_name": "Chocolate Ice Cream",
-                "canonical_type": "Ice Cream",
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": 7,
-            }
-        )
-        apply_global_menu_payload_page(
-            self.conn,
-            payload,
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        chocolate_owner = self.conn.execute(
-            """
-            SELECT local_menu_item_id FROM menu_item_global_links
-            WHERE global_menu_item_id='global-chocolate' AND is_projection_owner=1
-            """
-        ).fetchone()[0]
-        self.conn.execute(
-            "UPDATE menu_item_variants SET menu_item_id=? WHERE order_item_id='1001'",
-            (chocolate_owner,),
-        )
-        with patch(
-            "src.core.global_menu_identity.resolve_global_menu_capability",
-            return_value=shared_capability(complete=True, revision=7),
-        ):
-            resolution = resolve_global_identity_for_ingest(
-                self.conn,
-                order_item_id="1001",
-                raw_name="conflicting local assignment",
-            )
-        self.assertEqual(resolution.global_menu_item_id, "global-vanilla")
-        self.assertEqual(resolution.provenance, "group-pos")
-
-    def test_shared_pos_no_variant_rule_returns_the_local_unknown_sentinel(self) -> None:
-        apply_global_menu_payload_page(
-            self.conn,
-            shared_catalog_payload(),
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        with patch(
-            "src.core.global_menu_identity.resolve_global_menu_capability",
-            return_value=shared_capability(complete=True, revision=7),
-        ):
-            resolution = resolve_global_identity_for_ingest(
-                self.conn,
-                order_item_id="2001",
-                raw_name="Addon name containing 200ML",
-                is_addon=True,
-            )
-        self.assertEqual(resolution.provenance, "group-pos")
-        self.assertIsNone(resolution.global_variant_id)
+        ).fetchall()
         self.assertEqual(
-            resolution.local_variant_id,
-            generate_deterministic_id("UNKNOWN"),
-        )
-
-    def test_tombstoned_shared_rule_restores_prior_local_availability_on_readd(self) -> None:
-        apply_global_menu_payload_page(
-            self.conn,
-            shared_catalog_payload(),
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        self.conn.execute(
-            """
-            UPDATE menu_item_variants
-            SET addon_eligible=1, delivery_eligible=0
-            WHERE order_item_id='1001'
-            """
-        )
-        self.conn.execute(
-            "DELETE FROM global_menu_mapping_rules WHERE rule_id='shared-item-1001'"
-        )
-        materialize_shared_pos_catalog(
-            self.conn,
-            shared_capability(revision=8),
-            tombstoned_locators=(("pos-item", "1001"),),
-        )
-        tombstoned = self.conn.execute(
-            """
-            SELECT is_active, addon_eligible, delivery_eligible,
-                   shared_pos_rule_tombstoned, shared_pos_prior_is_active
-            FROM menu_item_variants WHERE order_item_id='1001'
-            """
-        ).fetchone()
-        self.assertEqual(tuple(tombstoned), (0, 1, 0, 1, 1))
-
-        apply_global_menu_payload_page(
-            self.conn,
-            shared_catalog_payload(revision=9, price="315.00"),
-            stream="snapshot",
-            capability=shared_capability(revision=8),
-        )
-        restored = self.conn.execute(
-            """
-            SELECT printf('%.2f', price), is_active, addon_eligible,
-                   delivery_eligible, shared_pos_rule_tombstoned,
-                   shared_pos_prior_is_active
-            FROM menu_item_variants WHERE order_item_id='1001'
-            """
-        ).fetchone()
-        self.assertEqual(tuple(restored), ("315.00", 1, 1, 0, 0, None))
-
-    def test_shared_pos_rule_rejects_a_conflicting_assignment_snapshot_row(self) -> None:
-        payload = shared_catalog_payload()
-        payload["items"].append(
-            {
-                "global_menu_item_id": "global-chocolate",
-                "canonical_name": "Chocolate Ice Cream",
-                "canonical_type": "Ice Cream",
-                "is_verified": True,
-                "lifecycle_state": "active",
-                "server_revision": 7,
-            }
-        )
-        apply_global_menu_payload_page(
-            self.conn,
-            payload,
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        current = self.conn.execute(
-            "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id='1001'"
-        ).fetchone()
-        with self.assertRaisesRegex(RuntimeError, "conflicts with its shared POS rule"):
-            apply_global_assignment_rows(
-                self.conn,
-                [
-                    {
-                        "order_item_id": "1001",
-                        "menu_item_id": current[0],
-                        "variant_id": current[1],
-                        "global_menu_item_id": "global-chocolate",
-                        "global_variant_id": "global-regular",
-                        "last_seq": 8,
-                    }
-                ],
-                server_revision=7,
-                capability=shared_capability(revision=7, complete=True),
-            )
-        projected = self.conn.execute(
-            """
-            SELECT il.global_menu_item_id
-            FROM menu_item_variants mv
-            JOIN menu_item_global_links il ON il.local_menu_item_id=mv.menu_item_id
-            WHERE mv.order_item_id='1001'
-            """
-        ).fetchone()[0]
-        self.assertEqual(projected, "global-vanilla")
-
-    def test_price_event_preserves_store_flags_and_historical_order_prices(self) -> None:
-        apply_global_menu_payload_page(
-            self.conn,
-            shared_catalog_payload(),
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        mapping = self.conn.execute(
-            "SELECT menu_item_id, variant_id FROM menu_item_variants WHERE order_item_id='1001'"
-        ).fetchone()
-        self.conn.execute(
-            """
-            UPDATE menu_item_variants
-            SET is_active=0, addon_eligible=1, delivery_eligible=0,
-                is_verified=0, assignment_seq=44, verification_seq=45,
-                pending_local=1
-            WHERE order_item_id='1001'
-            """
-        )
-        self.conn.execute(
-            """
-            INSERT INTO orders (
-                order_id, petpooja_order_id, stream_id, event_id, occurred_at,
-                created_on, order_type, order_from, order_status
-            ) VALUES (1, 1, 1, 'historical-event', '2026-08-09T10:00:00Z',
-                      '2026-08-09 15:30:00', 'Delivery', 'POS', 'Success')
-            """
-        )
-        self.conn.execute(
-            """
-            INSERT INTO order_items (
-                order_item_id, order_id, menu_item_id, variant_id,
-                petpooja_itemid, name_raw, quantity, unit_price, total_price
-            ) VALUES (1, 1, ?, ?, 1001, 'Vanilla', 2, 290, 580)
-            """,
-            tuple(mapping),
-        )
-        self.conn.commit()
-
-        updated_rule = dict(shared_catalog_payload(revision=8, price="310.00")["mapping_rules"][0])
-        event_page = {
-            "schema_version": 1,
-            "menu_group_id": "group-desserts",
-            "catalog_revision": 8,
-            "mutation_revision": 8,
-            "next_cursor": "8",
-            "has_more": False,
-            "events": [
-                {
-                    "event_id": "price-event-8",
-                    "mutation_id": "price-mutation-8",
-                    "event_type": "global_locator.price_update",
-                    "catalog_revision": 8,
-                    "payload": {
-                        "items": [],
-                        "variants": [],
-                        "redirects": [],
-                        "mapping_rules": [updated_rule],
-                        "tombstones": {"redirects": [], "mapping_rules": []},
-                        "action": {"mutation_type": "global_locator.price_update"},
-                    },
-                }
+            [tuple(row) for row in rows],
+            [
+                ("group", None, "itemcode", "1795ed65318544a9907caab6202b9d42"),
+                ("restaurant", "1c8w7fp500", "pos-item", "1795ed65318544a9907caab6202b9d42"),
+                ("restaurant", "1c8w7fp500", "pos-item", "9c6cc3eed9eb410b8540cfae2318fc10"),
             ],
-        }
-        result = apply_global_menu_payload_page(
-            self.conn,
-            event_page,
-            stream="events",
-            capability=shared_capability(revision=7, complete=True),
         )
-        self.assertEqual(result["rows_materialized"], 2)
-        refreshed = self.conn.execute(
-            """
-            SELECT printf('%.2f', price), is_active, addon_eligible,
-                   delivery_eligible, is_verified, assignment_seq,
-                   verification_seq, pending_local
-            FROM menu_item_variants WHERE order_item_id='1001'
-            """
-        ).fetchone()
-        self.assertEqual(tuple(refreshed), ("310.00", 0, 1, 0, 0, 44, 45, 1))
-        historical = self.conn.execute(
-            "SELECT printf('%.2f', unit_price), printf('%.2f', total_price) FROM order_items"
-        ).fetchone()
-        self.assertEqual(tuple(historical), ("290.00", "580.00"))
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT 1 FROM menu_item_variants WHERE order_item_id='1001'"
+            ).fetchone()
+        )
 
     def test_snapshot_accepts_redirected_item_with_blank_canonical_type(self) -> None:
         item_page = json.loads(
@@ -2116,7 +1493,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             capability=capability(complete=False, group_id="group-1"),
         )
 
-        self.assertEqual(result["rows_applied"], 1)
+        self.assertEqual(result["rows_applied"], 2)
         row = self.conn.execute(
             """
             SELECT canonical_name, canonical_type, lifecycle_state
@@ -2155,8 +1532,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                 capabilities=(
                     "global_menu_v1",
                     "global_menu_resolution_v1",
-                    GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-                ),
+                                ),
             ),
         )
         self.assertEqual(result["rows_applied"], 1)
@@ -2186,8 +1562,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                 capabilities=(
                     "global_menu_v1",
                     "global_menu_resolution_v1",
-                    GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-                ),
+                                ),
             ),
         )
         self.assertEqual(
@@ -2198,7 +1573,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             self.conn.execute(
                 "SELECT COUNT(*) FROM global_menu_mapping_rules"
             ).fetchone()[0],
-            1,
+            2,
         )
 
         source_id = "1795ed65318544a9907caab6202b9d42"
@@ -2247,11 +1622,17 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                             ],
                             "mapping_rules": [
                                 {
-                                    "rule_scope": "group",
-                                    "restaurant_id": "",
+                                    "rule_scope": "restaurant",
+                                    "restaurant_id": "1c8w7fp500",
                                     "locator_type": "pos_item",
                                     "locator_value": "1001",
-                                }
+                                },
+                                {
+                                    "rule_scope": "group",
+                                    "restaurant_id": "",
+                                    "locator_type": "itemcode",
+                                    "locator_value": "IC-VAN",
+                                },
                             ],
                         },
                         "assignment_snapshot_required": True,
@@ -2276,8 +1657,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                 capabilities=(
                     "global_menu_v1",
                     "global_menu_resolution_v1",
-                    GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-                ),
+                                ),
             ),
         )
         self.assertEqual(
@@ -2290,11 +1670,10 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             ).fetchone()[0],
             0,
         )
-        self.assertEqual(
+        self.assertIsNone(
             self.conn.execute(
-                "SELECT is_active FROM menu_item_variants WHERE order_item_id='1001'"
-            ).fetchone()[0],
-            0,
+                "SELECT 1 FROM menu_item_variants WHERE order_item_id='1001'"
+            ).fetchone()
         )
         lifecycle = self.conn.execute(
             "SELECT lifecycle_state FROM global_menu_items "
@@ -2312,8 +1691,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             capabilities=(
                 "global_menu_v1",
                 "global_menu_resolution_v1",
-                GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-                "global_menu_aggregation_v1",
+                            "global_menu_aggregation_v1",
                 "global_menu_mutations_v1",
             ),
         )
@@ -2338,7 +1716,8 @@ class GlobalMenuProjectionTests(unittest.TestCase):
     def test_snapshot_restarts_if_the_pinned_watermark_moves(self) -> None:
         first_page = contract_fixture("global_menu_snapshot_items")["payload"]
         moved_page = {
-            **contract_fixture("global_menu_snapshot_items_empty")["payload"],
+            **first_page,
+            "rows": [],
             "menu_group_revision": 1,
             "snapshot_watermark": {
                 "event_seq": 1,
@@ -2380,251 +1759,6 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             "WHERE singleton_id=1"
         ).fetchone()
         self.assertEqual(tuple(state), ("error", None))
-
-    def test_shared_snapshot_materialization_failure_rolls_back_and_quarantines(self) -> None:
-        apply_global_menu_payload_page(
-            self.conn,
-            shared_catalog_payload(),
-            stream="snapshot",
-            capability=shared_capability(),
-        )
-        update_global_menu_state(
-            self.conn,
-            bootstrap_status="not_started",
-            snapshot_cursor=None,
-        )
-        self.conn.commit()
-
-        def snapshot_page(section: str, rows: list[Dict[str, Any]]) -> Dict[str, Any]:
-            return {
-                "schema_version": 1,
-                "menu_group_id": "group-desserts",
-                "menu_group_revision": 8,
-                "snapshot_watermark": {
-                    "event_seq": 8,
-                    "menu_group_revision": 8,
-                },
-                "section": section,
-                "rows": rows,
-                "next_cursor": None,
-                "has_more": False,
-            }
-
-        item = {
-            "global_item_id": "global-vanilla",
-            "canonical_name": "Eggless Vanilla Ice Cream",
-            "canonical_type": "Ice Cream",
-            "is_verified": True,
-            "lifecycle_state": "active",
-        }
-        variant = {
-            "global_variant_id": "global-regular",
-            "canonical_name": "Regular Tub",
-            "unit": "GMS",
-            "value": "300.00",
-            "is_verified": True,
-            "lifecycle_state": "active",
-        }
-        colliding_rules = [
-            {
-                "rule_scope": "group",
-                "restaurant_id": "",
-                "locator_type": locator_type,
-                "locator_value": "3001",
-                "global_item_id": "global-vanilla",
-                "global_variant_id": "global-regular",
-                "price": price,
-                "provenance": "fixture",
-                "menu_group_revision": 8,
-            }
-            for locator_type, price in (("pos_item", "310.00"), ("pos_addon", "40.00"))
-        ]
-        cap = shared_capability(revision=7)
-        pages = [
-            snapshot_page("items", [item]),
-            snapshot_page("variants", [variant]),
-            snapshot_page("redirects", []),
-            snapshot_page("rules", colliding_rules),
-        ]
-        with patch(
-            "src.core.global_menu_sync.require_global_menu_capability",
-            return_value=cap,
-        ), patch(
-            "src.core.global_menu_sync.resolve_global_menu_capability",
-            return_value=cap,
-        ), patch(
-            "src.core.global_menu_sync.pull_global_menu_status",
-            return_value={"status": "applied"},
-        ), patch(
-            "src.core.global_menu_sync.get_global_menu_snapshot_endpoint",
-            return_value="https://cloud/snapshot",
-        ), patch(
-            "src.core.global_menu_sync.get_global_menu_events_endpoint",
-            return_value="https://cloud/events",
-        ), patch(
-            "src.core.global_menu_sync._fetch_page",
-            side_effect=[{"error": None, **page} for page in pages],
-        ):
-            result = pull_global_menu_state(self.conn, auth="sync-key")
-
-        self.assertEqual(result["status"], "error")
-        self.assertIn("both item and addon", result["error"])
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT printf('%.2f', price) FROM menu_item_variants WHERE order_item_id='1001'"
-            ).fetchone()[0],
-            "290.00",
-        )
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM global_menu_mapping_rules").fetchone()[0],
-            2,
-        )
-        quarantine = self.conn.execute(
-            """
-            SELECT error_code FROM global_menu_sync_quarantine
-            WHERE resolved_at IS NULL
-            """
-        ).fetchone()
-        self.assertEqual(quarantine[0], "global_menu_locator_kind_collision")
-        state = self.conn.execute(
-            "SELECT bootstrap_status, catalog_revision FROM global_menu_state WHERE singleton_id=1"
-        ).fetchone()
-        self.assertEqual(tuple(state), ("error", 7))
-
-    def test_shared_pull_commits_four_sections_then_drains_the_pinned_tail(self) -> None:
-        payload = shared_catalog_payload()
-
-        def snapshot_page(section: str, rows: list[Dict[str, Any]]) -> Dict[str, Any]:
-            return {
-                "schema_version": 1,
-                "menu_group_id": "group-desserts",
-                "menu_group_revision": 7,
-                "snapshot_watermark": {
-                    "event_seq": 7,
-                    "menu_group_revision": 7,
-                },
-                "section": section,
-                "rows": rows,
-                "next_cursor": None,
-                "has_more": False,
-            }
-
-        item_rows = [
-            {
-                "global_item_id": row["global_menu_item_id"],
-                "canonical_name": row["canonical_name"],
-                "canonical_type": row["canonical_type"],
-                "is_verified": row["is_verified"],
-                "lifecycle_state": row["lifecycle_state"],
-            }
-            for row in payload["items"]
-        ]
-        variant_rows = [
-            {
-                "global_variant_id": row["global_variant_id"],
-                "canonical_name": row["canonical_name"],
-                "unit": row["unit"],
-                "value": "300.00",
-                "is_verified": row["is_verified"],
-                "lifecycle_state": row["lifecycle_state"],
-            }
-            for row in payload["variants"]
-        ]
-        rule_rows = [
-            {
-                "rule_scope": "group",
-                "restaurant_id": "",
-                "locator_type": (
-                    "pos_item" if row["locator_kind"] == "pos-item" else "pos_addon"
-                ),
-                "locator_value": row["locator_value"],
-                "global_item_id": row["target_global_menu_item_id"],
-                "global_variant_id": row["target_global_variant_id"] or "",
-                "price": row["price"],
-                "provenance": row["provenance"],
-                "menu_group_revision": 7,
-            }
-            for row in payload["mapping_rules"]
-        ]
-        event_tail = {
-            "schema_version": 1,
-            "menu_group_id": "group-desserts",
-            "menu_group_revision": 7,
-            "event_head_seq": 7,
-            "events": [],
-            "next_cursor": 7,
-            "has_more": False,
-        }
-        pages = [
-            snapshot_page("items", item_rows),
-            snapshot_page("variants", variant_rows),
-            snapshot_page("redirects", []),
-            snapshot_page("rules", rule_rows),
-            event_tail,
-        ]
-
-        def current_capability(*_args: Any, **_kwargs: Any) -> GlobalMenuCapabilityStatus:
-            row = self.conn.execute(
-                """
-                SELECT catalog_revision, mutation_revision, snapshot_cursor,
-                       event_cursor, bootstrap_status, coverage_linked,
-                       coverage_total
-                FROM global_menu_state WHERE singleton_id=1
-                """
-            ).fetchone()
-            return replace(
-                shared_capability(revision=int(row[0] or 0)),
-                mutation_revision=int(row[1] or 0),
-                snapshot_cursor=row[2],
-                event_cursor=row[3],
-                bootstrap_status=str(row[4]),
-                coverage_linked=int(row[5] or 0),
-                coverage_total=int(row[6] or 0),
-            )
-
-        with patch(
-            "src.core.global_menu_sync.require_global_menu_capability",
-            side_effect=current_capability,
-        ), patch(
-            "src.core.global_menu_sync.resolve_global_menu_capability",
-            side_effect=current_capability,
-        ), patch(
-            "src.core.global_menu_sync.pull_global_menu_status",
-            return_value={"status": "applied"},
-        ), patch(
-            "src.core.global_menu_sync.get_global_menu_snapshot_endpoint",
-            return_value="https://cloud/snapshot",
-        ), patch(
-            "src.core.global_menu_sync.get_global_menu_events_endpoint",
-            return_value="https://cloud/events",
-        ), patch(
-            "src.core.global_menu_sync._fetch_page",
-            side_effect=[{"error": None, **page} for page in pages],
-        ) as transport:
-            result = pull_global_menu_state(self.conn, auth="sync-key")
-
-        self.assertEqual(result["status"], "applied")
-        self.assertEqual(result["stream"], "events")
-        self.assertEqual(transport.call_count, 5)
-        state = self.conn.execute(
-            """
-            SELECT bootstrap_status, catalog_revision, event_cursor
-            FROM global_menu_state WHERE singleton_id=1
-            """
-        ).fetchone()
-        self.assertEqual(tuple(state), ("complete", 7, "7"))
-        self.assertEqual(
-            [
-                tuple(row)
-                for row in self.conn.execute(
-                    """
-                    SELECT order_item_id, printf('%.2f', price)
-                    FROM menu_item_variants ORDER BY order_item_id
-                    """
-                ).fetchall()
-            ],
-            [("1001", "290.00"), ("2001", "40.00")],
-        )
 
     def test_cycle_rejected_without_advancing_prior_revision_or_cursor(self) -> None:
         payload = dict(self.fixture)
@@ -3048,6 +2182,111 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             ("global-vanilla", "global-mini"),
         )
         self.assertEqual(tuple(row[2:]), (668, 0))
+
+    def test_a_peer_rule_for_the_same_pos_id_never_moves_this_restaurant(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        owner = self.conn.execute(
+            "SELECT local_menu_item_id FROM menu_item_global_links "
+            "WHERE global_menu_item_id='global-vanilla' AND is_projection_owner=1"
+        ).fetchone()[0]
+        old_variant = self.conn.execute(
+            "SELECT local_variant_id FROM variant_global_links "
+            "WHERE global_variant_id='global-regular' AND is_projection_owner=1"
+        ).fetchone()[0]
+        self.conn.execute(
+            """
+            INSERT INTO menu_item_variants (
+                order_item_id, menu_item_id, variant_id, is_verified,
+                assignment_seq, pending_local
+            ) VALUES ('1001', ?, ?, 0, 668, 0)
+            """,
+            (owner, old_variant),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name, unit, value,
+                lifecycle_state, server_revision
+            ) VALUES ('global-mini', 'group-desserts', 'Mini Tub', 'GMS', 160,
+                      'active', 8)
+            """
+        )
+        ensure_variant_projection_owner(self.conn, "global-mini")
+        # The peer restaurant sells a different product under the same numeric
+        # Petpooja id, so its reviewed rule must never authorize a move here.
+        self.conn.execute(
+            """
+            INSERT INTO global_menu_mapping_rules (
+                rule_id, menu_group_id, locator_scope, restaurant_id,
+                locator_kind, locator_value, normalized_locator,
+                target_global_menu_item_id, target_global_variant_id,
+                provenance, is_verified, lifecycle_state, server_revision
+            ) VALUES ('rule-rest-2-collides', 'group-desserts', 'restaurant',
+                      'rest-2', 'pos-item', '1001', '1001', 'global-vanilla',
+                      'global-mini', 'reviewed-pos', 1, 'active', 8)
+            """
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM global_menu_mapping_rules "
+                "WHERE locator_kind='pos-item' AND normalized_locator='1001'"
+            ).fetchone()[0],
+            2,
+        )
+
+        result = apply_global_assignment_rows(
+            self.conn,
+            [{
+                "order_item_id": "1001",
+                "global_menu_item_id": "global-vanilla",
+                "global_variant_id": "global-mini",
+                "last_seq": 25,
+            }],
+            server_revision=8,
+            capability=capability(revision=8, complete=False),
+        )
+        row = self.conn.execute(
+            """
+            SELECT menu_item_id, variant_id, assignment_seq, pending_local
+            FROM menu_item_variants WHERE order_item_id='1001'
+            """
+        ).fetchone()
+
+        self.assertEqual(result["rows_recovered_reviewed_locator"], 0)
+        self.assertEqual(result["rows_applied"], 0)
+        self.assertEqual(result["rows_stale"], 1)
+        self.assertEqual(
+            global_ids_for_local(self.conn, row[0], row[1]),
+            ("global-vanilla", "global-regular"),
+        )
+        self.assertEqual(tuple(row[2:]), (668, 0))
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT target_global_variant_id FROM global_menu_mapping_rules "
+                "WHERE rule_id='rule-rest-1-pos'"
+            ).fetchone()[0],
+            "global-regular",
+        )
+
+        # Control: the identical payload is authorized once the selected
+        # restaurant is the one that owns the colliding rule.
+        peer = apply_global_assignment_rows(
+            self.conn,
+            [{
+                "order_item_id": "1001",
+                "global_menu_item_id": "global-vanilla",
+                "global_variant_id": "global-mini",
+                "last_seq": 25,
+            }],
+            server_revision=8,
+            capability=capability("rest-2", revision=8, complete=False),
+        )
+        self.assertEqual(peer["rows_recovered_reviewed_locator"], 1)
 
     def test_pending_local_row_is_not_legacy_recovered(self) -> None:
         apply_global_menu_payload_page(
@@ -3643,186 +2882,6 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             },
         })
 
-    def test_price_update_is_normalized_to_the_exact_revision_1_7_payload(self) -> None:
-        active_shared = capability(
-            revision=5,
-            group_id="group-1",
-            capabilities=(
-                "global_menu_v1",
-                "global_menu_resolution_v1",
-                "global_menu_mutations_v1",
-                GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-            ),
-        )
-        response = {
-            "schema_version": 1,
-            "menu_group_id": "group-1",
-            "menu_group_revision": 5,
-            "mutation_type": "global_locator.price_update",
-            "payload": {
-                "locator_type": "pos_item",
-                "locator_value": "1001",
-                "price": "310.00",
-            },
-            "preview_digest": "digest-price",
-            "revision_current": True,
-            "conflicts": [],
-            "commit_allowed": True,
-        }
-        with patch(
-            "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=active_shared,
-        ), patch(
-            "src.core.global_menu_mutation._urls",
-            return_value=("https://cloud/mutations", "sync-key"),
-        ), patch(
-            "src.core.global_menu_mutation._headers", return_value={}
-        ), patch(
-            "src.core.global_menu_mutation._request_json",
-            return_value=(200, response),
-        ) as transport:
-            preview_global_mutation(
-                Mock(),
-                action={
-                    "mutation_type": "global_locator.price_update",
-                    "payload": {
-                        "locator_type": "pos_item",
-                        "locator_value": "1001",
-                        "price": "310",
-                        "ignored": "not-authority",
-                    },
-                },
-            )
-        self.assertEqual(
-            transport.call_args.kwargs["payload"]["payload"],
-            {
-                "locator_type": "pos_item",
-                "locator_value": "1001",
-                "price": "310.00",
-            },
-        )
-
-        with patch(
-            "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=active_shared,
-        ):
-            with self.assertRaisesRegex(GlobalMenuMutationError, "at most two decimals"):
-                preview_global_mutation(
-                    Mock(),
-                    action={
-                        "mutation_type": "global_locator.price_update",
-                        "payload": {
-                            "locator_type": "pos_item",
-                            "locator_value": "1001",
-                            "price": "310.001",
-                        },
-                    },
-                )
-
-    def test_shared_pos_map_and_group_read_models_use_group_scope_and_price(self) -> None:
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        apply_analytics_schema(conn)
-        conn.execute(
-            """
-            INSERT INTO global_menu_items (
-                global_menu_item_id, menu_group_id, canonical_name,
-                canonical_type, is_verified, lifecycle_state, server_revision
-            ) VALUES ('global-kulfi', 'group-1', 'Pistachio Kulfi',
-                      'Dessert', 1, 'active', 7)
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO global_variants (
-                global_variant_id, menu_group_id, canonical_name, unit, value,
-                is_verified, lifecycle_state, server_revision
-            ) VALUES ('global-regular', 'group-1', 'Regular', 'COUNT', 1,
-                      1, 'active', 7)
-            """
-        )
-        conn.execute(
-            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
-            "VALUES ('local-kulfi', 'Pistachio Kulfi', 'Dessert', 1)"
-        )
-        conn.execute(
-            "INSERT INTO variants (variant_id, variant_name, unit, value, is_verified) "
-            "VALUES ('local-regular', 'Regular', 'COUNT', 1, 1)"
-        )
-        conn.execute(
-            "INSERT INTO menu_item_global_links "
-            "(local_menu_item_id, global_menu_item_id, server_revision, is_projection_owner) "
-            "VALUES ('local-kulfi', 'global-kulfi', 7, 1)"
-        )
-        conn.execute(
-            "INSERT INTO variant_global_links "
-            "(local_variant_id, global_variant_id, server_revision, is_projection_owner) "
-            "VALUES ('local-regular', 'global-regular', 7, 1)"
-        )
-        conn.execute(
-            "INSERT INTO menu_item_variants "
-            "(order_item_id, menu_item_id, variant_id, price, is_verified) "
-            "VALUES ('1001', 'local-kulfi', 'local-regular', '290.00', 1)"
-        )
-        conn.execute(
-            """
-            INSERT INTO global_menu_mapping_rules (
-                rule_id, menu_group_id, locator_scope, restaurant_id,
-                locator_kind, locator_value, normalized_locator,
-                target_global_menu_item_id, target_global_variant_id, price,
-                provenance, is_verified, lifecycle_state, server_revision
-            ) VALUES ('rule-1001', 'group-1', 'group', NULL, 'pos-item',
-                      '1001', '1001', 'global-kulfi', 'global-regular',
-                      '290.00', 'reviewed', 1, 'active', 7)
-            """
-        )
-        shared = capability(
-            revision=7,
-            group_id="group-1",
-            capabilities=(
-                "global_menu_v1",
-                "global_menu_resolution_v1",
-                GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY,
-            ),
-        )
-        with patch(
-            "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=shared,
-        ):
-            action = build_global_action_from_local(
-                conn,
-                mutation_type="remap",
-                target_local_menu_item_id="local-kulfi",
-                target_local_variant_id="local-regular",
-                details={
-                    "locator_type": "pos_item",
-                    "locator_value": "1001",
-                },
-            )
-        self.assertEqual(
-            action["payload"],
-            {
-                "rule_scope": "group",
-                "restaurant_id": "",
-                "locator_type": "pos_item",
-                "locator_value": "1001",
-                "global_item_id": "global-kulfi",
-                "global_variant_id": "global-regular",
-                "confirm_group_wide": True,
-                "price": "290.00",
-            },
-        )
-
-        catalog = fetch_group_menu_catalog(conn, "group-1")
-        matrix = fetch_group_menu_matrix(conn, "group-1")
-        self.assertEqual(catalog["items"][0]["canonical_name"], "Pistachio Kulfi")
-        self.assertEqual(catalog["items"][0]["active_pos_rules"], 1)
-        self.assertEqual(matrix[0]["locator_type"], "pos_item")
-        self.assertEqual(matrix[0]["price"], "290.00")
-        self.assertEqual(matrix[0]["menu_item_id"], "local-kulfi")
-        conn.close()
-
     def test_global_commit_holds_cloud_pull_lock_through_reconciliation(self) -> None:
         def assert_locked(_conn, *, preview):
             self.assertTrue(CLOUD_PULL_LOCK.locked())
@@ -3836,8 +2895,8 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertFalse(CLOUD_PULL_LOCK.locked())
 
-    def test_shadow_item_create_preview_is_committable_with_incomplete_coverage(self) -> None:
-        shadow = replace(
+    def test_item_create_preview_is_committable_with_incomplete_coverage(self) -> None:
+        incomplete_coverage = replace(
             capability(
                 capabilities=("global_menu_v1", "global_menu_resolution_v1")
             ),
@@ -3851,8 +2910,8 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         }
         response = {
             "schema_version": 1,
-            "menu_group_id": shadow.menu_group_id,
-            "menu_group_revision": shadow.mutation_revision,
+            "menu_group_id": incomplete_coverage.menu_group_id,
+            "menu_group_revision": incomplete_coverage.mutation_revision,
             "mutation_type": "global_item.create",
             "payload": payload,
             "preview_digest": "digest-create",
@@ -3862,7 +2921,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         }
         with patch(
             "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=shadow,
+            return_value=incomplete_coverage,
         ) as gate, patch(
             "src.core.global_menu_mutation._urls",
             return_value=("https://cloud/mutations", "sync-key"),
@@ -3969,7 +3028,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertEqual(scopes["pos_addon"], "restaurant")
         self.assertEqual(scopes["alias"], "group")
 
-    def test_verified_unlinked_pair_enters_shadow_resolution_queue_only(self) -> None:
+    def test_verified_unlinked_pair_enters_the_resolution_queue_only(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -4204,8 +3263,8 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             "coverage_complete": True,
         }
         attribution = {
-            "employee": commit_fixture["request"]["uploaded_by"],
-            "device": commit_fixture["request"]["uploaded_from"],
+            "employee": {"employee_id": "ops", "name": "ops"},
+            "device": {"install_id": "dev-1"},
         }
         with patch(
             "src.core.global_menu_mutation.require_global_menu_capability",
@@ -4232,6 +3291,8 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             # Preview returns the server-normalized payload. Echoing that
             # canonical form keeps the approved digest stable.
             "payload": preview_fixture["payload"]["payload"],
+            "uploaded_by": attribution["employee"],
+            "uploaded_from": attribution["device"],
         }
         self.assertEqual(sent, expected)
         self.assertEqual(result["status"], "success")

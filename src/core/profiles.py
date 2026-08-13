@@ -19,7 +19,6 @@ from src.core.db.control import (
 
 ALL_STORES_TOKEN = "__all__"
 PROFILE_SCHEMA_VERSION = 1
-SHARED_POS_CATALOG_CAPABILITY = "global_menu_shared_pos_catalog_v1"
 
 
 class ProfileError(RuntimeError):
@@ -653,17 +652,7 @@ def bind_and_select_profile(
             )
         _write_identity(path, profile.restaurant_id)
         if profile.clean_rebuild_status == "required":
-            # No old file existed, so no archive is needed; the fresh schema
-            # still owes the ordered catalog/order/assignment/history/
-            # observation hydration when shared-POS is advertised.
-            mark_profile_clean_rebuild(
-                profile.restaurant_id,
-                (
-                    "rebuilding"
-                    if SHARED_POS_CATALOG_CAPABILITY in profile.menu_capabilities
-                    else "complete"
-                ),
-            )
+            mark_profile_clean_rebuild(profile.restaurant_id, "complete")
 
     _persist_restaurant_selection(profile.restaurant_id)
     return get_profile(profile.restaurant_id)
@@ -713,11 +702,7 @@ def upsert_allowed_restaurants(restaurants: Sequence[Dict[str, Any]]) -> List[Re
                     if str(value).strip()
                 }
             )
-            clean_rebuild_status = (
-                "required"
-                if SHARED_POS_CATALOG_CAPABILITY in menu_capabilities
-                else None
-            )
+            clean_rebuild_status = None
             current = conn.execute(
                 "SELECT database_path FROM restaurant_profiles WHERE restaurant_id=?", (rid,)
             ).fetchone()

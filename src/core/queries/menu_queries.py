@@ -572,7 +572,9 @@ def fetch_menu_matrix(conn):
     return pd.DataFrame([dict(row) for row in cursor.fetchall()])
 
 
-def fetch_group_menu_catalog(conn, menu_group_id: str) -> Dict[str, List[Dict[str, Any]]]:
+def fetch_group_menu_catalog(
+    conn, menu_group_id: str, restaurant_id: Optional[str] = None
+) -> Dict[str, List[Dict[str, Any]]]:
     """Return active group-owned items and variants, never restaurant analytics."""
     items = [
         {
@@ -588,15 +590,16 @@ def fetch_group_menu_catalog(conn, menu_group_id: str) -> Dict[str, List[Dict[st
             LEFT JOIN global_menu_mapping_rules r
               ON r.target_global_menu_item_id=i.global_menu_item_id
              AND r.menu_group_id=i.menu_group_id
-             AND r.locator_scope='group'
+             AND r.locator_scope='restaurant'
              AND r.locator_kind IN ('pos-item', 'pos-addon')
              AND r.lifecycle_state='active'
+             AND (? IS NULL OR r.restaurant_id=?)
             WHERE i.menu_group_id=? AND i.lifecycle_state='active'
             GROUP BY i.global_menu_item_id, i.canonical_name, i.canonical_type,
                      i.is_verified, i.server_revision, i.updated_at
             ORDER BY i.canonical_type, i.canonical_name, i.global_menu_item_id
             """,
-            (menu_group_id,),
+            (restaurant_id, restaurant_id, menu_group_id),
         ).fetchall()
     ]
     variants = [
@@ -618,13 +621,16 @@ def fetch_group_menu_catalog(conn, menu_group_id: str) -> Dict[str, List[Dict[st
     return {"items": items, "variants": variants}
 
 
-def fetch_group_menu_matrix(conn, menu_group_id: str) -> List[Dict[str, Any]]:
-    """Return the active shared-POS rules that define the group menu matrix."""
+def fetch_group_menu_matrix(
+    conn, menu_group_id: str, restaurant_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return restaurant-scoped POS mapping rules for the selected member."""
     rows = conn.execute(
         """
         SELECT r.rule_id,
                REPLACE(r.locator_kind, '-', '_') AS locator_type,
                r.locator_value,
+               r.restaurant_id,
                r.target_global_menu_item_id AS global_menu_item_id,
                r.target_global_variant_id AS global_variant_id,
                i.canonical_name AS name,
@@ -632,7 +638,6 @@ def fetch_group_menu_matrix(conn, menu_group_id: str) -> List[Dict[str, Any]]:
                COALESCE(v.canonical_name, 'No variant') AS variant_name,
                v.unit,
                v.value,
-               printf('%.2f', r.price) AS price,
                r.is_verified,
                r.server_revision,
                miv.menu_item_id,
@@ -648,13 +653,13 @@ def fetch_group_menu_matrix(conn, menu_group_id: str) -> List[Dict[str, Any]]:
          AND v.lifecycle_state='active'
         LEFT JOIN menu_item_variants miv ON miv.order_item_id=r.locator_value
         WHERE r.menu_group_id=?
-          AND r.locator_scope='group'
+          AND r.locator_scope='restaurant'
           AND r.locator_kind IN ('pos-item', 'pos-addon')
           AND r.lifecycle_state='active'
-          AND r.price IS NOT NULL
+          AND (? IS NULL OR r.restaurant_id=?)
         ORDER BY r.locator_kind, r.locator_value, r.rule_id
         """,
-        (menu_group_id,),
+        (menu_group_id, restaurant_id, restaurant_id),
     ).fetchall()
     return [
         {

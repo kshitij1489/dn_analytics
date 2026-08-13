@@ -99,42 +99,30 @@ def _normalize_mutation_payload(
     *,
     capability,
 ) -> Dict[str, Any]:
-    """Normalize revision-1.7 shared-POS mutations before the wire boundary."""
+    """Force POS locators onto restaurant scope before the wire boundary."""
     payload = dict(raw_payload)
     if mutation_type == "global_locator.price_update":
-        if not capability.shared_pos_catalog_ready:
-            error = GlobalMenuMutationError(
-                "Shared POS catalog price changes are not ready for this restaurant"
-            )
-            error.code = "global_menu_shared_pos_catalog_required"
-            raise error
-        locator_type = str(payload.get("locator_type") or "").strip()
-        locator_value = str(payload.get("locator_value") or "").strip()
-        if locator_type not in {"pos_item", "pos_addon"}:
+        error = GlobalMenuMutationError(
+            "Mapping rules do not carry price; restaurant prices stay restaurant-owned"
+        )
+        error.code = "global_menu_operation_unsupported"
+        raise error
+    if mutation_type != "global_locator.map":
+        return payload
+    if payload.get("price") is not None:
+        raise GlobalMenuMutationError(
+            "A mapping rule cannot carry a price; prices stay restaurant-owned"
+        )
+    locator_type = str(payload.get("locator_type") or "").strip()
+    if locator_type in {"pos_item", "pos_addon"}:
+        payload["rule_scope"] = "restaurant"
+        payload["restaurant_id"] = str(
+            payload.get("restaurant_id") or capability.restaurant_id or ""
+        ).strip()
+        payload["confirm_group_wide"] = False
+        if not payload["restaurant_id"]:
             raise GlobalMenuMutationError(
-                "Global price updates require a pos_item or pos_addon locator"
-            )
-        if not locator_value:
-            raise GlobalMenuMutationError(
-                "Global price updates require a locator value"
-            )
-        return {
-            "locator_type": locator_type,
-            "locator_value": locator_value,
-            "price": _normalize_price(payload.get("price")),
-        }
-
-    if mutation_type == "global_locator.map":
-        locator_type = str(payload.get("locator_type") or "").strip()
-        is_pos = locator_type in {"pos_item", "pos_addon"}
-        if is_pos and capability.shared_pos_catalog_advertised:
-            payload["rule_scope"] = "group"
-            payload["restaurant_id"] = ""
-            payload["confirm_group_wide"] = True
-            payload["price"] = _normalize_price(payload.get("price"))
-        elif payload.get("price") is not None:
-            raise GlobalMenuMutationError(
-                "A mapping price is valid only for a shared group POS locator"
+                "A POS locator mapping requires the selected restaurant id"
             )
     return payload
 
@@ -420,61 +408,42 @@ def build_global_action_from_local(
         if locator_type not in {"pos_item", "pos_addon", "itemcode", "alias"}:
             raise GlobalMenuMutationError("Global locator mapping has an invalid locator type")
         capability = require_global_menu_capability(conn)
-        shared_pos_locator = (
-            locator_type in {"pos_item", "pos_addon"}
-            and capability.shared_pos_catalog_advertised
-        )
-        expected_scope = (
-            "group"
-            if shared_pos_locator or locator_type in {"itemcode", "alias"}
-            else "restaurant"
-        )
+        is_pos = locator_type in {"pos_item", "pos_addon"}
+        expected_scope = "restaurant" if is_pos else "group"
         rule_scope = str(detail.get("rule_scope") or expected_scope).strip()
         if rule_scope != expected_scope:
             raise GlobalMenuMutationError(
                 f"Global {locator_type} locators must use {expected_scope} scope"
             )
-        confirm_group_wide = bool(detail.get("confirm_group_wide")) or shared_pos_locator
+        confirm_group_wide = bool(detail.get("confirm_group_wide"))
         if rule_scope == "group" and not confirm_group_wide:
             raise GlobalMenuMutationError(
                 "A group-wide itemcode or alias mapping requires explicit confirmation"
             )
-        price = detail.get("price")
-        if shared_pos_locator and price is None:
-            row = conn.execute(
-                "SELECT price FROM menu_item_variants WHERE order_item_id=?",
-                (locator_value,),
-            ).fetchone()
-            price = row[0] if row is not None else None
-        if shared_pos_locator:
-            price = _normalize_price(price)
+        restaurant_id = (
+            str(detail.get("restaurant_id") or capability.restaurant_id or "").strip()
+            if is_pos
+            else ""
+        )
+        if is_pos and not restaurant_id:
+            raise GlobalMenuMutationError(
+                "A POS locator mapping requires the selected restaurant id"
+            )
         return {
             "mutation_type": "global_locator.map",
             "payload": {
                 "rule_scope": rule_scope,
-                "restaurant_id": (
-                    ""
-                    if shared_pos_locator
-                    else str(detail.get("restaurant_id") or "").strip()
-                ),
+                "restaurant_id": restaurant_id,
                 "locator_type": locator_type,
                 "locator_value": locator_value,
                 "global_item_id": target["global_item_id"],
                 "global_variant_id": target.get("global_variant_id") or "",
                 "confirm_group_wide": confirm_group_wide,
-                **({"price": price} if shared_pos_locator else {}),
             },
         }
 
     if alias in {"price_update", "global_locator.price_update"}:
-        return {
-            "mutation_type": "global_locator.price_update",
-            "payload": {
-                "locator_type": str(detail.get("locator_type") or "").strip(),
-                "locator_value": str(detail.get("locator_value") or "").strip(),
-                "price": detail.get("price"),
-            },
-        }
+        _unsupported_local_mutation("global_locator.price_update")
 
     if alias in {"undo", "global_menu.undo"}:
         mutation_id = str(
@@ -576,10 +545,9 @@ def _validate_preview_for_commit(conn, preview: Mapping[str, Any]) -> Any:
         error = GlobalMenuMutationError("Global menu preview is stale; preview again")
         error.code = "global_menu_preview_stale"
         raise error
-    coverage_required = not is_global_menu_resolution_mutation(mutation_type)
-    if (coverage_required and not preview.get("coverage_complete")) or preview.get("conflicts"):
+    if preview.get("conflicts"):
         error = GlobalMenuMutationError(
-            "Global menu commit is blocked by incomplete coverage or unresolved conflicts"
+            "Global menu commit is blocked by unresolved preview conflicts"
         )
         error.code = "global_menu_preview_blocked"
         raise error
@@ -689,11 +657,7 @@ def global_resolution_context(
         if not value or key in seen:
             return
         seen.add(key)
-        shared_pos_locator = (
-            locator_type in {"pos_item", "pos_addon"}
-            and capability.shared_pos_catalog_advertised
-        )
-        group_wide = locator_type in {"itemcode", "alias"} or shared_pos_locator
+        group_wide = locator_type in {"itemcode", "alias"}
         locators.append(
             {
                 "locator_type": locator_type,
@@ -701,11 +665,6 @@ def global_resolution_context(
                 "rule_scope": "group" if group_wide else "restaurant",
                 "restaurant_id": "" if group_wide else capability.restaurant_id,
                 "confirm_group_wide": group_wide,
-                **(
-                    {"price": _normalize_price(price, field="menu_item_variants.price")}
-                    if shared_pos_locator
-                    else {}
-                ),
             }
         )
 

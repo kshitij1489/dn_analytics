@@ -1,10 +1,10 @@
 {
-  "description": "Global menu group payload fixtures (contract v1.7, §25). Base path /desktop-analytics-sync/global-menu/, auth Authorization: Bearer <SYNC_API_KEY> plus the required X-Restaurant-ID selector; the two mutation routes additionally require X-Global-Menu-Key. Global identifiers below are illustrative — they are server-issued opaque tokens and are never derived from a name.",
+  "description": "Global menu group payload fixtures (contract v1.9, §25). Base path /desktop-analytics-sync/global-menu/, auth Authorization: Bearer <SYNC_API_KEY> plus the required X-Restaurant-ID selector; the two mutation routes additionally require X-Global-Menu-Key. Global identifiers below are illustrative — they are server-issued opaque tokens and are never derived from a name. Every POS locator rule is restaurant-qualified; there is no lifecycle rung, no shared-POS catalog and no alias review queue.",
   "fixtures": [
     {
-      "name": "global_menu_snapshot_items_empty",
-      "description": "The canonical catalog of a group that has been opened but holds nothing yet. The versioned snapshot watermark is null because no global event has been appended (§25.5).",
-      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot",
+      "name": "global_menu_snapshot_redirects_empty",
+      "description": "A section that is legitimately empty. `items` never can be: a group that owns no canonical item is a deployment error and every /global-menu/ route refuses it (§25.1). `redirects` is empty until the group's first merge, and the snapshot watermark is null because no global event has been appended (§25.5).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=redirects",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
         "X-Restaurant-ID": "1c8w7fp500"
@@ -18,7 +18,7 @@
           "event_seq": null,
           "menu_group_revision": 0
         },
-        "section": "items",
+        "section": "redirects",
         "rows": [],
         "next_cursor": null,
         "has_more": false
@@ -26,7 +26,7 @@
     },
     {
       "name": "global_menu_snapshot_items",
-      "description": "One page of canonical items. Redirected and tombstoned rows are served explicitly with their lifecycle_state — omission is never deletion (§25.5).",
+      "description": "The canonical catalog, identical for every member of the group. Global identifiers are server-issued opaque tokens and are never derived from a name, so a rename changes canonical_name and nothing else (§25.4).",
       "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=items&limit=500",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -44,12 +44,20 @@
         "section": "items",
         "rows": [
           {
+            "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+            "canonical_name": "Eggless Vanilla Ice Cream",
+            "canonical_type": "Dessert",
+            "is_verified": false,
+            "lifecycle_state": "active",
+            "updated_at": "2026-08-09T08:08:55.056714+00:00"
+          },
+          {
             "global_item_id": "1795ed65318544a9907caab6202b9d42",
             "canonical_name": "Vanilla Ice Cream",
             "canonical_type": "Dessert",
             "is_verified": false,
             "lifecycle_state": "active",
-            "updated_at": "2026-08-09T08:08:55.045809+00:00"
+            "updated_at": "2026-08-09T08:08:55.056714+00:00"
           }
         ],
         "next_cursor": null,
@@ -58,7 +66,7 @@
     },
     {
       "name": "global_menu_snapshot_rules",
-      "description": "The shared-Petpooja policy projects the same group-scoped POS entry and canonical decimal price to every member. GlobalMenuMappingRule is the allowed item/variant pair; there is no separate GlobalMenuItemVariant (§25.1, §25.5).",
+      "description": "Mapping rules, filtered to the requesting restaurant plus every group-scoped rule. A pos_item/pos_addon rule is restaurant-qualified without exception — the number is issued by one outlet's Petpooja account — while itemcode and alias rules are group-wide and each one was confirmed by a human (§25.6). Rules carry no price: a menu is shared, prices are not.",
       "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=rules&limit=500",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -77,13 +85,34 @@
         "rows": [
           {
             "rule_id": 1,
-            "rule_scope": "group",
-            "restaurant_id": "",
+            "rule_scope": "restaurant",
+            "restaurant_id": "1c8w7fp500",
             "locator_type": "pos_item",
             "locator_value": "1001",
             "global_item_id": "1795ed65318544a9907caab6202b9d42",
             "global_variant_id": "",
-            "price": "290.00",
+            "provenance": "backfill",
+            "menu_group_revision": 0
+          },
+          {
+            "rule_id": 2,
+            "rule_scope": "restaurant",
+            "restaurant_id": "1c8w7fp500",
+            "locator_type": "pos_item",
+            "locator_value": "1002",
+            "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+            "global_variant_id": "",
+            "provenance": "backfill",
+            "menu_group_revision": 0
+          },
+          {
+            "rule_id": 4,
+            "rule_scope": "group",
+            "restaurant_id": "",
+            "locator_type": "itemcode",
+            "locator_value": "IC-VAN",
+            "global_item_id": "1795ed65318544a9907caab6202b9d42",
+            "global_variant_id": "",
             "provenance": "backfill",
             "menu_group_revision": 0
           }
@@ -94,7 +123,7 @@
     },
     {
       "name": "global_menu_events_page",
-      "description": "The ordered semantic tail a client applies after a snapshot. Each event carries complete authoritative catalog/rule deltas plus explicit tombstones and assignment-refresh instructions (§25.6).",
+      "description": "The event tail: one complete, replayable semantic delta per accepted mutation. Another restaurant's POS rules are withheld here exactly as the snapshot withholds them, so replay cannot route around paging (§25.5).",
       "endpoint": "GET /desktop-analytics-sync/global-menu/events?after=0&limit=500",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -130,19 +159,19 @@
               },
               "items": [
                 {
-                  "global_item_id": "1795ed65318544a9907caab6202b9d42",
-                  "canonical_name": "Vanilla Ice Cream",
-                  "canonical_type": "Dessert",
-                  "is_verified": false,
-                  "lifecycle_state": "redirected",
-                  "updated_at": "2026-08-09T08:08:55.056714+00:00"
-                },
-                {
                   "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
                   "canonical_name": "Eggless Vanilla Ice Cream",
                   "canonical_type": "Dessert",
                   "is_verified": false,
                   "lifecycle_state": "active",
+                  "updated_at": "2026-08-09T08:08:55.056714+00:00"
+                },
+                {
+                  "global_item_id": "1795ed65318544a9907caab6202b9d42",
+                  "canonical_name": "Vanilla Ice Cream",
+                  "canonical_type": "Dessert",
+                  "is_verified": false,
+                  "lifecycle_state": "redirected",
                   "updated_at": "2026-08-09T08:08:55.056714+00:00"
                 }
               ],
@@ -158,13 +187,23 @@
               "mapping_rules": [
                 {
                   "rule_id": 1,
-                  "rule_scope": "group",
-                  "restaurant_id": "",
+                  "rule_scope": "restaurant",
+                  "restaurant_id": "1c8w7fp500",
                   "locator_type": "pos_item",
                   "locator_value": "1001",
                   "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
                   "global_variant_id": "",
-                  "price": "290.00",
+                  "provenance": "backfill",
+                  "menu_group_revision": 1
+                },
+                {
+                  "rule_id": 4,
+                  "rule_scope": "group",
+                  "restaurant_id": "",
+                  "locator_type": "itemcode",
+                  "locator_value": "IC-VAN",
+                  "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+                  "global_variant_id": "",
                   "provenance": "backfill",
                   "menu_group_revision": 1
                 }
@@ -188,7 +227,7 @@
     },
     {
       "name": "global_menu_status",
-      "description": "Lifecycle rung, advertised capabilities and per-restaurant global identity coverage. verified_coverage_complete is the gate an operator must reach before aggregation and mutations are enabled (§25.7).",
+      "description": "Advertised capabilities, catalog size and per-restaurant global identity coverage. Coverage is an operational diagnostic and gates nothing: a newly enrolled member is supposed to start with unlinked rows, and it resolves them through these same routes (§25.7).",
       "endpoint": "GET /desktop-analytics-sync/global-menu/status",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -198,11 +237,9 @@
       "payload": {
         "schema_version": 1,
         "menu_group_id": "group-1",
-        "status": "active",
         "menu_capabilities": [
           "global_menu_v1",
           "global_menu_resolution_v1",
-          "global_menu_shared_pos_catalog_v1",
           "global_menu_aggregation_v1",
           "global_menu_mutations_v1"
         ],
@@ -212,9 +249,7 @@
           "items": 2,
           "variants": 0,
           "redirects": 0,
-          "mapping_rules": 5,
-          "shared_pos_entries": 5,
-          "shared_pos_catalog_digest": "e2aa5538f4409745fbfa2f99812019ce6be84b65f39bf4dd7ecff18967f3270a"
+          "mapping_rules": 4
         },
         "restaurants": [
           {
@@ -224,38 +259,18 @@
             "verified_assignments": 2,
             "verified_assignments_linked": 2,
             "verified_assignments_unlinked": 0,
-            "verified_coverage_complete": true,
-            "has_verified_assignments": true,
-            "shared_pos_entries_observed": 5,
-            "shared_pos_entries_matching": 5,
-            "shared_pos_entries_missing": 0,
-            "shared_pos_peer_extras": 0,
-            "shared_pos_identity_mismatches": 0,
-            "shared_pos_price_mismatches": 0,
-            "shared_pos_catalog_complete": true,
             "restaurant_id": "1c8w7fp500"
           },
           {
-            "assignments": 2,
-            "assignments_linked": 2,
+            "assignments": 1,
+            "assignments_linked": 1,
             "assignments_unlinked": 0,
-            "verified_assignments": 2,
-            "verified_assignments_linked": 2,
+            "verified_assignments": 1,
+            "verified_assignments_linked": 1,
             "verified_assignments_unlinked": 0,
-            "verified_coverage_complete": true,
-            "has_verified_assignments": true,
-            "shared_pos_entries_observed": 3,
-            "shared_pos_entries_matching": 3,
-            "shared_pos_entries_missing": 2,
-            "shared_pos_peer_extras": 0,
-            "shared_pos_identity_mismatches": 0,
-            "shared_pos_price_mismatches": 0,
-            "shared_pos_catalog_complete": true,
             "restaurant_id": "9zz9zz9zz9"
           }
-        ],
-        "verified_coverage_complete": true,
-        "shared_pos_catalog_complete": true
+        ]
       }
     },
     {
@@ -333,7 +348,7 @@
     },
     {
       "name": "global_menu_mutation_preview_merge",
-      "description": "Impact of a merge across every member restaurant, written nowhere. preview_digest is what the commit must echo; commit_allowed is false while conflicts is non-empty (§25.8.1).",
+      "description": "The impact of one merge across every member restaurant, writing nothing. preview_digest binds the confirmation: commit re-derives this under the group lock and refuses if it moved (§25.8.1).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -351,7 +366,6 @@
       },
       "http_status": 200,
       "payload": {
-        "schema_version": 1,
         "status": "preview",
         "menu_group_id": "group-1",
         "menu_group_revision": 0,
@@ -367,6 +381,11 @@
               "assignments": 1,
               "mapping_rules": 2,
               "restaurant_id": "1c8w7fp500"
+            },
+            {
+              "assignments": 1,
+              "mapping_rules": 2,
+              "restaurant_id": "9zz9zz9zz9"
             }
           ],
           "totals": {
@@ -394,14 +413,15 @@
         },
         "conflicts": [],
         "commit_allowed": true,
-        "preview_digest": "724eb90c8d1aab3c2596e8ce5010676029f8ee84dc8017c57f30f50e54ec5e73",
+        "preview_digest": "<preview_digest from §25.8.1>",
         "expected_menu_group_revision": 0,
-        "revision_current": true
+        "revision_current": true,
+        "schema_version": 1
       }
     },
     {
-      "name": "global_menu_mutation_preview_price_update",
-      "description": "A current-price change previews one shared POS rule plus the local projection rows every member will refresh. Historical order prices are unaffected (§25.8.1).",
+      "name": "global_menu_mutation_preview_locator_map",
+      "description": "The enrolment mutation: one joining restaurant's unresolved POS id mapped to canonical identity the group already owns. rule_scope defaults to restaurant and cannot be anything else for a POS locator, so the impact names exactly one member and there is no group-wide reach to confirm (§25.8.4).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -410,58 +430,77 @@
       },
       "request": {
         "schema_version": 1,
-        "mutation_type": "global_locator.price_update",
-        "expected_menu_group_revision": 5,
+        "mutation_type": "global_locator.map",
+        "expected_menu_group_revision": 0,
         "payload": {
           "locator_type": "pos_item",
-          "locator_value": "1001",
-          "price": "310.00"
+          "locator_value": "8442",
+          "restaurant_id": "9zz9zz9zz9",
+          "global_item_id": "1795ed65318544a9907caab6202b9d42"
         }
       },
       "http_status": 200,
       "payload": {
-        "schema_version": 1,
         "status": "preview",
         "menu_group_id": "group-1",
-        "menu_group_revision": 5,
-        "mutation_type": "global_locator.price_update",
+        "menu_group_revision": 0,
+        "mutation_type": "global_locator.map",
         "payload": {
           "locator_type": "pos_item",
-          "locator_value": "1001",
-          "price": "310.00"
+          "locator_value": "8442",
+          "rule_scope": "restaurant",
+          "restaurant_id": "9zz9zz9zz9",
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": "",
+          "confirm_group_wide": false
         },
         "impact": {
           "restaurants": [
             {
-              "restaurant_id": "1c8w7fp500",
-              "projected_rows": 1
+              "assignments": 0,
+              "mapping_rules": 0,
+              "restaurant_id": "1c8w7fp500"
             },
             {
-              "restaurant_id": "9zz9zz9zz9",
-              "projected_rows": 1
+              "assignments": 1,
+              "mapping_rules": 1,
+              "restaurant_id": "9zz9zz9zz9"
             }
           ],
           "totals": {
+            "assignments": 1,
             "mapping_rules": 1,
-            "projected_rows": 2
+            "redirects": 0
           },
           "catalog": {
+            "target": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "canonical_name": "Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            }
+          },
+          "rule": {
+            "rule_scope": "restaurant",
+            "restaurant_id": "9zz9zz9zz9",
             "locator_type": "pos_item",
-            "locator_value": "1001",
-            "previous_price": "290.00",
-            "price": "310.00"
+            "locator_value": "8442",
+            "replaces_existing": false,
+            "previous_global_item_id": ""
           }
         },
         "conflicts": [],
         "commit_allowed": true,
-        "preview_digest": "a18aec891e47bf9c7c562d581090d160200a851fad647ddc0f103422908afa0e",
-        "expected_menu_group_revision": 5,
-        "revision_current": true
+        "preview_digest": "e5927579f7fc87ddc76886c4e7059ba2784219c41226ecd60a3cbc09c5bcff75",
+        "expected_menu_group_revision": 0,
+        "revision_current": true,
+        "schema_version": 1
       }
     },
     {
       "name": "global_menu_mutation_commit_merge",
-      "description": "One accepted global mutation. applied carries aggregate and per-restaurant counts, never a list of order rows; this exact body is replayed by the status route and by a duplicate mutation_id (§25.8.2).",
+      "description": "The accepted merge. The source is redirected rather than deleted and every member's assignments and rules are repointed in the same transaction; `marked` is the census undo compares against (§25.8.2).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -473,19 +512,10 @@
         "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
         "mutation_type": "global_item.merge",
         "expected_menu_group_revision": 0,
-        "preview_digest": "724eb90c8d1aab3c2596e8ce5010676029f8ee84dc8017c57f30f50e54ec5e73",
+        "preview_digest": "<preview_digest from §25.8.1>",
         "payload": {
           "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
           "target_global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10"
-        },
-        "uploaded_by": {
-          "employee_id": "E-1",
-          "name": "Ops Lead"
-        },
-        "uploaded_from": {
-          "device_id": "device-1",
-          "install_id": "install-1",
-          "device_label": "Front Desk"
         }
       },
       "http_status": 200,
@@ -506,6 +536,11 @@
               "assignments": 1,
               "mapping_rules": 2,
               "restaurant_id": "1c8w7fp500"
+            },
+            {
+              "assignments": 1,
+              "mapping_rules": 2,
+              "restaurant_id": "9zz9zz9zz9"
             }
           ],
           "totals": {
@@ -551,43 +586,47 @@
     },
     {
       "name": "global_menu_mutation_commit_item_create",
-      "description": "Adding a genuinely new product to the shared menu (§25.8.4). The backfill reconciles the menus that existed when a group opted in and never runs again over live authority, so this is the only supported way a dish added afterwards becomes canonical. It moves no assignment by itself — map a locator to the returned global_item_id next. Undoing it tombstones the row rather than deleting it.",
+      "description": "A product added after the group was formed becomes canonical here and nowhere else. There is no bootstrap to rerun: create plus global_locator.map is the only path from a local dish to shared identity (§25.8.4).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
         "X-Restaurant-ID": "1c8w7fp500",
-        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEY>"
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
       },
       "request": {
         "schema_version": 1,
-        "mutation_id": "6f1a4b90-6d4c-4f2f-9a1e-2f7c1d5b8e30",
+        "mutation_id": "6f0b0f7a-1f2d-4a5f-9a63-1c73f0f4c2b1",
         "mutation_type": "global_item.create",
-        "expected_menu_group_revision": 4,
-        "preview_digest": "<preview_digest from mutations/preview>",
+        "expected_menu_group_revision": 1,
+        "preview_digest": "<preview_digest from §25.8.1>",
         "payload": {
           "canonical_name": "Pistachio Kulfi",
-          "canonical_type": "Dessert",
-          "is_verified": false
+          "canonical_type": "Dessert"
         }
       },
       "http_status": 200,
       "payload": {
         "schema_version": 1,
         "status": "accepted",
-        "mutation_id": "6f1a4b90-6d4c-4f2f-9a1e-2f7c1d5b8e30",
+        "mutation_id": "6f0b0f7a-1f2d-4a5f-9a63-1c73f0f4c2b1",
         "mutation_type": "global_item.create",
         "menu_group_id": "group-1",
-        "menu_group_revision": 5,
+        "menu_group_revision": 2,
         "origin_restaurant_id": "1c8w7fp500",
-        "actor": "ops-lead",
-        "event_seq": 12,
-        "accepted_at": "2026-08-09T11:20:31.442913+00:00",
+        "actor": "ops",
+        "event_seq": 2,
+        "accepted_at": "2026-08-09T08:08:55.056714+00:00",
         "impact": {
           "restaurants": [
             {
               "assignments": 0,
               "mapping_rules": 0,
               "restaurant_id": "1c8w7fp500"
+            },
+            {
+              "assignments": 0,
+              "mapping_rules": 0,
+              "restaurant_id": "9zz9zz9zz9"
             }
           ],
           "totals": {
@@ -606,19 +645,103 @@
         },
         "applied": {
           "created": {
-            "global_item_id": "4f0d2c1b9a8e47d6b3c5a1f2e9d80714",
+            "global_item_id": "4c1d2e3f5a6b7c8d9e0f1a2b3c4d5e6f",
             "canonical_name": "Pistachio Kulfi",
             "canonical_type": "Dessert",
             "is_verified": false,
             "lifecycle_state": "active"
           },
-          "global_item_id": "4f0d2c1b9a8e47d6b3c5a1f2e9d80714"
+          "global_item_id": "4c1d2e3f5a6b7c8d9e0f1a2b3c4d5e6f"
+        }
+      }
+    },
+    {
+      "name": "global_menu_mutation_commit_locator_map",
+      "description": "The accepted enrolment mapping. assignments_repointed names only the restaurant the rule belongs to — the peer that uses the same number for a different product is not in the set at all (§25.8.4).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request": {
+        "schema_version": 1,
+        "mutation_id": "3a2f8a1e-7d64-4a2c-9f10-5b6a8d0e1c34",
+        "mutation_type": "global_locator.map",
+        "expected_menu_group_revision": 0,
+        "preview_digest": "e5927579f7fc87ddc76886c4e7059ba2784219c41226ecd60a3cbc09c5bcff75",
+        "payload": {
+          "locator_type": "pos_item",
+          "locator_value": "8442",
+          "restaurant_id": "9zz9zz9zz9",
+          "global_item_id": "1795ed65318544a9907caab6202b9d42"
+        }
+      },
+      "http_status": 200,
+      "payload": {
+        "schema_version": 1,
+        "status": "accepted",
+        "mutation_id": "3a2f8a1e-7d64-4a2c-9f10-5b6a8d0e1c34",
+        "mutation_type": "global_locator.map",
+        "menu_group_id": "group-1",
+        "menu_group_revision": 1,
+        "origin_restaurant_id": "1c8w7fp500",
+        "actor": "ops",
+        "event_seq": 1,
+        "accepted_at": "2026-08-09T08:08:55.056714+00:00",
+        "impact": {
+          "restaurants": [
+            {
+              "assignments": 0,
+              "mapping_rules": 0,
+              "restaurant_id": "1c8w7fp500"
+            },
+            {
+              "assignments": 1,
+              "mapping_rules": 1,
+              "restaurant_id": "9zz9zz9zz9"
+            }
+          ],
+          "totals": {
+            "assignments": 1,
+            "mapping_rules": 1,
+            "redirects": 0
+          },
+          "catalog": {
+            "target": {
+              "global_item_id": "1795ed65318544a9907caab6202b9d42",
+              "canonical_name": "Vanilla Ice Cream",
+              "canonical_type": "Dessert",
+              "is_verified": false,
+              "lifecycle_state": "active"
+            }
+          },
+          "rule": {
+            "rule_scope": "restaurant",
+            "restaurant_id": "9zz9zz9zz9",
+            "locator_type": "pos_item",
+            "locator_value": "8442",
+            "replaces_existing": false,
+            "previous_global_item_id": ""
+          }
+        },
+        "applied": {
+          "rule_id": 1,
+          "restaurant_id": "9zz9zz9zz9",
+          "prior_state": null,
+          "assignments_repointed": {
+            "9zz9zz9zz9": 1
+          },
+          "marked": {
+            "assignments": 1,
+            "mapping_rules": 1
+          }
         }
       }
     },
     {
       "name": "error_global_menu_revision_conflict",
-      "description": "Non-destructive. Sent when expected_menu_group_revision is stale, and when the re-derived preview no longer matches the digest a human confirmed (§25.8.2).",
+      "description": "The group moved between preview and commit. Non-destructive: nothing was applied, and the client re-pulls, re-previews and asks the human again (§25.8.2).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/commit",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -637,7 +760,7 @@
     },
     {
       "name": "error_global_menu_not_enabled",
-      "description": "The selected restaurant belongs to no menu group, or its group has not been advanced past provisioning. The client's only gate is the capability list on GET /analytics/restaurants/ (§23.6); calling anyway is a client that ignored it.",
+      "description": "The restaurant is in no menu group, so it keeps restaurant-scoped menu behavior and the /global-menu/ routes answer nothing. Membership is a deployment decision (PETPOOJA_<SLUG>_MENU_GROUP) and no API call widens it (§25.2).",
       "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -651,7 +774,7 @@
     },
     {
       "name": "error_global_menu_mutations_disabled",
-      "description": "The group permits coverage-repair creates and locator mappings, but has not been opened for unrestricted global mutations. A separate rung from 'no group at all', because an operator advances it deliberately (§25.3).",
+      "description": "The same ungrouped restaurant, reaching a write route. The refusal names the capability the client ignored — global_menu_mutations_v1 — rather than the read one, because that is the grant it was missing (§25.3).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -669,13 +792,27 @@
       },
       "http_status": 400,
       "payload": {
-        "error": "Menu group 'group-1' permits resolution writes only at this lifecycle rung. Full global-menu mutations activate only after the aggregation gate passes.",
+        "error": "Restaurant '1c8w7fp500' has no menu group with capability 'global_menu_mutations_v1'. Global menu behavior activates only when the registry advertises it.",
         "code": "global_menu_mutations_disabled"
       }
     },
     {
+      "name": "error_global_menu_group_not_provisioned",
+      "description": "A deployment error, not a client one: the registry puts this restaurant in a group that owns no canonical catalog. Answering as if it were ungrouped would look like a working install right up to the point where the desktop re-clusters a shared menu locally, so every route fails closed instead (§25.1).",
+      "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500"
+      },
+      "http_status": 500,
+      "payload": {
+        "error": "Menu group 'group-1' is configured in the restaurant registry but owns no canonical menu catalog. A group is joined, never bootstrapped from a member: create the group's canonical items and variants through the global-menu mutation routes, or remove the menu_group setting from its member restaurants.",
+        "code": "global_menu_group_not_provisioned"
+      }
+    },
+    {
       "name": "error_global_menu_editor_required",
-      "description": "Editing a menu group rewrites every member restaurant's canonical menu, so it needs its own credential. An unset GLOBAL_MENU_EDITOR_KEYS authorizes nobody — there is no 'auth skipped' branch here (§25.3).",
+      "description": "Editing a group's canonical menu rewrites every member restaurant's menu, so it is a separate permission from reading one restaurant's data. An unset GLOBAL_MENU_EDITOR_KEYS authorizes nobody rather than skipping the check (§25.3).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -689,12 +826,12 @@
     },
     {
       "name": "error_global_menu_editor_forbidden",
-      "description": "The editor credential is valid but GLOBAL_MENU_EDITOR_GRANTS does not name the selected restaurant. A separate code from editor_required on purpose: reaching it takes a working credential, so it leaks nothing to an unauthenticated caller, and it tells an operator which of the two settings to fix (§25.3).",
+      "description": "A valid editor credential with no grant for the selected restaurant (§25.3).",
       "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
         "X-Restaurant-ID": "1c8w7fp500",
-        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value granted elsewhere>"
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
       },
       "http_status": 403,
       "payload": {

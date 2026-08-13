@@ -129,47 +129,20 @@ class RestaurantProfileTests(unittest.TestCase):
         finally:
             first_conn.close()
 
-    def test_shared_profile_reset_archives_opaque_old_file_before_fresh_schema(self) -> None:
+    def test_profile_reset_archives_opaque_old_file_and_marks_complete(self) -> None:
         from src.core.db.reset import reset_database
-        from src.core.profiles import (
-            CleanProfileRebuildRequired,
-            SHARED_POS_CATALOG_CAPABILITY,
-        )
 
         upsert_allowed_restaurants(self._allowed("rest-A"))
-        initial = get_profile("rest-A")
+        captured = get_profile("rest-A")
         old_bytes = b"opaque revision-1.6 profile -- never open as sqlite"
-        old_path = Path(initial.database_path)
+        old_path = Path(captured.database_path)
         old_path.parent.mkdir(parents=True, exist_ok=True)
         old_path.write_bytes(old_bytes)
-
-        upsert_allowed_restaurants(
-            [
-                {
-                    "restaurant_id": "rest-A",
-                    "display_name": "Dach & Nona",
-                    "timezone": "Asia/Kolkata",
-                    "menu_group_id": "group-1",
-                    "menu_capabilities": [
-                        "global_menu_v1",
-                        SHARED_POS_CATALOG_CAPABILITY,
-                    ],
-                }
-            ]
-        )
-        captured = get_profile("rest-A")
-        self.assertEqual(captured.clean_rebuild_status, "required")
-        self.assertTrue(captured.is_bound)
-        from src.core.db.control import copy_legacy_global_config_once
-
-        copy_legacy_global_config_once(old_path)
-        with self.assertRaises(CleanProfileRebuildRequired):
-            get_profile_connection(captured)
-
+        self.assertIsNone(captured.clean_rebuild_status)
         success, message = reset_database(captured)
         self.assertTrue(success, message)
         rebuilt = get_profile("rest-A")
-        self.assertEqual(rebuilt.clean_rebuild_status, "rebuilding")
+        self.assertEqual(rebuilt.clean_rebuild_status, "complete")
         self.assertIsNotNone(rebuilt.last_archive_path)
         archive = Path(rebuilt.last_archive_path)
         self.assertEqual(archive.read_bytes(), old_bytes)
@@ -180,17 +153,10 @@ class RestaurantProfileTests(unittest.TestCase):
                 "SELECT restaurant_id FROM restaurant_profile_identity WHERE singleton_id=1"
             ).fetchone()
             self.assertEqual(identity[0], "rest-A")
-            self.assertTrue(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_menu_history'"
-                ).fetchone()
-            )
         finally:
             conn.close()
 
-    def test_new_shared_profile_stays_rebuilding_until_ordered_sync_completes(self) -> None:
-        from src.core.profiles import SHARED_POS_CATALOG_CAPABILITY
-
+    def test_new_grouped_profile_opens_complete_without_shared_pos_rebuild(self) -> None:
         upsert_allowed_restaurants(
             [
                 {
@@ -200,26 +166,20 @@ class RestaurantProfileTests(unittest.TestCase):
                     "menu_group_id": "group-1",
                     "menu_capabilities": [
                         "global_menu_v1",
-                        SHARED_POS_CATALOG_CAPABILITY,
+                        "global_menu_resolution_v1",
+                        "global_menu_aggregation_v1",
+                        "global_menu_mutations_v1",
                     ],
                 }
             ]
         )
         profile = bind_and_select_profile("rest-new")
-        self.assertEqual(profile.clean_rebuild_status, "rebuilding")
+        self.assertNotEqual(profile.clean_rebuild_status, "rebuilding")
         conn, _ = get_profile_connection(profile)
         conn.close()
 
-    def test_control_upgrade_marks_only_shared_pos_profiles_without_opening_them(self) -> None:
-        """Capability absence preserves legacy behavior.
-
-        Only a profile whose group advertises the shared-POS policy owes the
-        destructive archive-and-rebuild. Every other registered profile keeps
-        opening in place, upgraded by the additive column migrations in
-        ``db/connection.py``.
-        """
+    def test_control_upgrade_does_not_mark_profiles_from_retired_shared_pos(self) -> None:
         from src.core.db.control import ensure_control_schema, get_control_connection
-        from src.core.profiles import SHARED_POS_CATALOG_CAPABILITY
 
         upsert_allowed_restaurants(
             self._allowed("rest-A")
@@ -231,14 +191,11 @@ class RestaurantProfileTests(unittest.TestCase):
                     "menu_group_id": "group-1",
                     "menu_capabilities": [
                         "global_menu_v1",
-                        SHARED_POS_CATALOG_CAPABILITY,
+                        "global_menu_shared_pos_catalog_v1",
                     ],
                 }
             ]
         )
-        shared_path = Path(get_profile("rest-shared").database_path)
-        shared_path.parent.mkdir(parents=True, exist_ok=True)
-        shared_path.write_bytes(b"old profile must remain opaque")
         control = get_control_connection()
         try:
             control.execute("UPDATE restaurant_profiles SET clean_rebuild_status=NULL")
@@ -251,9 +208,7 @@ class RestaurantProfileTests(unittest.TestCase):
             control.close()
 
         self.assertIsNone(get_profile("rest-A").clean_rebuild_status)
-        upgraded = get_profile("rest-shared")
-        self.assertEqual(upgraded.clean_rebuild_status, "required")
-        self.assertTrue(upgraded.is_bound)
+        self.assertIsNone(get_profile("rest-shared").clean_rebuild_status)
 
     def test_mixed_existing_database_is_refused(self) -> None:
         self._create_existing("rest-A", "rest-B")

@@ -485,7 +485,7 @@ Closes the two-store convergence work: JSON backup layer removed from all runtim
 
 ---
 
-## 17. Global menu groups (revision 1.6 client — implemented, dormant)
+## 17. Global menu groups (revision 1.9 — active enrollment)
 
 Restaurants that share one business menu belong to a server-managed
 `menu_group_id`. The **menu group**, not a restaurant, owns canonical item and
@@ -497,16 +497,14 @@ mandatory: it authorizes the request, names the origin restaurant, and selects
 restaurant-scoped rows; the server derives the group, and clients never send or
 select one. The wire shape is frozen in
 [central_server_analytics_app_api_contract.md](../contracts/central_server_analytics_app_api_contract.md)
-§25 (revision 1.6).
+§25 (revision 1.9).
 
-As of 2026-08-12, the desktop and central service implement the additive global
-menu projection through contract revision 1.8, including reviewed outlet POS
-aliases. This section records a complete dormant implementation, **not** production
-activation — the rollout remains open (§17.3 and §17.6). Until the production
-registry advertises a menu capability, the resolver selects `legacy_restaurant_v1`
-and existing menu behavior remains unchanged. `SYSTEM_CONTEXT.md` and
-`SESSION_AND_ALL_STORES.md` Part B deliberately still describe legacy
-restaurant-scoped behavior as what runs for that reason.
+A configured member of a group that already owns a canonical catalog advertises
+all four capabilities together. There is no lifecycle ladder, shared-POS policy,
+or POS Alias Review queue. Unlinked member assignments are a normal enrollment
+state: they stay store-qualified, appear in Unclustered Data Resolution, and a
+human maps them with restaurant-scoped `pos_item`/`pos_addon` rules. Coverage is
+an operational diagnostic and gates nothing.
 
 Activation is fail-closed and has one owner:
 `src/core/global_menu_schema.py::resolve_global_menu_capability`. It requires an
@@ -514,51 +512,36 @@ authorized and selected physical restaurant, an exact registered database path,
 a non-blank server-managed `menu_group_id`, local schema version 1, and the base
 `global_menu_v1` capability. Removing capability during an allowed-restaurants
 refresh clears cached enablement immediately. The four advertised capabilities
-are kept distinct:
+are:
 
-- `global_menu_v1`: pull/cache the projection and report coverage; legacy reads,
-  ingest resolution, and writes remain live.
-- `global_menu_resolution_v1`: allow only canonical create, locator-map, and
-  matching undo writes needed to repair coverage during shadow/aggregation.
-- `global_menu_aggregation_v1`: additionally allow global-ID All Stores
-  aggregation after every participating profile passes its local coverage and
-  quarantine gate.
-- `global_menu_mutations_v1`: additionally use global resolution and author
-  global mutations after the selected profile passes the same gate. All Stores
-  remains read-only.
+- `global_menu_v1`: pull/cache the projection and report coverage.
+- `global_menu_resolution_v1`: canonical create, locator-map, and matching undo
+  writes used to resolve a joining store's unlinked rows.
+- `global_menu_aggregation_v1`: global-ID All Stores aggregation after every
+  participating profile has finished client bootstrap. Unlinked rows stay
+  store-qualified.
+- `global_menu_mutations_v1`: author global mutations. All Stores remains
+  read-only. The editor credential (`X-Global-Menu-Key`) remains mandatory.
 
-The dormant revision-1.6 client sequence is:
+The client sequence is:
 
 1. Pull the unpaged status document, then page each authoritative snapshot
    section (`items`, `variants`, `redirects`, `rules`) independently. Tail
-   semantic events by `event_seq`; compact event pages are retained for history
-   and followed by an authoritative resnapshot. Cross-group/cyclic state is
-   quarantined without advancing the prior good cursor.
-2. In every advertised rung, pull/cache global state before POS order ingest.
-   Shadow and aggregation advertise narrow resolution writes while unrestricted
-   global edits stay disabled. Resolution uses linked assignments, restaurant POS
-   rules, approved group itemcodes, approved aliases, then the existing unverified
-   suggestion path. The Resolution tab also surfaces verified assignments missing
-   global item/variant identity; it previews and commits canonical creates and all
-   trusted restaurant POS locators, using a separately confirmed group alias only
-   when no POS locator exists. Fuzzy matches never create global authority.
-3. After order ingest, pull the existing restaurant-filtered assignment snapshot
-   with its additive global IDs. Preserve restaurant price and eligibility,
-   respect `last_seq` and `last_verification_seq`, and reuse the current stat,
-   forecast-cache, and husk-sweep epilogues.
-4. For a global edit in the provisional adapter, require
-   `global_menu_mutations_v1`, complete local
-   coverage, one physical origin restaurant, and the separate configured editor
-   credential sent as `X-Global-Menu-Key`. Preview and commit use the frozen
-   `mutation_type`/`payload` envelope, stable global IDs, group OCC revision, and
-   `preview_digest`. A POST timeout is reconciled through mutation status and is
-   never blindly repeated.
-5. Enable global-ID All Stores grouping only with
-   `global_menu_aggregation_v1` and complete identity coverage. Unlinked rows
-   remain explicitly store-qualified; without that rung the existing
-   name/type/variant reducer remains active.
+   semantic events by `event_seq`. Cross-group/cyclic state is quarantined
+   without advancing the prior good cursor.
+2. Pull/cache global state before POS order ingest. Resolution uses linked
+   assignments, restaurant POS rules, approved group itemcodes, approved aliases,
+   then unresolved. The Resolution tab surfaces verified assignments missing
+   global item/variant identity. Fuzzy matches never create global authority.
+3. After order ingest, pull the restaurant-filtered assignment snapshot with
+   additive global IDs. Preserve restaurant price and eligibility.
+4. Global edits require `global_menu_mutations_v1`, one physical origin
+   restaurant, and the editor credential. Preview and commit use the frozen
+   envelope, stable global IDs, group OCC revision, and `preview_digest`.
+5. Enable global-ID All Stores grouping with `global_menu_aggregation_v1`.
+   Unlinked rows remain explicitly store-qualified.
 
-The frozen revision 1.6 payloads are in
+The frozen revision 1.9 payloads are in
 `contracts/fixtures/1/global_menu_fixtures.json` and are byte-identical to the
 central-repository copy.
 
@@ -591,47 +574,26 @@ central-repository copy.
     attribution are central authority and cannot be reconstructed from raw order
     rows.
 
-### 17.2 Lifecycle rungs
+### 17.2 Enrollment
 
-The group climbs `provisioning` → `shadow` → `aggregating` → `active`, one rung
-at a time (rollback is unrestricted), each rung mapping onto the capability
-ladder above so "enable All Stores global reads" and "enable global mutations"
-stay separate, reversible operator decisions.
+`menu_group` in the restaurant registry is membership. A configured member of a
+group that owns a canonical catalog advertises the four capabilities at once.
+A joining restaurant's unmapped rows arrive globally unlinked, stay
+store-qualified, and are resolved one at a time through Unclustered Data
+Resolution. Coverage does not change capabilities.
 
-### 17.3 Activation stop gate (open)
+### 17.3 Locator ownership
 
-Runtime code and additive schema may be deployed dormant, but no POS policy is
-enabled by code or membership alone. Until an operator configures and reconciles
-a policy, the policy capability remains absent. The operator procedure is owned
-by the central repository (`db.dachnona`) —
-that runbook is the authoritative gate; do not activate from this doc.
-Summary of what it requires, in order: maintenance window and recoverable
-snapshot → deploy central code/schema with capability off → reconciliation
-dry-run with every blocking ambiguity resolved and the digest archived →
-atomic bootstrap apply → wipe and re-bootstrap the sole client's projections →
-**shadow mode** as a correctness smoke gate → 100% global identity coverage on
-referenced verified assignments in every member, zero unresolved hard conflicts,
-matching client/server digests → enable global-ID All Stores reads → enable
-global mutations for a restricted role → live-test merge/rename/new-locator/undo
-→ widen permissions. Before the first accepted global mutation a failed
-bootstrap may be discarded and rerun from the preserved seed; **after** it,
-global state is authority and rollback only disables capability.
-
-Two production characteristics that shaped the bootstrap and must not be
-re-litigated casually: the backfill replays each member's stored
-`menu_merge.applied` history as canonical redirects by `menu_item_id` (never by
-name), because linking only live catalog rows would republish already-merged-away
-products as canonical in every member; and the deployment-only authority cutover
-(`--authority-restaurant` with `--reset-replay-restaurant`) derives canonical
-state from one member and replays the other's assignments from its own stored
-mutation logs through the live ingest apply functions.
+`pos_item` and `pos_addon` are always restaurant-scoped. `itemcode` and `alias`
+may be group-wide only after a human confirms them. Numeric POS locators are
+never group-owned. Prices and availability stay restaurant-owned.
 
 ### 17.4 Release-blocking verification scenarios
 
 1. Different POS IDs, one product — two restaurants' distinct POS IDs map to one
    global item and one All Stores row.
 2. Same POS ID, different products — restaurant qualification prevents the
-   collision unless a reviewed group rule says otherwise.
+   collision; a POS rule is never group-wide.
 3. Global rename — canonical label changes everywhere without changing the global
    ID or splitting historical analytics.
 4. Global merge — every known locator and assignment follows the redirect.
@@ -666,47 +628,10 @@ inferred from assignments, which misses never-sold variants and weakens merge-ti
 conflict detection. A plain foreign key would be wrong if a variant like "Large" is
 reusable across items; an explicit association table is the likely shape. Undecided.
 
-### 17.6 Revision-1.8 reviewed outlet-alias workflow
+### 17.6 Retired POS policies (revision 1.9)
 
-`global_menu_group_pos_aliases_v1` is distinct from and mutually exclusive with
-revision 1.7's `global_menu_shared_pos_catalog_v1`. Group 1 uses aliases because
-its outlets share logical products and many provider itemcodes, but not numeric
-Petpooja item/addon identifiers.
-
-The desktop implementation has four boundaries:
-
-1. `menu_catalog_seed.build_group_pos_alias_observation` derives deterministic
-   sold-locator evidence from the selected profile. It preserves raw itemcode,
-   emits exact decimal strings, and the shipper sends exactly one observation
-   channel. Omission retains central evidence; explicit `[]` records observed-empty.
-2. `global_menu_alias_resolution.py` is the only decision transport. Queue,
-   preview, commit and timeout-status calls require the editor credential; plan
-   and reconciliation-status reads use the selected restaurant's resolution
-   authorization. Responses are group/schema/digest/state validated and central
-   error payloads remain machine-readable.
-3. The POS Alias Review tab is available during shadow under
-   `global_menu_resolution_v1`, before alias activation. It shows private outlet
-   evidence beside targets loaded only from the local global snapshot. The
-   authority/current canonical price is shown separately from outlet-observed
-   prices; the selected outlet is never a canonical-price fallback, and a
-   difference requires its own explicit confirmation. The tab also requires a
-   reason and target confirmation, previews before commit, and reloads stale
-   evidence. A click writes no local menu, assignment, history or fact row.
-4. After the central digest-pinned reconciliation advertises the alias capability,
-   snapshot/event projection materializes many locator rules onto one redirect-
-   resolved canonical item/variant. Assignments and facts remain profile-scoped;
-   unknown later locators quarantine rather than creating local authority.
-
-Release/rollout sequence: deploy central migration/runtime dormant; deploy the
-compatible desktop; Sync DB Dach & Nona and Super Mart separately; configure only
-`GLOBAL_MENU_GROUP_POS_ALIAS_GROUPS`; review all queue rows; archive a ready plan,
-fresh backup checksum and immutable preflight; execute the exact digest; Sync DB
-both profiles again; compare catalog/history digests and coverage; then advance
-`shadow → aggregating → active` one rung at a time. Never run the saved revision
-1.7 shared-POS plan, reset central facts, or infer a policy from membership.
-
-On a stale preview/commit, no decision was saved: refresh the queue and review the
-new evidence. On an uncertain POST, the client looks up the same mutation UUID
-before allowing another semantic commit. Rollback withdraws the alias allowlist or
-returns the group to `provisioning`; retain decisions, rules, runs, events,
-assignments and facts and fix forward.
+Revision 1.7's shared-Petpooja catalog and revision 1.8's group POS aliases were
+never advertised on a production group. Contract §25.12 lists every retired name.
+Desktop no longer ships observations, alias routes, the POS Alias Review tab, or
+shared-price matrix edits. `pos_item`/`pos_addon` rules are restaurant-scoped;
+human-confirmed `itemcode`/`alias` rules may still be group-wide.

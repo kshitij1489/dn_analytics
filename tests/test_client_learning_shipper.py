@@ -318,9 +318,7 @@ class ClientLearningShipperTests(unittest.TestCase):
         # isolation across the shippers that remain (errors, learning,
         # menu_bootstrap all fire in one run_all call).
         mock_post.return_value = Mock(status_code=200)
-        mock_post.return_value.json.return_value = {
-            "shared_pos_catalog_updated": True
-        }
+        mock_post.return_value.json.return_value = {}
 
         with tempfile.TemporaryDirectory() as log_dir:
             result = run_all(

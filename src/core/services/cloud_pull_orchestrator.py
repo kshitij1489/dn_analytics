@@ -1,11 +1,10 @@
 """
 Best-effort Dachnona cloud pulls (customer merges, menu bootstrap, menu mapping verifications, menu merges).
 
-Post-order pull order (keep in sync with the revision-1.7 rebuild runbook):
-1. In global mode, assignment snapshot, unified audit history, then the settled
-   §9 shared-POS observation. Catalog snapshot/event state is normally skipped
-   here because Sync DB drains it before POS order replay. Audit-history and
-   non-rebuild observation failures are warning-only.
+Post-order pull order:
+1. In global mode, assignment snapshot then unified audit history. Catalog
+   snapshot/event state is normally skipped here because Sync DB drains it
+   before POS order replay. Audit-history failures are warning-only.
 2. Menu bootstrap (broad catalog / id_maps + cluster_state; seed-only by default)
 3. Menu assignments snapshot (one-time fresh-install seed, plan Phase C4 —
    after the catalog exists, before event tails)
@@ -143,19 +142,6 @@ def collect_global_menu_history_warnings(
     return [("global_menu_history", message)]
 
 
-def collect_shared_pos_observation_warnings(
-    summary: Dict[str, Any],
-) -> List[Tuple[str, str]]:
-    """The settled-state §9 observation is warning-only outside a clean rebuild."""
-    block = summary.get("shared_pos_observation") or summary.get(
-        "group_pos_alias_observation"
-    )
-    message = _block_error_message(block)
-    if not message:
-        return []
-    return [("shared_pos_observation", message)]
-
-
 def run_best_effort_cloud_pulls(
     conn,
     *,
@@ -163,7 +149,6 @@ def run_best_effort_cloud_pulls(
     blocking: bool = True,
     skip_menu_bootstrap: bool = False,
     skip_global_menu_state: bool = False,
-    send_shared_pos_observation: bool = False,
     already_locked: bool = False,
     on_phase: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
@@ -187,7 +172,6 @@ def run_best_effort_cloud_pulls(
             merge_events_limit=merge_events_limit,
             skip_menu_bootstrap=skip_menu_bootstrap,
             skip_global_menu_state=skip_global_menu_state,
-            send_shared_pos_observation=send_shared_pos_observation,
             on_phase=on_phase,
         )
         result["restaurant_id"] = restaurant_id
@@ -211,7 +195,6 @@ def run_best_effort_cloud_pulls(
             merge_events_limit=merge_events_limit,
             skip_menu_bootstrap=skip_menu_bootstrap,
             skip_global_menu_state=skip_global_menu_state,
-            send_shared_pos_observation=send_shared_pos_observation,
             on_phase=on_phase,
         )
         result["restaurant_id"] = restaurant_id
@@ -226,7 +209,6 @@ def _run_best_effort_cloud_pulls_locked(
     merge_events_limit: int = MERGE_EVENTS_LIMIT,
     skip_menu_bootstrap: bool = False,
     skip_global_menu_state: bool = False,
-    send_shared_pos_observation: bool = False,
     on_phase: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     from src.core.config.cloud_sync_config import get_cloud_sync_config
@@ -258,8 +240,6 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu": None,
         "global_menu_assignments": None,
         "global_menu_history": None,
-        "shared_pos_observation": None,
-        "group_pos_alias_observation": None,
         "forecasts": None,
     }
 
@@ -320,44 +300,6 @@ def _run_best_effort_cloud_pulls_locked(
                 "status": "error",
                 "error": str(e),
             }
-        if (
-            send_shared_pos_observation
-            and (
-                global_capability.shared_pos_catalog_advertised
-                or global_capability.resolution_advertised
-            )
-            and not _block_error_message(summary["global_menu"])
-            and not _block_error_message(summary["global_menu_assignments"])
-        ):
-            try:
-                from src.core.client_learning_shipper import run_scoped_uploads
-
-                is_shared = global_capability.shared_pos_catalog_advertised
-                summary_key = (
-                    "shared_pos_observation"
-                    if is_shared
-                    else "group_pos_alias_observation"
-                )
-                _announce(
-                    on_phase,
-                    "Sending shared POS observation..."
-                    if is_shared
-                    else "Sending group POS alias evidence...",
-                )
-                summary[summary_key] = run_scoped_uploads(
-                    conn, auth=auth_key
-                )
-            except Exception as e:
-                logger.exception("Shared POS observation upload failed")
-                summary[
-                    "shared_pos_observation"
-                    if global_capability.shared_pos_catalog_advertised
-                    else "group_pos_alias_observation"
-                ] = {
-                    "status": "error",
-                    "error": str(e),
-                }
-
     ep_boot = get_menu_bootstrap_pull_endpoint(conn)
     if not (global_capability is not None and global_capability.active) and ep_boot and not skip_menu_bootstrap:
         summary["attempted"] = True
@@ -457,8 +399,6 @@ def _run_best_effort_cloud_pulls_locked(
         "global_menu",
         "global_menu_assignments",
         "global_menu_history",
-        "shared_pos_observation",
-        "group_pos_alias_observation",
         "menu_assignments_bootstrap",
         "menu_bootstrap",
         "menu_mapping_verifications",
@@ -503,15 +443,6 @@ def _run_best_effort_cloud_pulls_locked(
             {"stream": key, "warning": message} for key, message in history_warnings
         ]
         for key, message in history_warnings:
-            logger.warning("Cloud pull %s reported warning: %s", key, message)
-
-    observation_warnings = collect_shared_pos_observation_warnings(summary)
-    if observation_warnings:
-        summary["shared_pos_observation_warnings"] = [
-            {"stream": key, "warning": message}
-            for key, message in observation_warnings
-        ]
-        for key, message in observation_warnings:
             logger.warning("Cloud pull %s reported warning: %s", key, message)
 
     return summary

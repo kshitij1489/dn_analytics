@@ -20,7 +20,6 @@ import {
     hasGlobalMenuMutationCapability,
     hasGlobalMenuResolutionCapability,
     isGroupOwnedMenuReady,
-    isGlobalMenuAliasReviewAvailable,
     isGlobalMenuCatalogReadable,
 } from '../globalMenuCapabilities';
 import {
@@ -30,7 +29,6 @@ import {
     resolutionAttemptKey,
     runResolutionAttempt,
 } from '../menuResolutionRouting';
-import { GlobalMenuAliasResolutionTab } from './GlobalMenuAliasResolutionTab';
 
 // --- Shared Components ---
 
@@ -168,8 +166,7 @@ const confirmGlobalImpact = (preview: GlobalMenuPreview, operation: string): boo
     if (!preview.commit_allowed) {
         window.alert(
             `Global menu commit is blocked for group ${preview.menu_group_id}. ` +
-            `${conflictCount ? `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} require resolution. ` : ''}` +
-            `${preview.coverage_complete ? '' : 'Identity coverage is incomplete.'}`,
+            `${conflictCount ? `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} require resolution. ` : 'Refresh the preview and try again.'}`,
         );
         return false;
     }
@@ -1394,8 +1391,6 @@ function MatrixTab({
     const [menuTypes, setMenuTypes] = useState<string[]>([]);
     const [retypeTargetType, setRetypeTargetType] = useState('');
     const [retyping, setRetyping] = useState(false);
-    const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
-    const [updatingPriceRuleId, setUpdatingPriceRuleId] = useState<string | null>(null);
 
     // Client-Side Table State
     const [page, setPage] = useState(1);
@@ -1461,7 +1456,7 @@ function MatrixTab({
             const [itemsRes, variantsRes, matrixRes, historyRes, typesRes] = await Promise.all([
                 endpoints.menu.list(),
                 endpoints.menu.variantsList(),
-                groupOwnedReady ? endpoints.menu.globalMatrix() : endpoints.menu.matrix(),
+                endpoints.menu.matrix(),
                 endpoints.menu.mergeHistory(),
                 endpoints.menu.types(),
             ]);
@@ -1518,7 +1513,7 @@ function MatrixTab({
         if (globalPreview && !globalPreview.commit_allowed) {
             setPopup({
                 type: 'error',
-                message: 'Global menu commit is blocked until identity coverage is complete and preview conflicts are resolved.',
+                message: 'Global menu commit is blocked until preview conflicts are resolved.',
             });
             return;
         }
@@ -1682,42 +1677,6 @@ function MatrixTab({
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         } finally {
             setUndoingMergeId(null);
-        }
-    };
-
-    const handlePriceUpdate = async (row: MatrixRow) => {
-        if (!row.rule_id || !row.locator_type || !row.locator_value) return;
-        const rawPrice = (priceDrafts[row.rule_id] ?? String(row.price)).trim();
-        if (!/^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/.test(rawPrice)) {
-            setPopup({ type: 'error', message: 'Price must be from 0.00 to 99999999.99 with at most two decimals.' });
-            return;
-        }
-        const [whole, fraction = ''] = rawPrice.split('.');
-        const price = `${whole}.${fraction.padEnd(2, '0')}`;
-        setUpdatingPriceRuleId(row.rule_id);
-        try {
-            const previewResponse = await endpoints.menu.globalPreview({
-                mutation_type: 'global_locator.price_update',
-                payload: {
-                    locator_type: row.locator_type,
-                    locator_value: row.locator_value,
-                    price,
-                },
-            });
-            const preview = previewResponse.data;
-            if (!confirmGlobalImpact(preview, `Changing the shared catalog price to ₹${price}`)) return;
-            await endpoints.menu.globalCommit(globalPreviewReference(preview));
-            setPopup({ type: 'success', message: `Group price updated to ₹${price}.` });
-            setPriceDrafts(previous => {
-                const next = { ...previous };
-                delete next[row.rule_id!];
-                return next;
-            });
-            await refreshData();
-        } catch (error) {
-            setPopup({ type: 'error', message: getApiErrorMessage(error) });
-        } finally {
-            setUpdatingPriceRuleId(null);
         }
     };
 
@@ -2232,9 +2191,9 @@ function MatrixTab({
             ) : globalMenuGroupAdvertised ? (
                 <Card title="Group-owned canonical menu">
                     <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
-                        Merge, rename, retype, variant-merge, undo and price controls remain locked while the
-                        menu group is in shadow or aggregation review. Store Resolution stays available for
-                        approved coverage repair.
+                        Canonical item and variant edits use the global preview and commit workflow.
+                        Restaurant prices and availability stay on this matrix. Unlinked rows are
+                        resolved in Unclustered Data Resolution.
                     </p>
                 </Card>
             ) : null}
@@ -2262,21 +2221,12 @@ function MatrixTab({
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
-                                {groupOwnedReady ? (
-                                    <>
-                                        <th>POS Kind</th>
-                                        <th>POS Locator</th>
-                                    </>
-                                ) : (
-                                    <>
-                                        <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
-                                        <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
-                                    </>
-                                )}
+                                <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
+                                <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
                                 <th className="text-right" onClick={() => handleSort('price')}>Price{renderSortIcon('price')}</th>
-                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>}
-                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>}
-                                {!groupOwnedReady && <th className="text-center" onClick={() => handleSort('delivery_eligible')}>Delivery{renderSortIcon('delivery_eligible')}</th>}
+                                <th className="text-center" onClick={() => handleSort('is_active')}>Active{renderSortIcon('is_active')}</th>
+                                <th className="text-center" onClick={() => handleSort('addon_eligible')}>Addon{renderSortIcon('addon_eligible')}</th>
+                                <th className="text-center" onClick={() => handleSort('delivery_eligible')}>Delivery{renderSortIcon('delivery_eligible')}</th>
                                 <th className="text-center" onClick={() => handleSort('is_verified')}>Verified{renderSortIcon('is_verified')}</th>
                             </tr>
                         </thead>
@@ -2311,19 +2261,6 @@ function MatrixTab({
                                             >
                                                 Target
                                             </button>
-                                            {groupOwnedReady && globalMenuAdvertised && r.rule_id && (
-                                                <button
-                                                    onClick={() => void handlePriceUpdate(r)}
-                                                    disabled={updatingPriceRuleId === r.rule_id}
-                                                    style={{
-                                                        color: '#2563EB', border: '1px solid rgba(37, 99, 235, 0.45)',
-                                                        background: 'transparent', padding: '4px 8px', borderRadius: '6px',
-                                                        cursor: updatingPriceRuleId === r.rule_id ? 'not-allowed' : 'pointer',
-                                                    }}
-                                                >
-                                                    {updatingPriceRuleId === r.rule_id ? 'Saving…' : 'Save Price'}
-                                                </button>
-                                            )}
                                         </div>
                                     </td>}
                                     <td>
@@ -2334,38 +2271,16 @@ function MatrixTab({
                                     </td>
                                     <td>{r.type}</td>
                                     <td>{r.variant_name}</td>
-                                    {groupOwnedReady ? (
-                                        <>
-                                            <td>{r.locator_type === 'pos_addon' ? 'Addon' : 'Item'}</td>
-                                            <td><code>{r.locator_value}</code></td>
-                                        </>
-                                    ) : (
-                                        <>
                                     <td className="text-center">{r.mapping_count}</td>
                                     <td className="text-center">
                                         {(r.order_count || 0) > 0 ? r.order_count : (
                                             <span style={{ color: '#EF4444', fontWeight: 600 }} title="No order lines reference this item + variant in this install's data">0</span>
                                         )}
                                     </td>
-                                        </>
-                                    )}
-                                    <td className="text-right">
-                                        {groupOwnedReady && globalMenuAdvertised && r.rule_id ? (
-                                            <input
-                                                aria-label={`Price for ${r.locator_value}`}
-                                                value={priceDrafts[r.rule_id] ?? String(r.price)}
-                                                onChange={event => setPriceDrafts(previous => ({
-                                                    ...previous,
-                                                    [r.rule_id!]: event.target.value,
-                                                }))}
-                                                inputMode="decimal"
-                                                style={{ width: '88px', textAlign: 'right', padding: '5px' }}
-                                            />
-                                        ) : `₹${r.price}`}
-                                    </td>
-                                    {!groupOwnedReady && <td className="text-center">{r.is_active ? "✅" : "❌"}</td>}
-                                    {!groupOwnedReady && <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>}
-                                    {!groupOwnedReady && <td className="text-center">{r.delivery_eligible ? "✅" : "❌"}</td>}
+                                    <td className="text-right">{`₹${r.price}`}</td>
+                                    <td className="text-center">{r.is_active ? "✅" : "❌"}</td>
+                                    <td className="text-center">{r.addon_eligible ? "✅" : "❌"}</td>
+                                    <td className="text-center">{r.delivery_eligible ? "✅" : "❌"}</td>
                                     <td className="text-center">{isUnverifiedFlag(r.is_verified) ? "❌" : "✅"}</td>
                                 </tr>
                             ))}
@@ -2963,7 +2878,7 @@ function ResolutionsTab({
         label: string,
     ): Promise<boolean> => {
         if (!context.locators.length) {
-            throw new Error('No trusted POS locator or approved alias is available for this resolution.');
+            throw new Error('No POS locator or catalog-name alias is available for this resolution.');
         }
         for (const locator of context.locators) {
             const result = await previewAndCommitResolutionAction(
@@ -3432,8 +3347,15 @@ function ResolutionsTab({
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '12px' }}>
                 Resolve each unclustered or globally unlinked menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
+            </p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                Local unverified: {items.filter(item => item.resolution_kind !== 'global_identity_gap').length}
+                {' · '}
+                Globally unlinked: {items.filter(item => item.resolution_kind === 'global_identity_gap').length}
+                {' · '}
+                Mapped / verified: {lookupItems.filter(item => item.is_verified).length}
             </p>
             <SuspectMappingsCard
                 lookupItems={lookupItems}
@@ -4036,7 +3958,7 @@ function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
 
 export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
     const { isAllStores, selectedStore } = useStore();
-    const [activeTab, setActiveTab] = useState<'summary' | 'catalog' | 'items' | 'variants' | 'matrix' | 'history' | 'aliases' | 'resolutions'>('summary');
+    const [activeTab, setActiveTab] = useState<'summary' | 'catalog' | 'items' | 'variants' | 'matrix' | 'history' | 'resolutions'>('summary');
     const [globalStatusSelection, setGlobalStatusSelection] = useState<{
         restaurantId: string;
         syncToken?: number;
@@ -4050,7 +3972,6 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
         : null;
     const groupOwnedReady = isGroupOwnedMenuReady(selectedStore, globalStatus, isAllStores);
     const catalogReadable = isGlobalMenuCatalogReadable(selectedStore, globalStatus, isAllStores);
-    const aliasReviewAvailable = isGlobalMenuAliasReviewAvailable(selectedStore, isAllStores);
     const labels = globalMenuViewLabels(groupOwnedReady);
 
     useEffect(() => {
@@ -4073,8 +3994,7 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
     }, [isAllStores, selectedStore?.restaurant_id, globalMenuAdvertised, lastDbSync]);
     const displayedActiveTab = (
         (activeTab === 'catalog' && !catalogReadable) ||
-        (activeTab === 'history' && !groupOwnedReady) ||
-        (activeTab === 'aliases' && !aliasReviewAvailable)
+        (activeTab === 'history' && !groupOwnedReady)
     ) ? 'summary' : activeTab;
 
     const menuTabs = [
@@ -4084,7 +4004,6 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
         { id: 'variants' as const, label: '📏 Variants' },
         { id: 'matrix' as const, label: `🕸️ ${labels.matrix}` },
         ...(groupOwnedReady ? [{ id: 'history' as const, label: `🕘 ${labels.history}` }] : []),
-        ...(aliasReviewAvailable ? [{ id: 'aliases' as const, label: '🔗 POS Alias Review' }] : []),
         { id: 'resolutions' as const, label: '✨ Resolutions' },
     ];
 
@@ -4110,7 +4029,6 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
             {displayedActiveTab === 'variants' && <VariantsTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'matrix' && <MatrixTab lastDbSync={lastDbSync} groupOwnedReady={groupOwnedReady} />}
             {displayedActiveTab === 'history' && groupOwnedReady && <GroupHistoryTab lastDbSync={lastDbSync} />}
-            {displayedActiveTab === 'aliases' && aliasReviewAvailable && <GlobalMenuAliasResolutionTab lastDbSync={lastDbSync} />}
             {displayedActiveTab === 'resolutions' && (
                 <SingleStoreOnly what="Menu resolutions">
                     <ResolutionsTab lastDbSync={lastDbSync} showHistory={!groupOwnedReady} />

@@ -13,7 +13,6 @@ from src.core.db.connection import apply_analytics_schema
 from src.core.db.control import app_data_root, control_db_path
 from src.core.profiles import (
     PROFILE_SCHEMA_VERSION,
-    SHARED_POS_CATALOG_CAPABILITY,
     mark_profile_clean_rebuild,
 )
 from src.core.services.cloud_pull_orchestrator import CLOUD_PULL_LOCK
@@ -96,8 +95,7 @@ def reset_database(profile):
     The old file is treated as opaque bytes: this path never connects to it,
     validates its identity, or applies revision-1.7 DDL in place. The control
     database and explicit recovery exports are outside the target and remain
-    untouched. Shared-POS profiles stay in ``rebuilding`` until Sync DB finishes
-    the ordered Phase-F hydration successfully.
+    untouched. Ordinary Sync DB hydrates the canonical catalog afterwards.
     """
     target = None
     archive: Optional[Path] = None
@@ -124,13 +122,9 @@ def reset_database(profile):
                     conn.commit()
                 finally:
                     conn.close()
-                shared_rebuild = (
-                    SHARED_POS_CATALOG_CAPABILITY
-                    in tuple(profile.menu_capabilities or ())
-                )
                 mark_profile_clean_rebuild(
                     profile.restaurant_id,
-                    "rebuilding" if shared_rebuild else "complete",
+                    "complete",
                     archive_path=str(archive) if archive else None,
                 )
             except Exception:

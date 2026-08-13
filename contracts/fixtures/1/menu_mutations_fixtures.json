@@ -621,52 +621,40 @@
       }
     },
     {
-      "name": "menu_mutations_commit_request_global_shadow_write",
-      "description": "A restaurant-only canonical merge attempted after the selected restaurant's menu group reached shadow (§25.3).",
+      "name": "menu_mutations_commit_request_global_canonical_write",
+      "description": "A new canonical item pushed through the restaurant-scoped commit by a member of a menu group. The group shares one canonical menu, so this is a group edit and belongs on the global-menu routes (§25.3).",
       "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
-        "X-Restaurant-ID": "1c8w7fp500"
+        "X-Restaurant-ID": "9zz9zz9zz9"
       },
       "payload": {
         "schema_version": 1,
         "mutation_id": "a23e4567-e89b-42d3-a456-426614174000",
-        "mutation_type": "menu_merge.applied",
+        "mutation_type": "catalog_update",
         "expected_menu_revision": 42,
-        "event": {
-          "remote_event_id": "remote-menu-merge-shadow-refused",
-          "event_type": "menu_merge.applied",
-          "schema_version": 2,
-          "occurred_at": "2026-08-11T12:00:00Z",
-          "merge_payload": {
-            "kind": "basic_merge_v1",
-            "assignments": [
-              {
-                "order_item_id": "101",
-                "menu_item_id": "item_target",
-                "variant_id": "variant_large",
-                "is_verified": 1
-              }
-            ]
-          }
-        },
         "verification_events": [],
         "catalog_delta": {
-          "items": [],
+          "items": [
+            {
+              "menu_item_id": "item_private_fork",
+              "name": "Private Fork",
+              "type": "Dessert"
+            }
+          ],
           "variants": []
         }
       }
     },
     {
-      "name": "menu_mutations_commit_response_global_shadow_write_409",
-      "description": "Canonical restaurant writes are refused from shadow onward; verification-only commits remain legal (§25.3).",
+      "name": "menu_mutations_commit_response_global_canonical_write_409",
+      "description": "Canonical writes from a grouped restaurant are refused unconditionally — there is no lifecycle rung the refusal depends on. Verification-only and derived-assignment commits remain legal (§25.3).",
       "endpoint": "POST /desktop-analytics-sync/menu-mutations/commit",
       "http_status": 409,
       "payload": {
-        "error": "Menu group 'group-1' is in shadow mode. Canonical menu edits must use the global-menu mutation routes.",
-        "code": "global_menu_shadow_write_blocked",
+        "error": "This restaurant shares menu group 'group-1'. A new canonical item or variant is a group edit and must use the global-menu mutation routes.",
+        "code": "global_menu_canonical_write_blocked",
         "menu_group_id": "group-1",
-        "menu_group_status": "shadow",
         "recommended_action": "use_global_menu_mutations"
       }
     }

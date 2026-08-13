@@ -136,13 +136,9 @@ def apply_analytics_schema(conn) -> None:
         "revenue_backtest_cache": (("uploaded_at", "TEXT"),),
         "item_backtest_cache": (("uploaded_at", "TEXT"),),
         "volume_backtest_cache": (("uploaded_at", "TEXT"),),
-        "menu_item_variants": (
-            ("shared_pos_rule_tombstoned", "INTEGER NOT NULL DEFAULT 0"),
-            ("shared_pos_prior_is_active", "INTEGER"),
-        ),
-        # Revision 1.7 added these to global-menu tables that older profiles
-        # already own. ALTER TABLE cannot carry the canonical CHECK constraint;
-        # global_menu_sync validates every price on the wire and on read.
+        # history_cursor was added after the first global-menu profiles shipped.
+        # price remains unused on mapping rules; keep the column so older
+        # profiles still satisfy the projection validator.
         "global_menu_state": (("history_cursor", "TEXT"),),
         "global_menu_mapping_rules": (("price", "DECIMAL(10,2)"),),
     }
@@ -154,9 +150,18 @@ def apply_analytics_schema(conn) -> None:
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
+    variant_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(menu_item_variants)").fetchall()
+    }
+    for retired_column in ("shared_pos_rule_tombstoned", "shared_pos_prior_is_active"):
+        if retired_column in variant_columns:
+            conn.execute(
+                f"ALTER TABLE menu_item_variants DROP COLUMN {retired_column}"
+            )
+
     # The canonical CREATE statements plus the additive upgrades above bring an
-    # old profile to the revision-1.7 shape; this focused owner then validates
-    # the projection and initializes its singleton state idempotently.
+    # old profile to the current global-menu shape; this focused owner then
+    # validates the projection and initializes its singleton state idempotently.
     from src.core.global_menu_schema import ensure_global_menu_schema
 
     ensure_global_menu_schema(conn)

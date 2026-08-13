@@ -174,23 +174,6 @@ def ensure_control_schema(conn: Optional[sqlite3.Connection] = None) -> None:
             target.execute(
                 "ALTER TABLE restaurant_profiles ADD COLUMN last_archive_path TEXT"
             )
-        # Revision 1.7 has no in-place shared-POS profile migration. Once the
-        # central registry advertises the shared-POS capability, an existing
-        # profile must be archived and recreated before ordinary runtime code
-        # opens it. This marker lives in the control DB specifically so checking
-        # it never needs to inspect the old analytics schema.
-        #
-        # Capability absence preserves legacy behavior: a profile whose group
-        # never advertises the policy keeps opening in place, upgraded by the
-        # additive column migrations in db/connection.py.
-        target.execute(
-            """
-            UPDATE restaurant_profiles
-            SET clean_rebuild_status='required', updated_at=CURRENT_TIMESTAMP
-            WHERE clean_rebuild_status IS NULL
-              AND menu_capabilities LIKE '%\"global_menu_shared_pos_catalog_v1\"%'
-            """
-        )
         _migrate_app_selection(target)
         target.execute(
             """

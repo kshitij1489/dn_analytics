@@ -58,8 +58,6 @@ def fetch_global_menu_diagnostics(conn) -> Dict[str, Any]:
             SELECT COUNT(*), COUNT(price)
             FROM global_menu_mapping_rules
             WHERE menu_group_id=?
-              AND locator_scope='group'
-              AND locator_kind IN ('pos-item', 'pos-addon')
               AND lifecycle_state='active'
             """,
             (menu_group_id,),
@@ -111,12 +109,9 @@ def fetch_global_menu_diagnostics(conn) -> Dict[str, Any]:
             SELECT rule_id, locator_scope, restaurant_id, locator_kind,
                    normalized_locator, target_global_menu_item_id,
                    target_global_variant_id,
-                   CASE WHEN price IS NULL THEN NULL ELSE printf('%.2f', price) END AS price,
                    provenance, is_verified, server_revision
             FROM global_menu_mapping_rules
             WHERE menu_group_id=?
-              AND locator_scope='group'
-              AND locator_kind IN ('pos-item', 'pos-addon')
               AND lifecycle_state='active'
             ORDER BY rule_id
             """,

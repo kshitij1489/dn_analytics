@@ -2,7 +2,7 @@
 
 > **For AI agents:** A grouped, annotated map of the files that matter, so you can jump to the right one without grepping the whole tree. Grouped by **concern**, not by folder — the same concern often spans `services/`, `src/core/`, and `utils/`. Start at [INDEX.md](./INDEX.md) for task routing; use this to locate the file once you know the task.
 >
-> **Last updated:** 2026-08-12 (revision-1.8 group-POS-alias runtime complete; coordinated activation open). When you add/rename a load-bearing module, add it here.
+> **Last updated:** 2026-08-13 (revision 1.9 active enrollment; shared-POS and POS Alias Review removed). When you add/rename a load-bearing module, add it here.
 
 Legend: 🧠 durable artifact (never delete casually) · ⚙️ core logic · 🌐 cloud sync · 🖥️ API · 🎨 frontend · 🧪 test/fixture.
 
@@ -30,9 +30,7 @@ Legend: 🧠 durable artifact (never delete casually) · ⚙️ core logic · �
 | `src/core/queries/customer_metric_sources.py` | Profile-qualified customer order atoms for combined customer metrics. |
 | `src/core/services/all_stores_sync.py` | Sequential All Stores Sync DB coordinator (per-store outcomes, partial/failed semantics). |
 | `src/core/central_api.py` | Revision-1.2 scoped/unscoped headers and typed central error decoding. |
-| `src/core/global_menu_alias_resolution.py` | 🌐 Revision-1.8 scoped alias queue/preview/commit/timeout-status and reconciliation diagnostics; strict response validation, editor gating, no local writes. |
-| `src/core/menu_catalog_seed.py` / `menu_bootstrap_shipper.py` | 🌐 Deterministic shared-POS or group-alias observations; exactly one capability-selected channel and matching durable acknowledgement. |
-| `ui_electron/src/pages/GlobalMenuAliasResolutionTab.tsx` | 🎨 Private outlet evidence vs canonical target review, explicit confirmation, preview/commit, stale refresh and reconciliation counts. |
+| `src/core/menu_catalog_seed.py` / `menu_bootstrap_shipper.py` | 🌐 Catalog seed and seed-only bootstrap ingest (`id_maps` + `cluster_state`). |
 
 ## Order ingest (POS → local rows)
 
@@ -79,23 +77,24 @@ See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) and [central_server
 | `src/core/order_item_key.py` | Assignment key ↔ local POS row backing (`AssignmentKeyIndex`). |
 | `src/core/menu_catalog_seed.py` | In-memory catalog seed + bootstrap-payload builders (`seed_catalog`). |
 
-### Dormant global-menu projection (revision 1.7; activation open)
+### Global-menu projection (revision 1.9; active enrollment)
 
-The modules below execute only when the selected, authorized physical profile's
-server-managed registry row advertises both a `menu_group_id` and
-`global_menu_v1`. Production remains on the legacy restaurant-scoped paths until
-the central Phase 2 capability and backfill are deployed.
+The modules below execute when the selected, authorized physical profile's
+server-managed registry row advertises a `menu_group_id` and `global_menu_v1`.
+A configured member of a group that owns a canonical catalog advertises all
+four capabilities together. Unlinked member assignments are a normal enrollment
+state and appear in Unclustered Data Resolution.
 
 | Path | Role |
 |------|------|
 | `src/core/global_menu_schema.py` | Additive projection validation, structured status, quarantine access, and the single fail-closed capability resolver. |
-| `src/core/global_menu_sync.py` | Revision-1.7 snapshot/event/assignment adapters; validates group/revision/redirect/price integrity and materializes the shared POS catalog transactionally. |
+| `src/core/global_menu_sync.py` | Snapshot/event/assignment adapters; validates group/revision/redirect integrity. POS mapping rules are restaurant-scoped and carry no price. |
 | `src/core/global_menu_identity.py` | Stable local/global links, redirect traversal, approved locator precedence, canonical projection planner, and All Stores row annotation. |
 | `src/core/global_menu_history.py` | Strict unified-history paging/cache with cursor-safe page commits and legacy undo refusal. |
-| `src/core/global_menu_mutation.py` | Stable-ID preview/commit/status transport, narrow coverage-repair gate and trusted local locator context; reconciles uncertain POST outcomes without blind replay. |
+| `src/core/global_menu_mutation.py` | Stable-ID preview/commit/status transport and trusted local locator context; reconciles uncertain POST outcomes without blind replay. Coverage does not gate commit. |
 | `src/core/queries/global_menu_diagnostics.py` | Clean-rebuild counts, coverage/cursor/quarantine state and deterministic catalog/matrix/history digests. |
 | `src/core/db/reset.py` | Opaque archive-and-recreate path for one captured profile; never opens a revision-1.6 file before replacement. |
-| `ui_electron/src/globalMenuCapabilities.ts` | Pure frontend capability-ladder predicates keeping shadow resolution separate from unrestricted global mutations. |
+| `ui_electron/src/globalMenuCapabilities.ts` | Pure frontend predicates for catalog/history labels and mutation controls. Coverage is not a gate. |
 | `database/schema_sqlite.sql` | Owns the additive `global_menu_*` cache, link, rule, event, and quarantine tables. |
 | `tests/test_global_menu_phase1.py` / `tests/fixtures/global_menu_v1_snapshot.json` | Frozen-contract fixtures plus projection, capability, narrow-resolution, locator-scope and federation regression coverage. |
 

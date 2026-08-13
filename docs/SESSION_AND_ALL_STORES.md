@@ -101,11 +101,9 @@ Menu-identity endpoints add one optional top-level key, `identity_coverage` (see
 
 Reducers are declared per endpoint next to the route. There is deliberately no generic "sum every numeric field" helper — see `src/core/queries/multi_store_reducers.py`.
 
-### Menu identity gate (dormant)
+### Menu identity gate
 
-Name-based grouping is what runs in production today. The revision-1.6 global menu identity path ([MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) §17) is implemented but dormant — production advertises no capability.
-
-When it activates, `group_menu_identity_rows` switches to global item/variant IDs **only if every included profile is `aggregation_ready`** (capability active + aggregation advertised + coverage complete + zero quarantine). One lagging store keeps the whole request on the legacy name-based path — it never mixes bases. Rows without a global link are keyed by `restaurant_id` plus local IDs and flagged `identity_unlinked`; they are never name-merged into a global group. Linked/total counts and the quarantine count ride on the envelope's `identity_coverage`. A profile whose database predates the schema degrades to the legacy reducer and reports `active: false` — never a false global-ready.
+`group_menu_identity_rows` switches to global item/variant IDs **only if every included profile is `aggregation_ready`** (active global menu + aggregation advertised + bootstrap complete). Coverage is diagnostic and does not gate that switch. One lagging store keeps the whole request on the legacy name-based path — it never mixes bases. Rows without a global link are keyed by `restaurant_id` plus local IDs and flagged `identity_unlinked`; they are never name-merged into a global group. Linked/total counts and the quarantine count ride on the envelope's `identity_coverage`. A profile whose database predates the schema degrades to the legacy reducer and reports `active: false` — never a false global-ready.
 
 ### Business dates and timezones
 

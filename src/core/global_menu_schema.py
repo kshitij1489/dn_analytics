@@ -1,9 +1,9 @@
 """Global-menu projection state, validation, and the single capability gate.
 
-The projection is deliberately dormant by default. A profile can enter
-``global_menu_v1`` only when the current server-managed registry row authorizes
-the selected physical restaurant and advertises the matching menu group and
-capability. SQLite never enables global writes by itself.
+A profile enters ``global_menu_v1`` when the current server-managed registry
+row authorizes the selected physical restaurant and advertises the matching
+menu group plus the four global-menu capabilities. SQLite never enables
+global writes by itself. Coverage is diagnostic and does not gate capability.
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ GLOBAL_MENU_CAPABILITY = "global_menu_v1"
 GLOBAL_MENU_RESOLUTION_CAPABILITY = "global_menu_resolution_v1"
 GLOBAL_MENU_AGGREGATION_CAPABILITY = "global_menu_aggregation_v1"
 GLOBAL_MENU_MUTATION_CAPABILITY = "global_menu_mutations_v1"
-GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY = "global_menu_shared_pos_catalog_v1"
-GLOBAL_MENU_GROUP_POS_ALIASES_CAPABILITY = "global_menu_group_pos_aliases_v1"
 GLOBAL_MENU_SCHEMA_VERSION = 1
 LEGACY_MENU_MODE = "legacy_restaurant_v1"
 GLOBAL_MENU_MODE = "global_menu_v1"
@@ -149,21 +147,14 @@ class GlobalMenuCapabilityStatus:
 
     @property
     def active(self) -> bool:
-        return self.mode == GLOBAL_MENU_MODE and not self.pos_policy_conflict
-
-    @property
-    def pos_policy_conflict(self) -> bool:
-        return (
-            GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY in self.capabilities
-            and GLOBAL_MENU_GROUP_POS_ALIASES_CAPABILITY in self.capabilities
-        )
+        return self.mode == GLOBAL_MENU_MODE
 
     @property
     def coverage_complete(self) -> bool:
         return (
             self.bootstrap_status == "complete"
             and self.coverage_linked == self.coverage_total
-            and self.quarantine_count == 0
+            and self.coverage_total > 0
         )
 
     @property
@@ -179,48 +170,12 @@ class GlobalMenuCapabilityStatus:
         return GLOBAL_MENU_MUTATION_CAPABILITY in self.capabilities
 
     @property
-    def shared_pos_catalog_advertised(self) -> bool:
-        return GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY in self.capabilities
-
-    @property
-    def group_pos_aliases_advertised(self) -> bool:
-        return GLOBAL_MENU_GROUP_POS_ALIASES_CAPABILITY in self.capabilities
-
-    @property
-    def group_pos_policy_advertised(self) -> bool:
-        return (
-            not self.pos_policy_conflict
-            and (
-                self.shared_pos_catalog_advertised
-                or self.group_pos_aliases_advertised
-            )
-        )
-
-    @property
-    def shared_pos_catalog_ready(self) -> bool:
-        return (
-            self.active
-            and self.shared_pos_catalog_advertised
-            and self.bootstrap_status == "complete"
-            and self.quarantine_count == 0
-        )
-
-    @property
-    def group_pos_aliases_ready(self) -> bool:
-        return (
-            self.active
-            and self.group_pos_aliases_advertised
-            and self.resolution_advertised
-            and self.bootstrap_status == "complete"
-        )
-
-    @property
-    def group_pos_policy_ready(self) -> bool:
-        return self.shared_pos_catalog_ready or self.group_pos_aliases_ready
-
-    @property
     def mutation_ready(self) -> bool:
-        return self.active and self.mutation_advertised and self.coverage_complete
+        return (
+            self.active
+            and self.mutation_advertised
+            and self.bootstrap_status == "complete"
+        )
 
     @property
     def resolution_ready(self) -> bool:
@@ -228,12 +183,15 @@ class GlobalMenuCapabilityStatus:
             self.active
             and self.resolution_advertised
             and self.bootstrap_status == "complete"
-            and self.quarantine_count == 0
         )
 
     @property
     def aggregation_ready(self) -> bool:
-        return self.active and self.aggregation_advertised and self.coverage_complete
+        return (
+            self.active
+            and self.aggregation_advertised
+            and self.bootstrap_status == "complete"
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         result = asdict(self)
@@ -244,16 +202,9 @@ class GlobalMenuCapabilityStatus:
                 "resolution_advertised": self.resolution_advertised,
                 "aggregation_advertised": self.aggregation_advertised,
                 "mutation_advertised": self.mutation_advertised,
-                "shared_pos_catalog_advertised": self.shared_pos_catalog_advertised,
-                "group_pos_aliases_advertised": self.group_pos_aliases_advertised,
-                "group_pos_policy_advertised": self.group_pos_policy_advertised,
-                "pos_policy_conflict": self.pos_policy_conflict,
                 "resolution_ready": self.resolution_ready,
                 "mutation_ready": self.mutation_ready,
                 "aggregation_ready": self.aggregation_ready,
-                "shared_pos_catalog_ready": self.shared_pos_catalog_ready,
-                "group_pos_aliases_ready": self.group_pos_aliases_ready,
-                "group_pos_policy_ready": self.group_pos_policy_ready,
             }
         )
         return result
@@ -440,11 +391,6 @@ def resolve_global_menu_capability(
         reasons.append("schema_version_unsupported")
     if not server_advertised:
         reasons.append("capability_not_advertised")
-    if (
-        GLOBAL_MENU_SHARED_POS_CATALOG_CAPABILITY in capabilities
-        and GLOBAL_MENU_GROUP_POS_ALIASES_CAPABILITY in capabilities
-    ):
-        reasons.append("global_menu_pos_policy_conflict")
     active = not reasons
     quarantine_count = int(
         conn.execute(
@@ -485,12 +431,6 @@ def require_global_menu_capability(
     status = resolve_global_menu_capability(
         conn, allow_profile_sync=allow_profile_sync
     )
-    if status.pos_policy_conflict:
-        error = GlobalMenuCapabilityError(
-            "A menu group cannot advertise both shared-POS and group-POS-alias policies"
-        )
-        error.code = "global_menu_pos_policy_conflict"
-        raise error
     if not status.active:
         raise GlobalMenuCapabilityError(
             "Global menu capability is unavailable or stale; sync the restaurant registry first"
@@ -503,7 +443,7 @@ def require_global_menu_capability(
         raise error
     if for_write and allow_resolution_write and not status.resolution_ready:
         error = GlobalMenuCapabilityError(
-            "Global menu resolution is blocked until bootstrap is complete and quarantine is empty"
+            "Global menu resolution is blocked until the canonical catalog has been synced"
         )
         error.code = "global_menu_resolution_not_ready"
         raise error
@@ -515,9 +455,9 @@ def require_global_menu_capability(
         raise error
     if for_write and not allow_resolution_write and not status.mutation_ready:
         error = GlobalMenuCapabilityError(
-            "Global menu mutation is blocked until bootstrap coverage is complete and quarantine is empty"
+            "Global menu mutation is blocked until the canonical catalog has been synced"
         )
-        error.code = "global_menu_coverage_incomplete"
+        error.code = "global_menu_mutations_not_ready"
         raise error
     return status
 

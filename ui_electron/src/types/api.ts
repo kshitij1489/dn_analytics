@@ -487,16 +487,9 @@ export interface GlobalMenuStatus {
     aggregation_advertised: boolean;
     resolution_advertised: boolean;
     mutation_advertised: boolean;
-    shared_pos_catalog_advertised: boolean;
-    group_pos_aliases_advertised: boolean;
-    group_pos_policy_advertised: boolean;
-    pos_policy_conflict: boolean;
     resolution_ready: boolean;
     mutation_ready: boolean;
     aggregation_ready: boolean;
-    shared_pos_catalog_ready: boolean;
-    group_pos_aliases_ready: boolean;
-    group_pos_policy_ready: boolean;
     coverage_complete: boolean;
     coverage_linked: number;
     coverage_total: number;
@@ -544,123 +537,6 @@ export interface GlobalMenuCatalogResponse {
     catalog_revision: number;
     items: GlobalMenuCatalogItem[];
     variants: GlobalMenuCatalogVariant[];
-}
-
-export type GlobalMenuAliasState =
-    | 'pending'
-    | 'approved'
-    | 'stale'
-    | 'applied'
-    | 'quarantined';
-
-export type GlobalMenuAliasDecisionMethod =
-    | 'exact_existing_alias'
-    | 'unique_itemcode'
-    | 'exact_identity'
-    | 'manual';
-
-export interface GlobalMenuAliasEvidence {
-    restaurant_id: string;
-    restaurant_name: string;
-    itemcode?: string | null;
-    menu_item_id: string;
-    variant_id?: string | null;
-    item_name: string;
-    item_type: string;
-    variant_name?: string | null;
-    variant_unit?: string | null;
-    variant_value?: string | null;
-    price: string;
-}
-
-export interface GlobalMenuAliasTarget {
-    global_item_id: string;
-    global_variant_id?: string | null;
-    canonical_name?: string;
-    canonical_type?: string;
-    variant_name?: string | null;
-    variant_unit?: string | null;
-    variant_value?: string | null;
-    canonical_price?: string | null;
-    reason?: GlobalMenuAliasDecisionMethod;
-}
-
-export interface GlobalMenuAliasQueueRow {
-    locator_type: 'pos_item' | 'pos_addon';
-    locator_value: string;
-    resolution_state: GlobalMenuAliasState;
-    observation_digest: string;
-    evidence: GlobalMenuAliasEvidence[];
-    candidate?: GlobalMenuAliasTarget | null;
-    decision?: Record<string, unknown> | null;
-    conflicts: Array<{ code?: string; severity?: string; message?: string }>;
-}
-
-export interface GlobalMenuAliasQueuePage {
-    schema_version: 1;
-    menu_group_id: string;
-    menu_group_revision: number;
-    observation_digest: string;
-    rows: GlobalMenuAliasQueueRow[];
-    next_cursor?: string | null;
-    has_more: boolean;
-}
-
-export interface GlobalMenuAliasDecisionRequest {
-    schema_version: 1;
-    expected_menu_group_revision: number;
-    locator_type: 'pos_item' | 'pos_addon';
-    locator_value: string;
-    expected_observation_digest: string;
-    requested_status: 'pending' | 'approved';
-    global_item_id?: string | null;
-    global_variant_id?: string | null;
-    canonical_price?: string | null;
-    decision_method: GlobalMenuAliasDecisionMethod;
-    reason: string;
-}
-
-export interface GlobalMenuAliasPreviewResponse {
-    schema_version: 1;
-    status: 'preview';
-    menu_group_id: string;
-    menu_group_revision: number;
-    locator_type: 'pos_item' | 'pos_addon';
-    locator_value: string;
-    observation_digest: string;
-    target?: GlobalMenuAliasTarget | null;
-    conflicts: Array<{ code?: string; severity?: string; message?: string }>;
-    commit_allowed: boolean;
-    preview_digest: string;
-}
-
-export interface GlobalMenuAliasCommitResponse {
-    schema_version: 1;
-    status: 'applied';
-    menu_group_id: string;
-    menu_group_revision: number;
-    mutation_id: string;
-    decision_id: string;
-    decision_status: 'pending' | 'approved';
-    idempotent_replay: boolean;
-}
-
-export interface GlobalMenuAliasReconciliationStatus {
-    schema_version: 1;
-    menu_group_id: string;
-    menu_group_revision: number;
-    status: string;
-    policy: {
-        alias_configured: boolean;
-        shared_pos_configured: boolean;
-        capability_advertised: boolean;
-    };
-    initial_reconciliation: Record<string, unknown>;
-    canonical_catalog_complete: boolean;
-    alias_decision_coverage_complete: boolean;
-    verified_coverage_complete: boolean;
-    alias_counts: Record<Exclude<GlobalMenuAliasState, 'approved'> | 'observed' | 'approved', number>;
-    restaurants: Array<Record<string, unknown>>;
 }
 
 export interface GlobalMenuPreview {

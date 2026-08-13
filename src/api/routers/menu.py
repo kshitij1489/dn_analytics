@@ -40,8 +40,6 @@ from src.api.models import (
     GlobalMenuLocalMutationPreviewRequest,
     GlobalMenuMutationCommitRequest,
     GlobalMenuResolutionContextRequest,
-    GlobalMenuAliasPreviewRequest,
-    GlobalMenuAliasCommitRequest,
 )
 from utils.clean_order_item import suggest_variant_for_resolution
 from utils import menu_utils
@@ -89,7 +87,7 @@ def _ensure_menu_edit_allowed(conn) -> None:
         error = GlobalMenuCapabilityError(
             "Canonical menu changes are group-owned; use the global preview and commit workflow"
         )
-        error.code = "global_menu_shadow_write_blocked"
+        error.code = "global_menu_canonical_write_blocked"
         _raise_global_menu_error(error)
 
     from src.core.menu_mutation_commit import (
@@ -157,17 +155,14 @@ def _raise_global_menu_error(error: BaseException) -> None:
         "global_menu_preview_required",
         "global_menu_preview_stale",
         "global_menu_preview_blocked",
-        "global_menu_coverage_incomplete",
         "global_menu_identity_unresolved",
         "global_menu_capability_required",
         "global_menu_mutations_disabled",
+        "global_menu_mutations_not_ready",
         "global_menu_operation_unsupported",
         "global_menu_resolution_disabled",
         "global_menu_resolution_not_ready",
-        "global_menu_shared_pos_catalog_required",
-        "global_menu_group_pos_aliases_required",
-        "global_menu_pos_policy_conflict",
-        "global_menu_shadow_write_blocked",
+        "global_menu_canonical_write_blocked",
     }:
         status_code = 409
     else:
@@ -243,37 +238,13 @@ def _require_group_catalog_view(conn):
         _raise_global_menu_error(error)
 
 
-def _require_group_pos_view(conn):
-    from src.core.global_menu_schema import (
-        GlobalMenuCapabilityError,
-        require_global_menu_capability,
-    )
-
-    try:
-        capability = require_global_menu_capability(conn)
-    except GlobalMenuCapabilityError as error:
-        _raise_global_menu_error(error)
-    if not capability.group_pos_policy_ready:
-        alias_policy = capability.group_pos_aliases_advertised
-        error = GlobalMenuCapabilityError(
-            "The group POS projection is unavailable until bootstrap completes"
-        )
-        error.code = (
-            "global_menu_group_pos_aliases_required"
-            if alias_policy
-            else "global_menu_shared_pos_catalog_required"
-        )
-        _raise_global_menu_error(error)
-    return capability
-
-
 @router.get("/global/catalog")
 def get_global_menu_catalog(conn=Depends(get_db)):
     """Active canonical items and variants owned by the selected menu group."""
-    # Canonical targets are readable in shadow under global_menu_v1; neither
-    # POS policy may gate the alias-resolution target picker.
     capability = _require_group_catalog_view(conn)
-    catalog = menu_queries.fetch_group_menu_catalog(conn, capability.menu_group_id)
+    catalog = menu_queries.fetch_group_menu_catalog(
+        conn, capability.menu_group_id, capability.restaurant_id
+    )
     return {
         "menu_group_id": capability.menu_group_id,
         "catalog_revision": capability.catalog_revision,
@@ -283,9 +254,11 @@ def get_global_menu_catalog(conn=Depends(get_db)):
 
 @router.get("/global/matrix")
 def get_global_menu_matrix(conn=Depends(get_db)):
-    """Active group-owned Petpooja rules and their current catalog price."""
-    capability = _require_group_pos_view(conn)
-    return menu_queries.fetch_group_menu_matrix(conn, capability.menu_group_id)
+    """Restaurant-scoped POS mapping rules for the selected member."""
+    capability = _require_group_catalog_view(conn)
+    return menu_queries.fetch_group_menu_matrix(
+        conn, capability.menu_group_id, capability.restaurant_id
+    )
 
 
 @router.post("/global/mutations/preview")
@@ -351,107 +324,6 @@ def get_global_menu_mutation_status(
         return global_mutation_status(conn, mutation_id)
     except Exception as exc:
         _raise_global_menu_error(exc)
-
-
-def _raise_alias_resolution_error(error: BaseException) -> None:
-    from src.core.global_menu_alias_resolution import AliasResolutionError
-
-    if isinstance(error, AliasResolutionError):
-        detail = error.payload or {"error": error.message, "code": error.code}
-        raise HTTPException(
-            status_code=error.status_code or (503 if error.retryable else 409),
-            detail=detail,
-        ) from error
-    _raise_global_menu_error(error)
-
-
-@router.get("/global/alias-resolutions")
-def get_global_menu_alias_resolutions(
-    status: str = "all",
-    after: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=500),
-    conn=Depends(get_authorized_db),
-):
-    from src.core.global_menu_alias_resolution import fetch_alias_queue
-
-    try:
-        return fetch_alias_queue(
-            conn,
-            status=status,
-            after=after,
-            limit=limit,
-        )
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
-
-
-@router.post("/global/alias-resolutions/preview")
-def preview_global_menu_alias_resolution(
-    request: GlobalMenuAliasPreviewRequest,
-    conn=Depends(get_authorized_db),
-):
-    from src.core.global_menu_alias_resolution import preview_alias_decision
-
-    try:
-        return preview_alias_decision(conn, request.model_dump())
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
-
-
-@router.post("/global/alias-resolutions/commit")
-def commit_global_menu_alias_resolution(
-    request: GlobalMenuAliasCommitRequest,
-    conn=Depends(get_authorized_db),
-):
-    from src.core.global_menu_alias_resolution import commit_alias_decision
-
-    try:
-        payload = request.model_dump()
-        from src.core.sync_identity import get_sync_attribution
-
-        attribution = get_sync_attribution(conn)
-        payload["uploaded_by"] = attribution.get("employee")
-        payload["uploaded_from"] = attribution.get("device")
-        return commit_alias_decision(conn, payload)
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
-
-
-@router.get("/global/alias-resolutions/{mutation_id}")
-def get_global_menu_alias_resolution_status(
-    mutation_id: str,
-    conn=Depends(get_authorized_db),
-):
-    from src.core.global_menu_alias_resolution import alias_decision_status
-
-    try:
-        return alias_decision_status(conn, mutation_id)
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
-
-
-@router.get("/global/alias-reconciliation/plan")
-def get_global_menu_alias_reconciliation_plan(conn=Depends(get_authorized_db)):
-    from src.core.global_menu_alias_resolution import (
-        fetch_alias_reconciliation_plan,
-    )
-
-    try:
-        return fetch_alias_reconciliation_plan(conn)
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
-
-
-@router.get("/global/alias-reconciliation/status")
-def get_global_menu_alias_reconciliation_status(conn=Depends(get_authorized_db)):
-    from src.core.global_menu_alias_resolution import (
-        fetch_alias_reconciliation_status,
-    )
-
-    try:
-        return fetch_alias_reconciliation_status(conn)
-    except Exception as exc:
-        _raise_alias_resolution_error(exc)
 
 
 @router.post("/global/resolution-context")
@@ -1447,7 +1319,7 @@ def get_unverified(conn=Depends(get_db)):
 
         include_global_identity_gaps = resolve_global_menu_capability(
             conn
-        ).resolution_ready
+        ).active
     except Exception:
         include_global_identity_gaps = False
     df = menu_queries.fetch_unverified_items(

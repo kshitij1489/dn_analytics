@@ -176,11 +176,7 @@ CREATE TABLE IF NOT EXISTS menu_item_variants (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     assignment_seq INTEGER,           -- highest cloud server_seq applied to this row
     verification_seq INTEGER,         -- highest verification-stream seq applied to is_verified
-    pending_local INTEGER DEFAULT 0,  -- locally rewritten, awaiting server echo ack
-    -- A shared-rule tombstone must hide the mapping without losing the
-    -- restaurant's availability choice if the central rule is later restored.
-    shared_pos_rule_tombstoned INTEGER NOT NULL DEFAULT 0,
-    shared_pos_prior_is_active INTEGER
+    pending_local INTEGER DEFAULT 0  -- locally rewritten, awaiting server echo ack
 );
 
 -- ============================================================================

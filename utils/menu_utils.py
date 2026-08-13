@@ -78,7 +78,7 @@ def _strict_mode_edit_blocked_response(conn, *, emit_sync_event: bool = True) ->
                     "Canonical menu changes are group-owned in global menu mode; "
                     "use the global preview and commit workflow"
                 ),
-                "code": "global_menu_shadow_write_blocked",
+                "code": "global_menu_canonical_write_blocked",
                 "recommended_action": "use_global_menu_mutations",
             }
 

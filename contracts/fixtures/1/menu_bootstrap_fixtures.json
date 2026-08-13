@@ -26,20 +26,6 @@
             ]
           }
         },
-        "shared_pos_catalog": [
-          {
-            "locator_type": "pos_item",
-            "locator_value": "101",
-            "menu_item_id": "item_cold_coffee",
-            "variant_id": "variant_large",
-            "item_name": "Cold Coffee",
-            "item_type": "Beverage",
-            "variant_name": "Large",
-            "variant_unit": "ml",
-            "variant_value": "500.00",
-            "price": "290.00"
-          }
-        ],
         "uploaded_by": {
           "employee_id": "0001",
           "name": "Owner"
@@ -58,19 +44,17 @@
       "http_status": 200,
       "payload": {
         "received": 1,
-        "cluster_state_updated": true,
-        "shared_pos_catalog_updated": true
+        "cluster_state_updated": true
       }
     },
     {
       "name": "menu_bootstrap_ingest_response_seed_only_existing",
-      "description": "When snapshot_role is seed_only and a latest row already exists, cluster_state is NOT updated (id_maps still merge forward); an explicitly supplied shared_pos_catalog is still replaced because it is the current restaurant observation used by §25.9.",
+      "description": "When snapshot_role is seed_only and a latest row already exists, cluster_state is NOT updated; id_maps still merge forward.",
       "endpoint": "POST /desktop-analytics-sync/menu-bootstrap/ingest",
       "http_status": 200,
       "payload": {
         "received": 1,
-        "cluster_state_updated": false,
-        "shared_pos_catalog_updated": true
+        "cluster_state_updated": false
       }
     },
     {
