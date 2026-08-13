@@ -1,5 +1,5 @@
 {
-  "description": "Global menu group payload fixtures (contract v1.9, §25). Base path /desktop-analytics-sync/global-menu/, auth Authorization: Bearer <SYNC_API_KEY> plus the required X-Restaurant-ID selector; the two mutation routes additionally require X-Global-Menu-Key. Global identifiers below are illustrative — they are server-issued opaque tokens and are never derived from a name. Every POS locator rule is restaurant-qualified; there is no lifecycle rung, no shared-POS catalog and no alias review queue.",
+  "description": "Global menu group payload fixtures (contract v1.10, §25). Base path /desktop-analytics-sync/global-menu/, auth Authorization: Bearer <SYNC_API_KEY> plus the required X-Restaurant-ID selector; the two mutation routes additionally require X-Global-Menu-Key. Global identifiers below are illustrative — they are server-issued opaque tokens and are never derived from a name. Every POS locator rule is restaurant-qualified, itemcode rules are parent-only, and display-name aliases are not authority.",
   "fixtures": [
     {
       "name": "global_menu_snapshot_redirects_empty",
@@ -66,7 +66,7 @@
     },
     {
       "name": "global_menu_snapshot_rules",
-      "description": "Mapping rules, filtered to the requesting restaurant plus every group-scoped rule. A pos_item/pos_addon rule is restaurant-qualified without exception — the number is issued by one outlet's Petpooja account — while itemcode and alias rules are group-wide and each one was confirmed by a human (§25.6). Rules carry no price: a menu is shared, prices are not.",
+      "description": "Live authoritative mapping rules, filtered to the requesting restaurant plus every group-scoped rule. A pos_item/pos_addon rule is restaurant-qualified without exception; a human-confirmed itemcode rule is group-wide and parent-only. Alias rows are archived, explicitly tombstoned and absent from the live table (§25.5–§25.7). Rules carry no price: a menu is shared, prices are not.",
       "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=rules&limit=500",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -737,6 +737,63 @@
             "mapping_rules": 1
           }
         }
+      }
+    },
+    {
+      "name": "error_global_menu_alias_locator_retired",
+      "description": "Display names remain suggestions and cannot become mapping authority in revision 1.10 (§25.13).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request_payload": {
+        "schema_version": 1,
+        "mutation_type": "global_locator.map",
+        "expected_menu_group_revision": 0,
+        "payload": {
+          "locator_type": "alias",
+          "locator_value": "vanilla ice cream",
+          "rule_scope": "group",
+          "confirm_group_wide": true,
+          "global_item_id": "1795ed65318544a9907caab6202b9d42"
+        }
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "payload.locator_type must be one of pos_item, pos_addon, itemcode. Display-name aliases are suggestions and cannot become mapping rules.",
+        "code": "global_menu_invalid_mutation",
+        "conflicts": []
+      }
+    },
+    {
+      "name": "error_global_menu_itemcode_variant_target",
+      "description": "An itemcode repeated across sibling variants may identify only their parent item in revision 1.10 (§25.4, §25.13).",
+      "endpoint": "POST /desktop-analytics-sync/global-menu/mutations/preview",
+      "request_headers": {
+        "Authorization": "Bearer <SYNC_API_KEY>",
+        "X-Restaurant-ID": "1c8w7fp500",
+        "X-Global-Menu-Key": "<GLOBAL_MENU_EDITOR_KEYS value>"
+      },
+      "request_payload": {
+        "schema_version": 1,
+        "mutation_type": "global_locator.map",
+        "expected_menu_group_revision": 0,
+        "payload": {
+          "locator_type": "itemcode",
+          "locator_value": "IC-VAN",
+          "rule_scope": "group",
+          "confirm_group_wide": true,
+          "global_item_id": "1795ed65318544a9907caab6202b9d42",
+          "global_variant_id": "variant-mini"
+        }
+      },
+      "http_status": 400,
+      "payload": {
+        "error": "An itemcode identifies a parent menu item, not a menu-item/variant combination; payload.global_variant_id must be blank.",
+        "code": "global_menu_invalid_mutation",
+        "conflicts": []
       }
     },
     {

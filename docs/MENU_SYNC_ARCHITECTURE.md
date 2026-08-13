@@ -485,11 +485,11 @@ Closes the two-store convergence work: JSON backup layer removed from all runtim
 
 ---
 
-## 17. Global menu groups (revision 1.9 — active enrollment)
+## 17. Global menu groups (revision 1.10 — active enrollment)
 
 Restaurants that share one business menu belong to a server-managed
 `menu_group_id`. The **menu group**, not a restaurant, owns canonical item and
-variant identity, canonical labels/types, verified mapping rules and aliases,
+variant identity, canonical labels/types, verified mapping rules,
 merge redirects and undo history, and the menu mutation revision. Orders,
 customers, forecasts, prices, availability, POS locators and the per-restaurant
 assignment materialization stay restaurant-specific. `X-Restaurant-ID` remains
@@ -497,7 +497,7 @@ mandatory: it authorizes the request, names the origin restaurant, and selects
 restaurant-scoped rows; the server derives the group, and clients never send or
 select one. The wire shape is frozen in
 [central_server_analytics_app_api_contract.md](../contracts/central_server_analytics_app_api_contract.md)
-§25 (revision 1.9).
+§25 (revision 1.10).
 
 A configured member of a group that already owns a canonical catalog advertises
 all four capabilities together. There is no lifecycle ladder, shared-POS policy,
@@ -529,10 +529,11 @@ The client sequence is:
    section (`items`, `variants`, `redirects`, `rules`) independently. Tail
    semantic events by `event_seq`. Cross-group/cyclic state is quarantined
    without advancing the prior good cursor.
-2. Pull/cache global state before POS order ingest. Resolution uses linked
-   assignments, restaurant POS rules, approved group itemcodes, approved aliases,
-   then unresolved. The Resolution tab surfaces verified assignments missing
-   global item/variant identity. Fuzzy matches never create global authority.
+2. Pull/cache global state before POS order ingest. Resolution uses complete
+   assignments, restaurant POS rules, existing parent-only assignments, approved
+   group itemcodes for the parent, then unresolved. The Resolution tab surfaces
+   verified assignments missing complete global item/variant identity. Display
+   names and fuzzy matches never create global authority.
 3. After order ingest, pull the restaurant-filtered assignment snapshot with
    additive global IDs. Preserve restaurant price and eligibility.
 4. Global edits require `global_menu_mutations_v1`, one physical origin
@@ -541,7 +542,7 @@ The client sequence is:
 5. Enable global-ID All Stores grouping with `global_menu_aggregation_v1`.
    Unlinked rows remain explicitly store-qualified.
 
-The frozen revision 1.9 payloads are in
+The frozen revision 1.10 payloads are in
 `contracts/fixtures/1/global_menu_fixtures.json` and are byte-identical to the
 central-repository copy.
 
@@ -553,9 +554,9 @@ central-repository copy.
    revision are central-server truth; SQLite is a cache/projection.
 3. **No cross-domain scope leak** — sharing a menu never shares customers,
    orders, forecasts, restaurant prices or availability.
-4. **Restaurant-qualified POS keys by default** — a POS item/addon ID is unique
-   only within a restaurant unless a reviewed rule makes an itemcode or alias
-   explicitly group-wide.
+4. **Locator ownership is explicit** — a POS item/addon ID is restaurant-only; a
+   human-confirmed itemcode may be group-wide but identifies only the parent item.
+   Display-name aliases are never authority.
 5. **No fuzzy auto-merge** — normalization/fuzzy matching may propose a link but
    can never create global authority without a human or a trusted server rule.
 6. **Atomic global mutation** — commit, redirect/rule change, audit row and
@@ -584,9 +585,10 @@ Resolution. Coverage does not change capabilities.
 
 ### 17.3 Locator ownership
 
-`pos_item` and `pos_addon` are always restaurant-scoped. `itemcode` and `alias`
-may be group-wide only after a human confirms them. Numeric POS locators are
-never group-owned. Prices and availability stay restaurant-owned.
+`pos_item` and `pos_addon` are always restaurant-scoped. Raw itemcode evidence is
+suggestion-only until a human confirms a group rule, and that rule always has an
+empty global variant target. Display-name aliases are suggestion-only and cannot
+be committed. Prices and availability stay restaurant-owned.
 
 ### 17.4 Release-blocking verification scenarios
 
@@ -597,8 +599,8 @@ never group-owned. Prices and availability stay restaurant-owned.
 3. Global rename — canonical label changes everywhere without changing the global
    ID or splitting historical analytics.
 4. Global merge — every known locator and assignment follows the redirect.
-5. Future item — a newly seen POS ID with an approved group itemcode/alias
-   resolves to the merge target automatically.
+5. Future item — a newly seen POS ID with an approved group itemcode resolves to
+   the merge target's parent; an exact restaurant POS rule completes its variant.
 6. Unknown item — no trusted rule means unverified resolution, never fuzzy
    auto-assignment.
 7. Variant conflict — incompatible units/values block commit until explicitly
@@ -634,4 +636,16 @@ Revision 1.7's shared-Petpooja catalog and revision 1.8's group POS aliases were
 never advertised on a production group. Contract §25.12 lists every retired name.
 Desktop no longer ships observations, alias routes, the POS Alias Review tab, or
 shared-price matrix edits. `pos_item`/`pos_addon` rules are restaurant-scoped;
-human-confirmed `itemcode`/`alias` rules may still be group-wide.
+human-confirmed parent-only `itemcode` rules may still be group-wide.
+
+### 17.7 Revision 1.10 authority cleanup
+
+Display-name aliases are historical cache/event data only. The resolver ignores
+them immediately, while the server's migration event supplies an explicit rule
+tombstone so old cached rows are deleted without treating snapshot omission as
+deletion. Historical itemcode events are projected with no variant target, and a
+new itemcode mutation is rejected locally if it carries `global_variant_id`.
+
+Coverage is complete-identity coverage: a local row with a real variant needs
+both global item and global variant IDs. A parent-only itemcode link remains in
+Unclustered Data Resolution until a restaurant POS rule completes it.

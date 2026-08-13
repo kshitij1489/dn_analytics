@@ -2,7 +2,7 @@
 
 > **For AI agents:** A grouped, annotated map of the files that matter, so you can jump to the right one without grepping the whole tree. Grouped by **concern**, not by folder — the same concern often spans `services/`, `src/core/`, and `utils/`. Start at [INDEX.md](./INDEX.md) for task routing; use this to locate the file once you know the task.
 >
-> **Last updated:** 2026-08-13 (revision 1.9 active enrollment; shared-POS and POS Alias Review removed). When you add/rename a load-bearing module, add it here.
+> **Last updated:** 2026-08-14 (revision 1.10 parent-only itemcodes and retired display-name aliases). When you add/rename a load-bearing module, add it here.
 
 Legend: 🧠 durable artifact (never delete casually) · ⚙️ core logic · 🌐 cloud sync · 🖥️ API · 🎨 frontend · 🧪 test/fixture.
 
@@ -77,7 +77,7 @@ See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) and [central_server
 | `src/core/order_item_key.py` | Assignment key ↔ local POS row backing (`AssignmentKeyIndex`). |
 | `src/core/menu_catalog_seed.py` | In-memory catalog seed + bootstrap-payload builders (`seed_catalog`). |
 
-### Global-menu projection (revision 1.9; active enrollment)
+### Global-menu projection (revision 1.10; active enrollment)
 
 The modules below execute when the selected, authorized physical profile's
 server-managed registry row advertises a `menu_group_id` and `global_menu_v1`.
