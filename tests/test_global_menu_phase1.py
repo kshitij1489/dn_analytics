@@ -54,6 +54,7 @@ from src.core.global_menu_schema import (
     update_global_menu_state,
 )
 from src.core.global_menu_sync import (
+    _contract_rule_id,
     _fetch_page,
     apply_global_assignment_rows,
     apply_global_menu_payload_page,
@@ -494,6 +495,8 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
         ("global_menu_fixtures.json", "global_menu_status"),
         ("global_menu_fixtures.json", "global_menu_history_page"),
         ("global_menu_fixtures.json", "global_menu_mutation_preview_locator_map"),
+        ("global_menu_fixtures.json", "error_global_menu_alias_locator_retired"),
+        ("global_menu_fixtures.json", "error_global_menu_itemcode_variant_target"),
         (
             "menu_mutations_fixtures.json",
             "menu_mutations_commit_request_global_canonical_write",
@@ -1968,7 +1971,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             "error",
         )
 
-    def test_two_restaurant_pos_ids_and_alias_resolve_to_one_global_item(self) -> None:
+    def test_two_restaurant_pos_ids_resolve_but_historical_alias_is_inert(self) -> None:
         for restaurant_id, pos_id in (("rest-1", "1001"), ("rest-2", "8442")):
             conn = self.conn if restaurant_id == "rest-1" else sqlite3.connect(":memory:")
             if conn is not self.conn:
@@ -1990,7 +1993,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                     order_item_id=pos_id,
                     raw_name="POS label",
                 )
-                alias = resolve_global_identity_for_ingest(
+                historical_alias = resolve_global_identity_for_ingest(
                     conn,
                     order_item_id=f"new-{restaurant_id}",
                     raw_name="Vanilla---Ice Cream",
@@ -2001,11 +2004,166 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                     raw_name="Vanila Ice Creme",
                 )
             self.assertEqual(resolution.global_menu_item_id, "global-vanilla")
-            self.assertEqual(alias.global_menu_item_id, "global-vanilla")
-            self.assertEqual(alias.provenance, "global-alias")
+            self.assertFalse(historical_alias.resolved)
             self.assertFalse(unknown.resolved)
             if conn is not self.conn:
                 conn.close()
+
+    def test_alias_retirement_tombstone_removes_a_cached_historical_rule(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM global_menu_mapping_rules "
+                "WHERE locator_kind='alias'"
+            ).fetchone()[0],
+            1,
+        )
+        alias_identity = {
+            "rule_scope": "group",
+            "restaurant_id": "",
+            "locator_type": "alias",
+            "locator_value": "vanilla ice cream",
+        }
+        self.conn.execute(
+            "UPDATE global_menu_mapping_rules SET rule_id=? "
+            "WHERE locator_kind='alias'",
+            (_contract_rule_id(alias_identity, "group-desserts"),),
+        )
+        event_page = {
+            "schema_version": 1,
+            "menu_group_id": "group-desserts",
+            "menu_group_revision": 8,
+            "event_head_seq": 8,
+            "events": [
+                {
+                    "event_seq": 8,
+                    "menu_group_revision": 8,
+                    "event_type": "global_mapping_rules.aliases_retired",
+                    "entity_type": "mapping_rule",
+                    "mutation_id": "migration-0034-test",
+                    "origin_restaurant_id": "",
+                    "actor": "system:migration-0034",
+                    "occurred_at": "2026-08-14T00:00:00+00:00",
+                    "server_ingested_at": "2026-08-14T00:00:00+00:00",
+                    "payload": {
+                        "action": {
+                            "kind": "system_rule_retirement",
+                            "reason": "display_alias_retired_1_10",
+                        },
+                        "items": [],
+                        "variants": [],
+                        "redirects": [],
+                        "mapping_rules": [],
+                        "tombstones": {
+                            "redirects": [],
+                            "mapping_rules": [
+                                alias_identity
+                            ],
+                        },
+                        "assignment_snapshot_required": False,
+                        "assignment_restaurants": [],
+                        "menu_group_revision": 8,
+                    },
+                }
+            ],
+            "next_cursor": 8,
+            "has_more": False,
+        }
+        apply_global_menu_payload_page(
+            self.conn,
+            event_page,
+            stream="events",
+            capability=capability(revision=7, complete=False),
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM global_menu_mapping_rules "
+                "WHERE locator_kind='alias'"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_historical_itemcode_variant_target_is_discarded(self) -> None:
+        snapshot = json.loads(json.dumps(self.fixture))
+        snapshot["mapping_rules"].append(
+            {
+                "rule_id": "legacy-itemcode-rule",
+                "locator_scope": "group",
+                "restaurant_id": None,
+                "locator_kind": "itemcode",
+                "locator_value": "IC-VAN",
+                "normalized_locator": "IC-VAN",
+                "target_global_menu_item_id": "global-vanilla",
+                "target_global_variant_id": "global-regular",
+                "provenance": "legacy",
+                "is_verified": True,
+                "server_revision": 7,
+            }
+        )
+        apply_global_menu_payload_page(
+            self.conn,
+            snapshot,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        stored = self.conn.execute(
+            "SELECT target_global_variant_id FROM global_menu_mapping_rules "
+            "WHERE rule_id='legacy-itemcode-rule'"
+        ).fetchone()
+        self.assertIsNone(stored[0])
+        with patch(
+            "src.core.global_menu_identity.resolve_global_menu_capability",
+            return_value=capability(),
+        ):
+            resolution = resolve_global_identity_for_ingest(
+                self.conn,
+                order_item_id="new-pos-id",
+                raw_name="Anything",
+                itemcode="IC-VAN",
+            )
+        self.assertEqual(resolution.global_menu_item_id, "global-vanilla")
+        self.assertIsNone(resolution.global_variant_id)
+        self.assertEqual(resolution.provenance, "group-itemcode")
+
+    def test_restaurant_pos_rule_completes_a_parent_only_assignment(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        owner = self.conn.execute(
+            "SELECT local_menu_item_id FROM menu_item_global_links "
+            "WHERE global_menu_item_id='global-vanilla' AND is_projection_owner=1"
+        ).fetchone()[0]
+        self.conn.execute(
+            "INSERT INTO variants (variant_id, variant_name) "
+            "VALUES ('local-unlinked-mini', 'Mini')"
+        )
+        self.conn.execute(
+            "INSERT INTO menu_item_variants "
+            "(order_item_id, menu_item_id, variant_id, is_verified) "
+            "VALUES ('1001', ?, 'local-unlinked-mini', 1)",
+            (owner,),
+        )
+        with patch(
+            "src.core.global_menu_identity.resolve_global_menu_capability",
+            return_value=capability(),
+        ):
+            resolution = resolve_global_identity_for_ingest(
+                self.conn,
+                order_item_id="1001",
+                raw_name="Vanilla",
+                itemcode="IC-VAN",
+            )
+        self.assertEqual(resolution.global_menu_item_id, "global-vanilla")
+        self.assertEqual(resolution.global_variant_id, "global-regular")
+        self.assertEqual(resolution.provenance, "restaurant-pos")
 
     def test_assignment_adapter_preserves_price_and_existing_seq_guard(self) -> None:
         apply_global_menu_payload_page(
@@ -2848,6 +3006,40 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                     action={"mutation_type": "global_item.merge", "source_id": owner},
                 )
 
+    def test_itemcode_mutation_builder_drops_the_variant_target(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        owner = self.conn.execute(
+            "SELECT local_menu_item_id FROM menu_item_global_links "
+            "WHERE global_menu_item_id='global-vanilla' AND is_projection_owner=1"
+        ).fetchone()[0]
+        variant = self.conn.execute(
+            "SELECT local_variant_id FROM variant_global_links "
+            "WHERE global_variant_id='global-regular' AND is_projection_owner=1"
+        ).fetchone()[0]
+        with patch(
+            "src.core.global_menu_mutation.require_global_menu_capability",
+            return_value=capability(),
+        ):
+            action = build_global_action_from_local(
+                self.conn,
+                mutation_type="global_locator.map",
+                target_local_menu_item_id=owner,
+                target_local_variant_id=variant,
+                details={
+                    "locator_type": "itemcode",
+                    "locator_value": "IC-VAN",
+                    "rule_scope": "group",
+                    "confirm_group_wide": True,
+                },
+            )
+        self.assertEqual(action["payload"]["global_variant_id"], "")
+        self.assertEqual(action["payload"]["rule_scope"], "group")
+
     def test_transport_retries_a_transient_failure(self) -> None:
         response = Mock(status_code=200, content=b"{}")
         response.json.return_value = {
@@ -2994,9 +3186,9 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             """
             INSERT INTO order_items (
                 order_item_id, order_id, menu_item_id, variant_id,
-                petpooja_itemid, name_raw, quantity, unit_price, total_price
+                petpooja_itemid, itemcode, name_raw, quantity, unit_price, total_price
             ) VALUES (1, 1, 'local-kulfi', 'local-regular', 7777,
-                      'Kulfi', 1, 100, 100)
+                      'IC-KULFI', 'Kulfi', 1, 100, 100)
             """
         )
         conn.execute(
@@ -3022,13 +3214,13 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             {
                 ("pos_item", "7777"),
                 ("pos_addon", "addon-88"),
-                ("alias", "Kulfi"),
+                ("itemcode", "IC-KULFI"),
             },
         )
         scopes = {row["locator_type"]: row["rule_scope"] for row in context["locators"]}
         self.assertEqual(scopes["pos_item"], "restaurant")
         self.assertEqual(scopes["pos_addon"], "restaurant")
-        self.assertEqual(scopes["alias"], "group")
+        self.assertEqual(scopes["itemcode"], "group")
 
     def test_verified_unlinked_pair_enters_the_resolution_queue_only(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -3239,6 +3431,41 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertEqual(normalized["rule_scope"], "restaurant")
         self.assertEqual(normalized["restaurant_id"], "rest-1")
         self.assertFalse(normalized["confirm_group_wide"])
+
+    def test_alias_mutation_is_rejected_before_transport(self) -> None:
+        with self.assertRaisesRegex(
+            GlobalMenuMutationError,
+            "aliases are suggestions",
+        ):
+            _normalize_mutation_payload(
+                "global_locator.map",
+                {
+                    "locator_type": "alias",
+                    "locator_value": "kulfi",
+                    "rule_scope": "group",
+                    "confirm_group_wide": True,
+                    "global_item_id": "global-kulfi",
+                },
+                capability=capability("rest-1"),
+            )
+
+    def test_itemcode_variant_target_is_rejected_before_transport(self) -> None:
+        with self.assertRaisesRegex(
+            GlobalMenuMutationError,
+            "global_variant_id must be blank",
+        ):
+            _normalize_mutation_payload(
+                "global_locator.map",
+                {
+                    "locator_type": "itemcode",
+                    "locator_value": "IC-KULFI",
+                    "rule_scope": "group",
+                    "confirm_group_wide": True,
+                    "global_item_id": "global-kulfi",
+                    "global_variant_id": "global-mini",
+                },
+                capability=capability("rest-1"),
+            )
 
     def test_missing_editor_credential_remains_an_authorization_error(self) -> None:
         with patch(

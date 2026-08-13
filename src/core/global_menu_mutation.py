@@ -27,6 +27,7 @@ from src.core.sync_identity import get_sync_attribution
 logger = logging.getLogger(__name__)
 GLOBAL_MUTATION_SCHEMA_VERSION = 1
 MUTATION_GLOBAL_VARIANT_CREATE = "global_variant.create"
+AUTHORITATIVE_LOCATOR_TYPES = frozenset({"pos_item", "pos_addon", "itemcode"})
 _PRICE_QUANTUM = Decimal("0.01")
 _PRICE_LIMIT = Decimal("100000000")
 GLOBAL_MENU_RESOLUTION_MUTATION_TYPES = frozenset(
@@ -114,6 +115,10 @@ def _normalize_mutation_payload(
             "A mapping rule cannot carry a price; prices stay restaurant-owned"
         )
     locator_type = str(payload.get("locator_type") or "").strip()
+    if locator_type not in AUTHORITATIVE_LOCATOR_TYPES:
+        raise GlobalMenuMutationError(
+            "Display-name aliases are suggestions and cannot become mapping rules"
+        )
     if locator_type in {"pos_item", "pos_addon"}:
         payload["rule_scope"] = "restaurant"
         payload["restaurant_id"] = str(capability.restaurant_id or "").strip()
@@ -122,6 +127,23 @@ def _normalize_mutation_payload(
             raise GlobalMenuMutationError(
                 "A POS locator mapping requires the selected restaurant id"
             )
+    else:
+        if str(payload.get("global_variant_id") or "").strip():
+            raise GlobalMenuMutationError(
+                "An itemcode mapping targets the parent item; "
+                "global_variant_id must be blank"
+            )
+        if str(payload.get("rule_scope") or "group").strip() != "group":
+            raise GlobalMenuMutationError(
+                "Global itemcode locators must use group scope"
+            )
+        if not bool(payload.get("confirm_group_wide")):
+            raise GlobalMenuMutationError(
+                "A group-wide itemcode mapping requires explicit confirmation"
+            )
+        payload["rule_scope"] = "group"
+        payload["restaurant_id"] = ""
+        payload["global_variant_id"] = ""
     return payload
 
 
@@ -403,7 +425,7 @@ def build_global_action_from_local(
         if not locator_value:
             raise GlobalMenuMutationError("Global locator mapping requires a POS assignment key")
         locator_type = str(detail.get("locator_type") or "pos_item").strip()
-        if locator_type not in {"pos_item", "pos_addon", "itemcode", "alias"}:
+        if locator_type not in AUTHORITATIVE_LOCATOR_TYPES:
             raise GlobalMenuMutationError("Global locator mapping has an invalid locator type")
         capability = require_global_menu_capability(conn)
         is_pos = locator_type in {"pos_item", "pos_addon"}
@@ -416,7 +438,7 @@ def build_global_action_from_local(
         confirm_group_wide = bool(detail.get("confirm_group_wide"))
         if rule_scope == "group" and not confirm_group_wide:
             raise GlobalMenuMutationError(
-                "A group-wide itemcode or alias mapping requires explicit confirmation"
+                "A group-wide itemcode mapping requires explicit confirmation"
             )
         restaurant_id = str(capability.restaurant_id or "").strip() if is_pos else ""
         if is_pos and not restaurant_id:
@@ -431,7 +453,11 @@ def build_global_action_from_local(
                 "locator_type": locator_type,
                 "locator_value": locator_value,
                 "global_item_id": target["global_item_id"],
-                "global_variant_id": target.get("global_variant_id") or "",
+                "global_variant_id": (
+                    ""
+                    if locator_type == "itemcode"
+                    else target.get("global_variant_id") or ""
+                ),
                 "confirm_group_wide": confirm_group_wide,
             },
         }
@@ -651,7 +677,7 @@ def global_resolution_context(
         if not value or key in seen:
             return
         seen.add(key)
-        group_wide = locator_type in {"itemcode", "alias"}
+        group_wide = locator_type == "itemcode"
         locators.append(
             {
                 "locator_type": locator_type,
@@ -662,7 +688,6 @@ def global_resolution_context(
             }
         )
 
-    has_unbacked_assignment = False
     for assignment_row in assignment_rows:
         assignment_key = str(assignment_row[0])
         assignment_price = assignment_row[1]
@@ -686,17 +711,10 @@ def global_resolution_context(
         ).fetchall()
         if order_rows:
             note("pos_item", assignment_key, assignment_price)
+            for order_row in order_rows:
+                note("itemcode", order_row[0])
         if addon_rows:
             note("pos_addon", assignment_key, assignment_price)
-        if not order_rows and not addon_rows:
-            has_unbacked_assignment = True
-
-    if not locators or has_unbacked_assignment:
-        # Name-derived assignment keys have no safe restaurant-qualified POS
-        # locator. The only authoritative fallback is an explicitly confirmed
-        # group alias for the catalog name the server already associates with
-        # those assignments; fuzzy/raw observations never become authority.
-        note("alias", item[0])
 
     return {
         "local_menu_item_id": str(local_menu_item_id),

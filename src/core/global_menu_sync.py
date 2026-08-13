@@ -46,7 +46,7 @@ _LOCATOR_TYPE_TO_LOCAL = {
     "alias": "alias",
 }
 _POS_LOCATOR_KINDS = frozenset({"pos-item", "pos-addon"})
-_GROUP_LOCATOR_KINDS = frozenset({"itemcode", "alias"})
+_HISTORICAL_GROUP_LOCATOR_KINDS = frozenset({"itemcode", "alias"})
 
 
 class GlobalMenuSyncError(RuntimeError):
@@ -274,7 +274,11 @@ def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]
                     "locator_kind": local_kind,
                     "locator_value": row.get("locator_value"),
                     "target_global_menu_item_id": row.get("global_item_id"),
-                    "target_global_variant_id": row.get("global_variant_id") or None,
+                    "target_global_variant_id": (
+                        None
+                        if locator_type == "itemcode"
+                        else row.get("global_variant_id") or None
+                    ),
                     "price": row.get("price"),
                     "provenance": row.get("provenance") or "server-rule",
                     "is_verified": True,
@@ -643,7 +647,7 @@ def _rule_price_and_policy(
             f"Rule {rule_id} must not carry a price; prices stay restaurant-owned",
             "global_menu_price_invalid",
         )
-    if kind in _GROUP_LOCATOR_KINDS:
+    if kind in _HISTORICAL_GROUP_LOCATOR_KINDS:
         if scope != "group":
             raise _sync_error(
                 f"Rule {rule_id} has invalid restaurant scope for {kind}",
@@ -704,7 +708,11 @@ def _upsert_rules(
             entity_id=_nonblank(row, "target_global_menu_item_id"),
             group_id=group_id,
         )
-        target_variant_id = str(row.get("target_global_variant_id") or "").strip() or None
+        target_variant_id = (
+            str(row.get("target_global_variant_id") or "").strip() or None
+        )
+        if kind == "itemcode":
+            target_variant_id = None
         if target_variant_id:
             target_variant_id = _active_rule_target(
                 conn,

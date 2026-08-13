@@ -2905,7 +2905,7 @@ function ResolutionsTab({
         label: string,
     ): Promise<boolean> => {
         if (!context.locators.length) {
-            throw new Error('No POS locator or catalog-name alias is available for this resolution.');
+            throw new Error('No POS locator or itemcode is available for this resolution.');
         }
         for (const locator of context.locators) {
             const result = await previewAndCommitResolutionAction(
@@ -2913,7 +2913,9 @@ function ResolutionsTab({
                 {
                     ...locator,
                     global_item_id: globalItemId,
-                    global_variant_id: globalVariantId || '',
+                    global_variant_id: (
+                        locator.locator_type === 'itemcode' ? '' : globalVariantId || ''
+                    ),
                 },
                 `Mapping ${label} (${locator.locator_type}: ${locator.locator_value})`,
             );

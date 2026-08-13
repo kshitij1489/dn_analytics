@@ -46,8 +46,8 @@ class ClusterMatch(NamedTuple):
       fuzzy-suggested  — new item, difflib suggested a verified item (score-based)
       new              — brand-new item, no suggestion
       unmatched        — no resolvable menu_item (empty/blank name)
-      restaurant-pos / group-itemcode / global-alias — a server-approved
-                         global-menu rule selected the canonical projection
+      restaurant-pos / group-itemcode — a server-approved global-menu rule
+                         selected the canonical projection
     match_confidence is 0..100 (fuzzy = difflib ratio * 100; exact hits = 100).
     An itemcode hit uses 100.0: this is provenance confidence, not is_verified.
     """

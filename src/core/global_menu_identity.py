@@ -589,6 +589,10 @@ def _rule_resolution(
     locator_value: Any,
     restaurant_id: Optional[str] = None,
 ) -> Optional[GlobalIdentityResolution]:
+    if locator_kind == "alias":
+        # Kept parseable in historical cache/event rows until the server's
+        # retirement tombstone arrives, but never consulted as authority.
+        return None
     normalized = normalize_locator(locator_kind, locator_value)
     if not normalized:
         return None
@@ -619,13 +623,17 @@ def _rule_resolution(
             """,
             (group_id, locator_kind, normalized),
         ).fetchone()
-        provenance = "group-itemcode" if locator_kind == "itemcode" else "global-alias"
+        provenance = "group-itemcode"
     if row is None:
         return None
     return _resolution_for_global_ids(
         conn,
         str(row[0]),
-        str(row[1]) if row[1] else None,
+        (
+            None
+            if locator_kind == "itemcode"
+            else str(row[1]) if row[1] else None
+        ),
         provenance=provenance,
         revision=int(row[2]),
     )
@@ -661,14 +669,21 @@ def resolve_global_identity_for_ingest(
         """,
         (str(order_item_id),),
     ).fetchone()
+    partial_assignment = None
     if assignment:
-        return _resolution_for_global_ids(
+        existing = _resolution_for_global_ids(
             conn,
             str(assignment[2]),
             str(assignment[3]) if assignment[3] else None,
-            provenance="restaurant-pos",
+            provenance="existing-assignment",
             revision=int(assignment[4] or 0),
         )
+        local_variant_present = str(assignment[1]) != generate_deterministic_id(
+            "UNKNOWN"
+        )
+        if existing.global_variant_id or not local_variant_present:
+            return existing
+        partial_assignment = existing
 
     pos = _rule_resolution(
         conn,
@@ -680,6 +695,9 @@ def resolve_global_identity_for_ingest(
     )
     if pos:
         return pos
+
+    if partial_assignment:
+        return partial_assignment
 
     # Approved group-wide itemcode applies only to regular items.
     if not is_addon:
@@ -693,16 +711,6 @@ def resolve_global_identity_for_ingest(
         if code:
             return code
 
-    # Approved normalized alias. Fuzzy similarity never enters this table.
-    alias = _rule_resolution(
-        conn,
-        group_id=capability.menu_group_id,
-        locator_scope="group",
-        locator_kind="alias",
-        locator_value=raw_name,
-    )
-    if alias:
-        return alias
     return GlobalIdentityResolution(False)
 
 

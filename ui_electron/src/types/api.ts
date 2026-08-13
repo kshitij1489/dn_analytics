@@ -578,7 +578,7 @@ export interface GlobalMenuPreviewReference {
 }
 
 export interface GlobalMenuResolutionLocator {
-    locator_type: 'pos_item' | 'pos_addon' | 'itemcode' | 'alias';
+    locator_type: 'pos_item' | 'pos_addon' | 'itemcode';
     locator_value: string;
     rule_scope: 'restaurant' | 'group';
     restaurant_id?: string | null;
