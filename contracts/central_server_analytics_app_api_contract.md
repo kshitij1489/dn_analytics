@@ -2323,6 +2323,8 @@ Scope follows from the locator kind and is not a free choice. `pos_item` / `pos_
 
 An addon never falls through to an itemcode rule: an addon id is a different id space from a menu item's, and a shared itemcode is a statement about menu items.
 
+**Materialized assignments are item-backed.** The desktop derived-assignment flush sends only POS-backed order items and excludes addon-only synthetic rows, so central assignment ingest resolves these rows as `pos_item`. It never infers `pos_addon` from missing locator, itemcode or projection evidence. Addon mappings are created only by an explicit `global_locator.map` call from a caller operating on an addon line.
+
 ### 25.5 `GET global-menu/snapshot`
 
 | Param | Default | Rules |

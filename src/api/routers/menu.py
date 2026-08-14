@@ -881,10 +881,9 @@ def get_menu_list(reader: ScopedReader = Depends(get_reader)):
 
 def _menu_list_rows(conn, _profile=None):
     cursor = conn.cursor()
-    # is_globally_linked drives target eligibility while the global menu owns
-    # identity: a row without a link cannot be the source or target of any
-    # global mutation, so offering it would only produce an unresolved-identity
-    # failure at preview time.
+    # is_globally_linked drives target eligibility when the source pair already
+    # has complete global identity. An incomplete source takes the coverage-
+    # repair path, which can establish target identity too.
     cursor.execute("""
         SELECT m.menu_item_id, m.name, m.type, m.is_verified,
                CASE WHEN l.local_menu_item_id IS NULL THEN 0 ELSE 1 END
@@ -911,17 +910,32 @@ def _menu_list_rows(conn, _profile=None):
 def get_variants_list(reader: ScopedReader = Depends(get_reader)):
     """Lightweight list of all variants for dropdowns"""
 
-    def query(conn, _profile):
-        cursor = conn.cursor()
-        cursor.execute("SELECT variant_id, variant_name FROM variants ORDER BY variant_name")
-        data = [{"variant_id": row[0], "name": row[1]} for row in cursor.fetchall()]
-        cursor.close()
-        return data
-
     def reduce(pairs):
         return union_rows(pairs, key_fields=("variant_id",), sort_by="name", descending=False)
 
-    return reader.read(query, reduce)
+    return reader.read(_variant_list_rows, reduce)
+
+
+def _variant_list_rows(conn, _profile=None):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT v.variant_id, v.variant_name,
+               CASE WHEN l.local_variant_id IS NULL THEN 0 ELSE 1 END
+        FROM variants v
+        LEFT JOIN variant_global_links l
+            ON l.local_variant_id = v.variant_id
+        ORDER BY v.variant_name
+    """)
+    data = [
+        {
+            "variant_id": row[0],
+            "name": row[1],
+            "is_globally_linked": bool(row[2]),
+        }
+        for row in cursor.fetchall()
+    ]
+    cursor.close()
+    return data
 
 
 @router.post("/variants/create")
@@ -1016,13 +1030,14 @@ def preview_merge(
     target_id: str,
     source_variant_id: Optional[str] = None,
     target_variant_id: Optional[str] = None,
+    include_global_preview: bool = True,
     conn=Depends(get_db),
 ):
     """Preview the impact of merging a source menu item into a target."""
     res = menu_utils.preview_merge_menu_items(conn, source_id, target_id, source_variant_id)
     if res['status'] == 'error':
         raise HTTPException(400, res['message'])
-    if _global_menu_active(conn):
+    if include_global_preview and _global_menu_active(conn):
         from src.core.global_menu_mutation import (
             build_global_action_from_local,
             preview_global_mutation,
@@ -1337,6 +1352,9 @@ def get_unverified(conn=Depends(get_db)):
     )
     items = df_to_json(df)
     for item in items:
+        item["has_complete_global_identity"] = bool(
+            item.get("has_complete_global_identity")
+        )
         suggested_variant = suggest_variant_for_resolution(item.get("sample_order_name") or item.get("name"), item.get("type"))
         item["suggested_variant_id"] = (
             item.get("source_variant_id") or

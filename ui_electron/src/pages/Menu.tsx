@@ -23,12 +23,16 @@ import {
     isGlobalMenuCatalogReadable,
 } from '../globalMenuCapabilities';
 import {
+    claimedCanonicalIdentity,
     GlobalIdentityMappedVerificationError,
     globalResolutionRoute,
     isEligibleMergeTarget,
+    isEligibleMergeTargetVariant,
+    mappedVerificationFailureMessage,
     repairGlobalIdentityCoverage,
     resolutionAttemptKey,
     runResolutionAttempt,
+    targetCoveragePlan,
 } from '../menuResolutionRouting';
 
 // --- Shared Components ---
@@ -51,6 +55,7 @@ interface MenuLookupItem {
 interface VariantOption {
     variant_id: string;
     name: string;
+    is_globally_linked?: boolean;
 }
 
 interface ResolutionItem {
@@ -74,6 +79,7 @@ interface ResolutionItem {
     suggested_variant_name?: string | null;
     resolution_kind?: 'addon_gap' | 'unverified_mapping' | 'global_identity_gap' | null;
     is_verified?: boolean | number | null;
+    has_complete_global_identity?: boolean;
     assignment_order_item_ids?: string[];
 }
 
@@ -233,16 +239,6 @@ interface MatrixRow {
     value?: number | string | null;
     server_revision?: number;
 }
-
-/**
- * A merge is authored against global identity, so the server rejects it before
- * it reads the target when the source carries no link. The raw message tells the
- * operator to sync, which cannot help — nothing will ever link the row — so name
- * the two routes that do work on an unlinked source.
- */
-const UNLINKED_SOURCE_MERGE_MESSAGE =
-    'This item has no global identity yet, so it cannot be merged into another item. '
-    + 'Use “Rename / Search” or “Verify as New Item” to give it one first.';
 
 const isGlobalIdentityUnresolved = (error: unknown): boolean => {
     const detail = (error as {
@@ -2686,23 +2682,8 @@ function ResolutionsTab({
         });
     }, [historyPage]);
 
-    const sourceLookup = modalItem
-        ? lookupItems.find(candidate => candidate.menu_item_id === modalItem.menu_item_id)
-        : undefined;
-
-    // Mirrors the server's own gate: merge preview only validates global identity
-    // when the *mutation* capability is live (`_global_menu_active`). A merge is
-    // authored against global identity, so there the source must already carry
-    // one — `_stable_identity` rejects the request before it ever reads the
-    // target, and every target fails identically. Under resolution-only
-    // capability the preview is not validated, and handleMerge repairs a missing
-    // source or target through locator mapping, so nothing may be blocked here.
-    const sourceGloballyUnlinked = Boolean(
-        globalMenuAdvertised && sourceLookup && !sourceLookup.is_globally_linked
-    );
-
     useEffect(() => {
-        if (!modalItem || !selectedTargetId || sourceGloballyUnlinked) {
+        if (!modalItem || !selectedTargetId) {
             setMergePreview(null);
             return;
         }
@@ -2716,6 +2697,12 @@ function ResolutionsTab({
                     source_id: modalItem.menu_item_id,
                     target_id: selectedTargetId,
                     source_variant_id: modalItem.source_variant_id,
+                    // This first stage discovers local target variants. The
+                    // global preview is authored later, after the operator has
+                    // selected the exact target variant. Keeping this stage
+                    // local also lets globally-unlinked enrollment rows reach
+                    // the locator-map coverage-repair path.
+                    include_global_preview: false,
                 });
                 if (!cancelled) {
                     setMergePreview(res.data);
@@ -2723,12 +2710,7 @@ function ResolutionsTab({
             } catch (error) {
                 if (!cancelled) {
                     setMergePreview(null);
-                    setPopup({
-                        type: 'error',
-                        message: isGlobalIdentityUnresolved(error)
-                            ? UNLINKED_SOURCE_MERGE_MESSAGE
-                            : getApiErrorMessage(error),
-                    });
+                    setPopup({ type: 'error', message: getApiErrorMessage(error) });
                 }
             } finally {
                 if (!cancelled) {
@@ -2742,7 +2724,7 @@ function ResolutionsTab({
         return () => {
             cancelled = true;
         };
-    }, [modalItem, selectedTargetId, sourceGloballyUnlinked]);
+    }, [modalItem, selectedTargetId]);
 
     useEffect(() => {
         if (!mergePreview) {
@@ -2753,15 +2735,26 @@ function ResolutionsTab({
 
         const nextSelectedTargetVariants: Record<string, string> = {};
         const nextNewVariantNames: Record<string, string> = {};
+        const sourceHasCompleteGlobalIdentity = Boolean(
+            globalMenuAdvertised && modalItem?.has_complete_global_identity
+        );
         const suggestedVariantExists = Boolean(
             modalItem?.suggested_variant_id &&
-            variantOptions.some(variant => variant.variant_id === modalItem.suggested_variant_id)
+            variantOptions.some(variant =>
+                variant.variant_id === modalItem.suggested_variant_id &&
+                isEligibleMergeTargetVariant(variant, sourceHasCompleteGlobalIdentity)
+            )
         );
 
         mergePreview.source_variants.forEach(sourceVariant => {
             const matchingTargetVariant = mergePreview.target_variants.find(
-                targetVariant => targetVariant.variant_id === sourceVariant.variant_id ||
+                targetVariant => (
+                    targetVariant.variant_id === sourceVariant.variant_id ||
                     targetVariant.variant_name === sourceVariant.variant_name
+                ) && variantOptions.some(variant =>
+                    variant.variant_id === targetVariant.variant_id &&
+                    isEligibleMergeTargetVariant(variant, sourceHasCompleteGlobalIdentity)
+                )
             );
 
             const shouldUseSuggestedVariant = mergePreview.source_variants.length === 1 && !matchingTargetVariant;
@@ -2769,7 +2762,9 @@ function ResolutionsTab({
                 (shouldUseSuggestedVariant
                     ? (suggestedVariantExists
                         ? (modalItem?.suggested_variant_id || '')
-                        : (modalItem?.suggested_variant_name ? '__new__' : ''))
+                        : (modalItem?.suggested_variant_name && !sourceHasCompleteGlobalIdentity
+                            ? '__new__'
+                            : ''))
                     : '');
             nextNewVariantNames[sourceVariant.variant_id] = shouldUseSuggestedVariant && modalItem?.suggested_variant_name
                 ? modalItem.suggested_variant_name
@@ -2786,7 +2781,7 @@ function ResolutionsTab({
                     : mergePreview.source_variants[0].variant_id
             );
         }
-    }, [mergePreview, modalItem, renameVariantId, variantOptions]);
+    }, [globalMenuAdvertised, mergePreview, modalItem, renameVariantId, variantOptions]);
 
     useEffect(() => {
         if (!modalItem || modalEntryPoint !== 'rename') return;
@@ -2847,6 +2842,27 @@ function ResolutionsTab({
             globalPreviewReference(preview),
         );
         return commitResponse.data;
+    };
+
+    const ensureGlobalCanonicalRow = async (
+        mutationType: 'global_item.create' | 'global_variant.create',
+        payload: Record<string, unknown>,
+        operation: string,
+        identityField: 'global_item_id' | 'global_variant_id',
+    ): Promise<string | null> => {
+        const previewResponse = await endpoints.menu.globalPreview({
+            mutation_type: mutationType,
+            payload,
+        });
+        const preview = previewResponse.data;
+        const claimed = claimedCanonicalIdentity(preview.conflicts, identityField);
+        if (claimed) return claimed;
+        if (!confirmGlobalImpact(preview, operation)) return null;
+        const commitResponse = await endpoints.menu.globalCommit(
+            globalPreviewReference(preview),
+        );
+        return (commitResponse.data as GlobalMenuResolutionCommit)
+            ?.applied?.[identityField] || null;
     };
 
     const loadGlobalResolutionContext = async (
@@ -2916,7 +2932,7 @@ function ResolutionsTab({
         canonicalType: string,
     ): Promise<string | null> => {
         if (context.global_item_id) return context.global_item_id;
-        const result = await previewAndCommitResolutionAction(
+        return ensureGlobalCanonicalRow(
             'global_item.create',
             {
                 canonical_name: canonicalName,
@@ -2924,8 +2940,8 @@ function ResolutionsTab({
                 is_verified: true,
             },
             `Creating “${canonicalName}” in the shared canonical menu`,
+            'global_item_id',
         );
-        return result?.applied?.global_item_id || null;
     };
 
     const ensureGlobalResolutionVariant = async (
@@ -2935,7 +2951,7 @@ function ResolutionsTab({
         if (context?.global_variant_id) return context.global_variant_id;
         const canonicalName = context?.variant?.canonical_name || fallbackName?.trim();
         if (!canonicalName) return null;
-        const result = await previewAndCommitResolutionAction(
+        return ensureGlobalCanonicalRow(
             'global_variant.create',
             {
                 canonical_name: canonicalName,
@@ -2945,8 +2961,8 @@ function ResolutionsTab({
                 is_verified: true,
             },
             `Creating the “${canonicalName}” canonical variant`,
+            'global_variant_id',
         );
-        return result?.applied?.global_variant_id || null;
     };
 
     const mapGlobalResolutionLocators = async (
@@ -3060,8 +3076,13 @@ function ResolutionsTab({
             if (useCoverageRepair && sourceResolutionContext) {
                 const sourceContext = sourceResolutionContext;
                 const targetContext = targetResolutionContext!;
-                const targetNeedsMapping = !targetContext.global_item_id || (
-                    selectedTargetVariant !== '__new__' && !targetContext.global_variant_id
+                const targetCoverage = targetCoveragePlan(
+                    {
+                        globalItemId: targetContext.global_item_id,
+                        globalVariantId: targetContext.global_variant_id,
+                        locatorCount: targetContext.locators.length,
+                    },
+                    selectedTargetVariant === '__new__',
                 );
                 const message = await repairGlobalIdentityCoverage({
                     ensureItem: () => ensureGlobalResolutionItem(
@@ -3081,11 +3102,21 @@ function ResolutionsTab({
                         }
                         return globalVariantId;
                     },
-                    mapTargetLocators: targetNeedsMapping
-                        ? (globalItemId, globalVariantId) => mapGlobalResolutionLocators(
-                            targetContext,
+                    mapTargetLocators: targetCoverage.mapLocators
+                        ? async (globalItemId, globalVariantId) => mapGlobalResolutionLocators(
+                            // A variant-scoped context holds no locators when the
+                            // pair carries no POS evidence — the target item does
+                            // not carry this variant, or its rows are synthetic.
+                            // The item's own evidence lives on its item-scoped
+                            // context, and that is what an item-level mapping
+                            // needs. Only mapAtItemLevel reaches this fallback,
+                            // so the item's other-variant locators are never
+                            // mapped under one variant's identity.
+                            targetContext.locators.length
+                                ? targetContext
+                                : await loadGlobalResolutionContext(selectedTargetId),
                             globalItemId,
-                            selectedTargetVariant === '__new__' ? null : globalVariantId,
+                            targetCoverage.mapAtItemLevel ? null : globalVariantId,
                             targetContext.canonical_name,
                         )
                         : undefined,
@@ -3115,7 +3146,7 @@ function ResolutionsTab({
                 closeResolutionModal();
                 return;
             }
-            let globalPreview = mergePreview?.global_menu;
+            let globalPreview: GlobalMenuPreview | undefined;
             if (globalMenuAdvertised) {
                 const previewResponse = await endpoints.menu.globalLocalPreview({
                     mutation_type: 'variant_merge',
@@ -3151,15 +3182,17 @@ function ResolutionsTab({
                     error instanceof GlobalIdentityMappedVerificationError ||
                     mappedResolutionIdentitiesRef.current.has(attemptKey)
                 );
-                const detail = getApiErrorMessage(
-                    error instanceof GlobalIdentityMappedVerificationError
-                        ? error.verificationError
-                        : error,
-                );
+                const verificationError = error instanceof GlobalIdentityMappedVerificationError
+                    ? error.verificationError
+                    : error;
+                const detail = getApiErrorMessage(verificationError);
                 setPopup({
                     type: 'error',
                     message: partialFailure
-                        ? `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} The resolution remains open; retry to verify the existing identities.`
+                        ? mappedVerificationFailureMessage(
+                            detail,
+                            isGlobalIdentityUnresolved(verificationError),
+                        )
                         : detail,
                 });
             } finally {
@@ -3338,15 +3371,17 @@ function ResolutionsTab({
                     error instanceof GlobalIdentityMappedVerificationError ||
                     mappedResolutionIdentitiesRef.current.has(attemptKey)
                 );
-                const detail = getApiErrorMessage(
-                    error instanceof GlobalIdentityMappedVerificationError
-                        ? error.verificationError
-                        : error,
-                );
+                const verificationError = error instanceof GlobalIdentityMappedVerificationError
+                    ? error.verificationError
+                    : error;
+                const detail = getApiErrorMessage(verificationError);
                 setPopup({
                     type: 'error',
                     message: partialFailure
-                        ? `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} The resolution remains open; retry to verify the existing identities.`
+                        ? mappedVerificationFailureMessage(
+                            detail,
+                            isGlobalIdentityUnresolved(verificationError),
+                        )
                         : detail,
                 });
             } finally {
@@ -3398,12 +3433,21 @@ function ResolutionsTab({
         ? lookupItems.filter(candidate => isEligibleMergeTarget(
             candidate,
             modalItem.menu_item_id,
-            globalMenuAdvertised,
+            Boolean(
+                globalMenuAdvertised && modalItem.has_complete_global_identity
+            ),
         ))
         : [];
 
     const filteredTargets = eligibleTargets.filter(candidate =>
         `${candidate.name} ${candidate.type}`.toLowerCase().includes(targetSearch.toLowerCase())
+    );
+
+    const sourceHasCompleteGlobalIdentity = Boolean(
+        globalMenuAdvertised && modalItem?.has_complete_global_identity
+    );
+    const eligibleTargetVariants = variantOptions.filter(candidate =>
+        isEligibleMergeTargetVariant(candidate, sourceHasCompleteGlobalIdentity)
     );
 
     const renameCollisionTarget = modalItem
@@ -3426,8 +3470,8 @@ function ResolutionsTab({
 
     // Requires the preview itself, not just its contents: any failed preview
     // leaves an empty source-variant list, which makes variantMappingsComplete
-    // vacuously true and would otherwise re-enable the button. This also covers
-    // the unlinked-source case, where the preview is deliberately never fetched.
+    // vacuously true and would otherwise re-enable the button. This also keeps
+    // every preview error fail-closed.
     const mergeDisabled = (
         !selectedTargetId
         || previewLoading
@@ -3655,19 +3699,6 @@ function ResolutionsTab({
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                     Move only this unresolved source variant into an existing verified menu item and target variant.
                                 </p>
-                                {sourceGloballyUnlinked && (
-                                    <p style={{
-                                        padding: '10px 12px',
-                                        marginBottom: '12px',
-                                        borderRadius: '8px',
-                                        background: 'rgba(234, 179, 8, 0.12)',
-                                        border: '1px solid rgba(234, 179, 8, 0.3)',
-                                        color: 'var(--text-color)',
-                                        fontSize: '0.85em',
-                                    }}>
-                                        {UNLINKED_SOURCE_MERGE_MESSAGE}
-                                    </p>
-                                )}
                                 <input
                                     value={targetSearch}
                                     onChange={(event) => setTargetSearch(event.target.value)}
@@ -3787,12 +3818,14 @@ function ResolutionsTab({
                                                         }}
                                                     >
                                                         <option value="">Select variant type</option>
-                                                        {variantOptions.map(targetVariant => (
+                                                        {eligibleTargetVariants.map(targetVariant => (
                                                             <option key={targetVariant.variant_id} value={targetVariant.variant_id}>
                                                                 {targetVariant.name}
                                                             </option>
                                                         ))}
-                                                        <option value="__new__">Create new variant type...</option>
+                                                        {!sourceHasCompleteGlobalIdentity && (
+                                                            <option value="__new__">Create new variant type...</option>
+                                                        )}
                                                     </select>
                                                     {selectedTargetVariants[sourceVariant.variant_id] === '__new__' && (
                                                         <input

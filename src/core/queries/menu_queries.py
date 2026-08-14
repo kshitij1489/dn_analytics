@@ -448,6 +448,14 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
                 mv.menu_item_id,
                 mv.variant_id,
                 MIN(mv.is_verified) AS is_verified,
+                MIN(
+                    CASE
+                        WHEN gil.global_menu_item_id IS NOT NULL
+                         AND gvl.global_variant_id IS NOT NULL
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS has_complete_global_identity,
                 COUNT(*) AS unresolved_mapping_rows
             FROM menu_item_variants mv
             LEFT JOIN menu_item_global_links gil
@@ -492,6 +500,7 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
             s.type AS suggestion_type,
             uv.variant_id AS source_variant_id,
             uv.is_verified,
+            uv.has_complete_global_identity,
             COALESCE(v.variant_name, 'UNKNOWN') AS source_variant_name,
             COALESCE(oi.sample_order_name, au.sample_addon_name) AS sample_order_name,
             uv.unresolved_mapping_rows,

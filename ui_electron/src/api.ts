@@ -417,7 +417,13 @@ export const endpoints = {
         } & GlobalMenuPreviewReference) => api.post('/menu/variants/create', data),
 
         mergeHistory: (params?: { limit?: number; offset?: number }) => api.get('/menu/merge/history', { params }),
-        mergePreview: (params: { source_id: string, target_id: string, source_variant_id?: string, target_variant_id?: string }) => api.get('/menu/merge/preview', { params }),
+        mergePreview: (params: {
+            source_id: string;
+            target_id: string;
+            source_variant_id?: string;
+            target_variant_id?: string;
+            include_global_preview?: boolean;
+        }) => api.get('/menu/merge/preview', { params }),
         merge: (data: {
             source_id: string,
             target_id: string,

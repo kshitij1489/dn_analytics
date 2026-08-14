@@ -15,7 +15,9 @@ from src.api.routers.menu import (
     _ensure_menu_edit_allowed,
     _ensure_legacy_menu_pull_allowed,
     _global_menu_request_active,
+    _variant_list_rows,
     get_merge_history,
+    preview_merge,
 )
 from src.core.analytics_stream_contract import (
     AnalyticsStreamContractError,
@@ -3062,6 +3064,98 @@ class GlobalMenuProjectionTests(unittest.TestCase):
 
 
 class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
+    def test_variant_dropdown_reports_global_link_coverage(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_analytics_schema(conn)
+        conn.executemany(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) VALUES (?, ?, 1)",
+            [
+                ("local-linked", "Linked",),
+                ("local-unlinked", "Unlinked",),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name,
+                is_verified, lifecycle_state, server_revision
+            ) VALUES ('global-linked', 'group-1', 'Linked', 1, 'active', 1)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO variant_global_links (
+                local_variant_id, global_variant_id, provenance,
+                server_revision, is_projection_owner
+            ) VALUES ('local-linked', 'global-linked', 'server-link', 1, 0)
+            """
+        )
+
+        rows = _variant_list_rows(conn)
+
+        self.assertEqual(
+            {row["variant_id"]: row["is_globally_linked"] for row in rows},
+            {"local-linked": True, "local-unlinked": False},
+        )
+        conn.close()
+
+    def test_resolution_merge_preview_can_skip_global_identity_validation(self) -> None:
+        local_preview = {
+            "status": "success",
+            "source_variants": [{"variant_id": "source-variant"}],
+            "target_variants": [{"variant_id": "target-variant"}],
+        }
+        with patch(
+            "src.api.routers.menu.menu_utils.preview_merge_menu_items",
+            return_value=local_preview,
+        ), patch(
+            "src.api.routers.menu._global_menu_active",
+            return_value=True,
+        ), patch(
+            "src.core.global_menu_mutation.build_global_action_from_local",
+        ) as build_action:
+            result = preview_merge(
+                "unlinked-source",
+                "linked-target",
+                source_variant_id="unlinked-source-variant",
+                include_global_preview=False,
+                conn=Mock(),
+            )
+
+        self.assertEqual(result, local_preview)
+        self.assertNotIn("global_menu", result)
+        build_action.assert_not_called()
+
+    def test_matrix_merge_preview_keeps_global_preview_by_default(self) -> None:
+        local_preview = {"status": "success"}
+        global_preview = {"commit_allowed": True}
+        with patch(
+            "src.api.routers.menu.menu_utils.preview_merge_menu_items",
+            return_value=local_preview,
+        ), patch(
+            "src.api.routers.menu._global_menu_active",
+            return_value=True,
+        ), patch(
+            "src.core.global_menu_mutation.build_global_action_from_local",
+            return_value={"mutation_type": "global_variant.merge", "payload": {}},
+        ) as build_action, patch(
+            "src.core.global_menu_mutation.preview_global_mutation",
+            return_value=global_preview,
+        ) as preview_global:
+            result = preview_merge(
+                "linked-source",
+                "linked-target",
+                source_variant_id="linked-source-variant",
+                target_variant_id="linked-target-variant",
+                conn=Mock(),
+            )
+
+        self.assertEqual(result["global_menu"], global_preview)
+        build_action.assert_called_once()
+        preview_global.assert_called_once()
+
     def test_variant_create_can_be_previewed_before_a_local_row_exists(self) -> None:
         action = build_global_action_from_local(
             Mock(),
@@ -3258,6 +3352,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertTrue(fetch_unverified_items(conn).empty)
         rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
         self.assertEqual(rows.iloc[0]["resolution_kind"], "global_identity_gap")
+        self.assertFalse(bool(rows.iloc[0]["has_complete_global_identity"]))
         self.assertEqual(rows.iloc[0]["assignment_order_item_ids"], ["7777"])
         self.assertEqual(
             fetch_resolution_counts(conn, include_global_identity_gaps=True),
@@ -3289,6 +3384,70 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
                 "mapped_verified": 1,
             },
         )
+        conn.close()
+
+    def test_resolution_row_requires_both_global_links_for_complete_identity(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        apply_analytics_schema(conn)
+        conn.execute(
+            "INSERT INTO menu_items (menu_item_id, name, type, is_verified) "
+            "VALUES ('local-kulfi', 'Kulfi', 'Dessert', 0)"
+        )
+        conn.execute(
+            "INSERT INTO variants (variant_id, variant_name, is_verified) "
+            "VALUES ('local-regular', 'Regular', 0)"
+        )
+        conn.execute(
+            "INSERT INTO menu_item_variants "
+            "(order_item_id, menu_item_id, variant_id, is_verified) "
+            "VALUES ('7777', 'local-kulfi', 'local-regular', 0)"
+        )
+        conn.execute(
+            """
+            INSERT INTO global_menu_items (
+                global_menu_item_id, menu_group_id, canonical_name,
+                canonical_type, is_verified, lifecycle_state, server_revision
+            ) VALUES (
+                'global-kulfi', 'group-1', 'Kulfi', 'Dessert',
+                1, 'active', 7
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO menu_item_global_links (
+                local_menu_item_id, global_menu_item_id, provenance,
+                server_revision, is_projection_owner
+            ) VALUES ('local-kulfi', 'global-kulfi', 'server-link', 7, 0)
+            """
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+        self.assertFalse(bool(rows.iloc[0]["has_complete_global_identity"]))
+
+        conn.execute(
+            """
+            INSERT INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name,
+                is_verified, lifecycle_state, server_revision
+            ) VALUES (
+                'global-regular', 'group-1', 'Regular', 1, 'active', 7
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO variant_global_links (
+                local_variant_id, global_variant_id, provenance,
+                server_revision, is_projection_owner
+            ) VALUES ('local-regular', 'global-regular', 'server-link', 7, 0)
+            """
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+        self.assertTrue(bool(rows.iloc[0]["has_complete_global_identity"]))
         conn.close()
 
     def test_verified_non_pos_synthetic_rows_are_not_global_identity_gaps(self) -> None:

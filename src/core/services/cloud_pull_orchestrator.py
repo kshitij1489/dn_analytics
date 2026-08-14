@@ -350,17 +350,58 @@ def _run_best_effort_cloud_pulls_locked(
             summary["menu_mapping_verifications"] = {"error": str(e)}
             summary["menu_merges"] = {"error": str(e)}
 
-    if (
-        isinstance(summary.get("menu_mapping_verifications"), dict)
-        and isinstance(summary.get("menu_merges"), dict)
-        and not _block_error_message(summary["menu_mapping_verifications"])
-        and not _block_error_message(summary["menu_merges"])
+    # Gate the flush on whichever menu ground-truth streams actually ran. A
+    # global-menu install pulls its assignments through the global snapshot and
+    # skips the legacy merge/verification streams entirely, so gating on those
+    # two keys alone meant the flush never ran there at all: local POS-backed
+    # rows stayed unknown to the server, a `global_locator.map` had no
+    # assignment to repoint, the snapshot had nothing to send back, and
+    # assignment verification failed with an incomplete global identity.
+    if global_capability is not None and global_capability.active:
+        flush_gate_keys = ("global_menu", "global_menu_assignments")
+    else:
+        flush_gate_keys = ("menu_mapping_verifications", "menu_merges")
+    if all(
+        isinstance(summary.get(key), dict) and not _block_error_message(summary[key])
+        for key in flush_gate_keys
     ):
         try:
             from src.core.derived_assignment_flush import flush_pending_derived_assignments
 
             _announce(on_phase, "Flushing derived assignments...")
-            summary["derived_assignment_flush"] = flush_pending_derived_assignments(conn)
+            flush = flush_pending_derived_assignments(conn)
+            summary["derived_assignment_flush"] = flush
+            # The server links each newly accepted assignment to global identity
+            # as it lands, so the rows this flush just created carry identity the
+            # snapshot pulled a moment earlier could not have. Draining the
+            # snapshot again completes the resolution inside this one sync
+            # instead of leaving it to the next cycle.
+            if (
+                global_capability is not None
+                and global_capability.active
+                and int(flush.get("accepted") or 0)
+            ):
+                from src.core.global_menu_sync import pull_global_assignment_snapshot
+
+                _announce(on_phase, "Pulling menu assignments...")
+                # Its own except, and on the assignment key: nothing reads
+                # `derived_assignment_flush`, so reporting a failed re-pull there
+                # would drop it from `collect_menu_pull_errors` and let Sync DB
+                # claim success while the snapshot never drained. Overwriting the
+                # key the collector already watches is what makes the failure
+                # visible — and the flush result itself stays intact.
+                try:
+                    summary["global_menu_assignments"] = (
+                        pull_global_assignment_snapshot(
+                            conn, auth=auth_key, allow_profile_sync=True
+                        )
+                    )
+                except Exception as e:
+                    logger.exception("Post-flush global menu assignment pull failed")
+                    summary["global_menu_assignments"] = {
+                        "status": "error",
+                        "error": str(e),
+                    }
         except Exception as e:
             logger.exception("Derived assignment flush failed")
             summary["derived_assignment_flush"] = {"error": str(e)}

@@ -52,11 +52,12 @@ export type MergeTargetCandidate = {
 /**
  * Which menu items may receive this source variant.
  *
- * `requireGlobalLink` tracks the *mutation* capability, because that is the only
- * mode where the server authors the move as a global merge and refuses an
- * operand that carries no canonical identity. `is_verified` cannot stand in for
- * that: the global catalog owns the flag now, so a row can read verified and
- * still hold no link.
+ * `sourceHasCompleteGlobalIdentity` follows the source item + variant pair. A
+ * complete source takes the direct global-mutation path, where an unlinked
+ * target would be rejected at preview time. An incomplete source takes the
+ * coverage-repair path, which establishes target identity too. `is_verified`
+ * cannot stand in for link coverage: the global catalog owns the flag now, so a
+ * row can read verified and still hold no link.
  *
  * The item being resolved is always eligible — picking it just moves this source
  * variant onto another variant of the same item, and it may legitimately be
@@ -65,11 +66,98 @@ export type MergeTargetCandidate = {
 export function isEligibleMergeTarget(
     candidate: MergeTargetCandidate,
     sourceMenuItemId: string,
-    requireGlobalLink: boolean,
+    sourceHasCompleteGlobalIdentity: boolean,
 ): boolean {
     if (candidate.menu_item_id === sourceMenuItemId) return true;
     if (!candidate.is_verified) return false;
-    return !requireGlobalLink || candidate.is_globally_linked === true;
+    return !sourceHasCompleteGlobalIdentity || candidate.is_globally_linked === true;
+}
+
+export type MergeTargetVariantCandidate = {
+    is_globally_linked?: boolean;
+};
+
+/**
+ * A direct global variant merge needs canonical identity on both variants.
+ * Coverage repair can establish missing identity only while the source pair is
+ * incomplete, so otherwise the dropdown must fail closed on an unlinked target.
+ */
+export function isEligibleMergeTargetVariant(
+    candidate: MergeTargetVariantCandidate,
+    sourceHasCompleteGlobalIdentity: boolean,
+): boolean {
+    return !sourceHasCompleteGlobalIdentity || candidate.is_globally_linked === true;
+}
+
+export function mappedVerificationFailureMessage(
+    detail: string,
+    identityUnresolved: boolean,
+): string {
+    if (identityUnresolved) {
+        return `Global identity mapping succeeded, but assignment verification is still unresolved: ${detail} `
+            + 'Sync DB may project newly mapped POS rows. If the resolution remains open afterward, '
+            + 'review the mapping rules, especially whether the same POS ID is claimed as both an item and an addon.';
+    }
+    return `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} `
+        + 'The resolution remains open; retry to verify the existing identities.';
+}
+
+export type TargetCoverageContext = {
+    globalItemId?: string | null;
+    globalVariantId?: string | null;
+    locatorCount: number;
+};
+
+export type TargetCoveragePlan = {
+    mapLocators: boolean;
+    mapAtItemLevel: boolean;
+};
+
+/**
+ * What coverage repair still owes the merge target.
+ *
+ * The decision turns on whether the target *pair* carries POS evidence of its
+ * own, which is what `locatorCount` reports. Two different situations produce
+ * none, and they want the same repair: the operator picked a variant the target
+ * item does not carry yet (“Create new variant type”, or any variant type the
+ * dropdown offers from the database at large), or the pair exists but holds only
+ * synthetic, non-POS rows. Either way there is no locator that could carry a
+ * variant-level mapping, so no variant link is owed — one cannot be established
+ * without evidence. What can still be owed is the target *item*: while it
+ * carries no global identity, its own locators must map at item level.
+ */
+export function targetCoveragePlan(
+    target: TargetCoverageContext,
+    creatingNewVariant: boolean,
+): TargetCoveragePlan {
+    const pairHasOwnPosEvidence = !creatingNewVariant && target.locatorCount > 0;
+    return {
+        mapLocators: !target.globalItemId || (
+            pairHasOwnPosEvidence && !target.globalVariantId
+        ),
+        mapAtItemLevel: !pairHasOwnPosEvidence,
+    };
+}
+
+/**
+ * The canonical row this menu group already owns for the identity key a create
+ * asked for, read off that create's preview conflicts.
+ *
+ * A group cannot hold two rows for one identity key, so a second create is never
+ * the right mutation: adopting the row that holds it is what “ensure” means.
+ * Without this, a create an earlier attempt already committed makes every retry
+ * of the same resolution fail — the preview conflicts, so commit is refused,
+ * while the local pair it was minted for still carries no link of its own.
+ */
+export function claimedCanonicalIdentity(
+    conflicts: Array<Record<string, unknown>> | undefined,
+    identityField: 'global_item_id' | 'global_variant_id',
+): string | null {
+    const claimed = (conflicts || [])
+        .filter(conflict => conflict?.code === 'canonical_identity_taken')
+        .map(conflict => conflict?.[identityField])
+        .find(value => typeof value === 'string' && value.trim());
+    return typeof claimed === 'string' ? claimed.trim() : null;
 }
 
 export class GlobalIdentityMappedVerificationError extends Error {
