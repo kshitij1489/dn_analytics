@@ -2,10 +2,39 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     GlobalIdentityMappedVerificationError,
     globalResolutionRoute,
+    isEligibleMergeTarget,
     repairGlobalIdentityCoverage,
     resolutionAttemptKey,
     runResolutionAttempt,
 } from './menuResolutionRouting';
+
+describe('merge target eligibility', () => {
+    const linked = { menu_item_id: 'linked', is_verified: true, is_globally_linked: true };
+    const unlinked = { menu_item_id: 'unlinked', is_verified: true, is_globally_linked: false };
+    const unverified = { menu_item_id: 'unverified', is_verified: false, is_globally_linked: true };
+
+    it('drops a verified but unlinked target while mutations author the merge', () => {
+        expect(isEligibleMergeTarget(linked, 'source', true)).toBe(true);
+        expect(isEligibleMergeTarget(unlinked, 'source', true)).toBe(false);
+    });
+
+    it('keeps an unlinked target when only resolution is advertised', () => {
+        // Locator mapping establishes identity for either side, so the server
+        // never refuses the operand and the target must stay selectable.
+        expect(isEligibleMergeTarget(unlinked, 'source', false)).toBe(true);
+    });
+
+    it('never offers an unverified target that is not the item being resolved', () => {
+        expect(isEligibleMergeTarget(unverified, 'source', false)).toBe(false);
+        expect(isEligibleMergeTarget(unverified, 'unverified', true)).toBe(true);
+    });
+
+    it('treats a missing link flag as unlinked rather than eligible', () => {
+        expect(isEligibleMergeTarget(
+            { menu_item_id: 'legacy', is_verified: true }, 'source', true,
+        )).toBe(false);
+    });
+});
 
 describe('global menu resolution routing', () => {
     it('verifies an unverified assignment whose global identity is already correct', () => {

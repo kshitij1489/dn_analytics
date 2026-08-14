@@ -334,6 +334,10 @@ def build_global_action_from_local(
             "payload": {
                 "canonical_name": canonical_name,
                 "dimension": {"unit": str(unit or "").strip(), "value": value},
+                # The server reads this with bool(), so omitting it silently
+                # creates an unverified canonical variant. Mirror the item path
+                # and let the caller state the flag.
+                "is_verified": bool(detail.get("is_verified", False)),
             },
         }
 

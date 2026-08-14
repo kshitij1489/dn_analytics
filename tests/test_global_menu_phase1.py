@@ -3073,8 +3073,24 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             "payload": {
                 "canonical_name": "Party Tub",
                 "dimension": {"unit": "GMS", "value": 500},
+                "is_verified": False,
             },
         })
+
+    def test_variant_create_carries_the_requested_verification_flag(self) -> None:
+        """The server reads is_verified with bool(), so omitting it would mint an
+        unverified canonical variant no mutation can later repair."""
+        action = build_global_action_from_local(
+            Mock(),
+            mutation_type="variant_create",
+            details={
+                "canonical_name": "Party Tub",
+                "unit": "GMS",
+                "value": 500,
+                "is_verified": True,
+            },
+        )
+        self.assertTrue(action["payload"]["is_verified"])
 
     def test_global_commit_holds_cloud_pull_lock_through_reconciliation(self) -> None:
         def assert_locked(_conn, *, preview):

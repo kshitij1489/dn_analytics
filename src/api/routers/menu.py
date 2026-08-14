@@ -881,10 +881,17 @@ def get_menu_list(reader: ScopedReader = Depends(get_reader)):
 
 def _menu_list_rows(conn, _profile=None):
     cursor = conn.cursor()
+    # is_globally_linked drives target eligibility while the global menu owns
+    # identity: a row without a link cannot be the source or target of any
+    # global mutation, so offering it would only produce an unresolved-identity
+    # failure at preview time.
     cursor.execute("""
-        SELECT menu_item_id, name, type, is_verified
-        FROM menu_items
-        ORDER BY name
+        SELECT m.menu_item_id, m.name, m.type, m.is_verified,
+               CASE WHEN l.local_menu_item_id IS NULL THEN 0 ELSE 1 END
+        FROM menu_items m
+        LEFT JOIN menu_item_global_links l
+            ON l.local_menu_item_id = m.menu_item_id
+        ORDER BY m.name
     """)
     data = [
         {
@@ -892,6 +899,7 @@ def _menu_list_rows(conn, _profile=None):
             "name": row[1],
             "type": row[2],
             "is_verified": bool(row[3]),
+            "is_globally_linked": bool(row[4]),
         }
         for row in cursor.fetchall()
     ]

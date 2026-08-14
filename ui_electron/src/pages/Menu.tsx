@@ -25,6 +25,7 @@ import {
 import {
     GlobalIdentityMappedVerificationError,
     globalResolutionRoute,
+    isEligibleMergeTarget,
     repairGlobalIdentityCoverage,
     resolutionAttemptKey,
     runResolutionAttempt,
@@ -44,6 +45,7 @@ interface MenuLookupItem {
     name: string;
     type: string;
     is_verified: boolean;
+    is_globally_linked?: boolean;
 }
 
 interface VariantOption {
@@ -231,6 +233,27 @@ interface MatrixRow {
     value?: number | string | null;
     server_revision?: number;
 }
+
+/**
+ * A merge is authored against global identity, so the server rejects it before
+ * it reads the target when the source carries no link. The raw message tells the
+ * operator to sync, which cannot help — nothing will ever link the row — so name
+ * the two routes that do work on an unlinked source.
+ */
+const UNLINKED_SOURCE_MERGE_MESSAGE =
+    'This item has no global identity yet, so it cannot be merged into another item. '
+    + 'Use “Rename / Search” or “Verify as New Item” to give it one first.';
+
+const isGlobalIdentityUnresolved = (error: unknown): boolean => {
+    const detail = (error as {
+        response?: { data?: { detail?: string | Record<string, unknown> } };
+    }).response?.data?.detail;
+    return Boolean(
+        detail
+        && typeof detail === 'object'
+        && detail.code === 'global_menu_identity_unresolved'
+    );
+};
 
 const getApiErrorMessage = (error: unknown): string => {
     const err = error as {
@@ -1201,6 +1224,11 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
                         description: newVariantDescription.trim() || null,
                         unit: newVariantUnit || null,
                         value: newVariantValue.trim() ? Number(newVariantValue) : null,
+                        // An operator authoring a canonical variant by hand has
+                        // confirmed it by that act. There is no
+                        // global_variant.verify, so a variant created unverified
+                        // could never be repaired.
+                        is_verified: true,
                     },
                 });
                 globalPreview = previewResponse.data;
@@ -2658,8 +2686,23 @@ function ResolutionsTab({
         });
     }, [historyPage]);
 
+    const sourceLookup = modalItem
+        ? lookupItems.find(candidate => candidate.menu_item_id === modalItem.menu_item_id)
+        : undefined;
+
+    // Mirrors the server's own gate: merge preview only validates global identity
+    // when the *mutation* capability is live (`_global_menu_active`). A merge is
+    // authored against global identity, so there the source must already carry
+    // one — `_stable_identity` rejects the request before it ever reads the
+    // target, and every target fails identically. Under resolution-only
+    // capability the preview is not validated, and handleMerge repairs a missing
+    // source or target through locator mapping, so nothing may be blocked here.
+    const sourceGloballyUnlinked = Boolean(
+        globalMenuAdvertised && sourceLookup && !sourceLookup.is_globally_linked
+    );
+
     useEffect(() => {
-        if (!modalItem || !selectedTargetId) {
+        if (!modalItem || !selectedTargetId || sourceGloballyUnlinked) {
             setMergePreview(null);
             return;
         }
@@ -2680,7 +2723,12 @@ function ResolutionsTab({
             } catch (error) {
                 if (!cancelled) {
                     setMergePreview(null);
-                    setPopup({ type: 'error', message: getApiErrorMessage(error) });
+                    setPopup({
+                        type: 'error',
+                        message: isGlobalIdentityUnresolved(error)
+                            ? UNLINKED_SOURCE_MERGE_MESSAGE
+                            : getApiErrorMessage(error),
+                    });
                 }
             } finally {
                 if (!cancelled) {
@@ -2694,7 +2742,7 @@ function ResolutionsTab({
         return () => {
             cancelled = true;
         };
-    }, [modalItem, selectedTargetId]);
+    }, [modalItem, selectedTargetId, sourceGloballyUnlinked]);
 
     useEffect(() => {
         if (!mergePreview) {
@@ -2892,6 +2940,9 @@ function ResolutionsTab({
             {
                 canonical_name: canonicalName,
                 dimension: context?.variant?.dimension || { unit: '', value: null },
+                // A variant minted during a resolution is confirmed by the same
+                // operator action that mints it, exactly as the item path is.
+                is_verified: true,
             },
             `Creating the “${canonicalName}” canonical variant`,
         );
@@ -3343,11 +3394,12 @@ function ResolutionsTab({
         }
     };
 
-    // The item being resolved is always a valid target: picking it just moves this
-    // source variant onto another variant type of the same item. It may not be
-    // is_verified yet because sibling variants are still unresolved.
     const eligibleTargets = modalItem
-        ? lookupItems.filter(candidate => candidate.is_verified || candidate.menu_item_id === modalItem.menu_item_id)
+        ? lookupItems.filter(candidate => isEligibleMergeTarget(
+            candidate,
+            modalItem.menu_item_id,
+            globalMenuAdvertised,
+        ))
         : [];
 
     const filteredTargets = eligibleTargets.filter(candidate =>
@@ -3371,6 +3423,18 @@ function ResolutionsTab({
         }
         return true;
     });
+
+    // Requires the preview itself, not just its contents: any failed preview
+    // leaves an empty source-variant list, which makes variantMappingsComplete
+    // vacuously true and would otherwise re-enable the button. This also covers
+    // the unlinked-source case, where the preview is deliberately never fetched.
+    const mergeDisabled = (
+        !selectedTargetId
+        || previewLoading
+        || mergeSubmitting
+        || !mergePreview
+        || !variantMappingsComplete
+    );
 
     return (
         <div>
@@ -3591,6 +3655,19 @@ function ResolutionsTab({
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                     Move only this unresolved source variant into an existing verified menu item and target variant.
                                 </p>
+                                {sourceGloballyUnlinked && (
+                                    <p style={{
+                                        padding: '10px 12px',
+                                        marginBottom: '12px',
+                                        borderRadius: '8px',
+                                        background: 'rgba(234, 179, 8, 0.12)',
+                                        border: '1px solid rgba(234, 179, 8, 0.3)',
+                                        color: 'var(--text-color)',
+                                        fontSize: '0.85em',
+                                    }}>
+                                        {UNLINKED_SOURCE_MERGE_MESSAGE}
+                                    </p>
+                                )}
                                 <input
                                     value={targetSearch}
                                     onChange={(event) => setTargetSearch(event.target.value)}
@@ -3746,7 +3823,7 @@ function ResolutionsTab({
                                 )}
                                 <button
                                     onClick={() => void handleMerge()}
-                                    disabled={!selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete}
+                                    disabled={mergeDisabled}
                                     style={{
                                         width: '100%',
                                         marginTop: '12px',
@@ -3755,9 +3832,9 @@ function ResolutionsTab({
                                         color: 'white',
                                         border: 'none',
                                         borderRadius: '8px',
-                                        cursor: !selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete ? 'not-allowed' : 'pointer',
+                                        cursor: mergeDisabled ? 'not-allowed' : 'pointer',
                                         fontWeight: 700,
-                                        opacity: !selectedTargetId || previewLoading || mergeSubmitting || !variantMappingsComplete ? 0.7 : 1,
+                                        opacity: mergeDisabled ? 0.7 : 1,
                                     }}
                                 >
                                     {mergeSubmitting ? 'Resolving...' : 'Confirm Variant Move'}

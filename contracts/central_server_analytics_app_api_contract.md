@@ -2419,7 +2419,7 @@ Replays the stored accepted response for POST-timeout reconciliation; `404` when
  "payload":{"canonical_name":"Pistachio Kulfi","canonical_type":"Dessert","is_verified":false}}
 ```
 
-`global_variant.create` takes `canonical_name` plus `dimension: {unit, value}`.
+`global_variant.create` takes `canonical_name` plus `dimension: {unit, value}`, and `is_verified` exactly as the item create above does. The server reads that flag with `bool()`, so omitting it creates an **unverified** canonical variant — and unlike an item, there is no `global_variant.verify` to correct one afterwards.
 
 Create plus `global_locator.map` is the **only** way anything becomes canonical, and it covers both cases that look different but are the same operation: a dish added after the group was formed, and every unlinked row a newly enrolled restaurant arrives with. There is no bootstrap and nothing to rerun.
 

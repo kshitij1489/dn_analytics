@@ -43,6 +43,35 @@ export async function runResolutionAttempt<T>(
     }
 }
 
+export type MergeTargetCandidate = {
+    menu_item_id: string;
+    is_verified: boolean;
+    is_globally_linked?: boolean;
+};
+
+/**
+ * Which menu items may receive this source variant.
+ *
+ * `requireGlobalLink` tracks the *mutation* capability, because that is the only
+ * mode where the server authors the move as a global merge and refuses an
+ * operand that carries no canonical identity. `is_verified` cannot stand in for
+ * that: the global catalog owns the flag now, so a row can read verified and
+ * still hold no link.
+ *
+ * The item being resolved is always eligible — picking it just moves this source
+ * variant onto another variant of the same item, and it may legitimately be
+ * unverified while sibling variants are still unresolved.
+ */
+export function isEligibleMergeTarget(
+    candidate: MergeTargetCandidate,
+    sourceMenuItemId: string,
+    requireGlobalLink: boolean,
+): boolean {
+    if (candidate.menu_item_id === sourceMenuItemId) return true;
+    if (!candidate.is_verified) return false;
+    return !requireGlobalLink || candidate.is_globally_linked === true;
+}
+
 export class GlobalIdentityMappedVerificationError extends Error {
     readonly verificationError: unknown;
 
