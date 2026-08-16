@@ -447,6 +447,8 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
             SELECT
                 mv.menu_item_id,
                 mv.variant_id,
+                MIN(gil.global_menu_item_id) AS global_item_id,
+                MIN(gvl.global_variant_id) AS global_variant_id,
                 MIN(mv.is_verified) AS is_verified,
                 MIN(
                     CASE
@@ -499,6 +501,8 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
             s.name AS suggestion_name,
             s.type AS suggestion_type,
             uv.variant_id AS source_variant_id,
+            uv.global_item_id,
+            uv.global_variant_id,
             uv.is_verified,
             uv.has_complete_global_identity,
             COALESCE(v.variant_name, 'UNKNOWN') AS source_variant_name,
@@ -522,6 +526,30 @@ def fetch_unverified_items(conn, *, include_global_identity_gaps: bool = False):
     df = pd.DataFrame([dict(row) for row in cursor.fetchall()])
     if df.empty:
         return df
+
+    if include_global_identity_gaps:
+        # Link rows intentionally retain the server ID they were authored
+        # against. Surface redirect survivors to the UI so a group-side merge
+        # does not make an otherwise complete current link appear missing while
+        # the assignment projection is converging.
+        from src.core.global_menu_identity import global_ids_for_local
+
+        for index, row in df.iterrows():
+            raw_variant_id = row["source_variant_id"]
+            local_variant_id = (
+                None if raw_variant_id is None or pd.isna(raw_variant_id)
+                else str(raw_variant_id)
+            )
+            resolved_item_id, resolved_variant_id = global_ids_for_local(
+                conn,
+                str(row["menu_item_id"]),
+                local_variant_id,
+            )
+            df.at[index, "global_item_id"] = resolved_item_id
+            df.at[index, "global_variant_id"] = resolved_variant_id
+            df.at[index, "has_complete_global_identity"] = (
+                1 if resolved_item_id and resolved_variant_id else 0
+            )
 
     cursor = conn.execute(
         """
@@ -638,17 +666,23 @@ def fetch_menu_matrix(conn):
 def fetch_group_menu_catalog(
     conn, menu_group_id: str, restaurant_id: Optional[str] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Return active group-owned items and variants, never restaurant analytics."""
+    """Return active group-owned items/variants plus their local projection IDs.
+
+    Canonical IDs and labels remain the operator-facing identity.  The local
+    projection IDs are implementation handles used by desktop-only previews;
+    they must never be inferred from names.
+    """
     items = [
         {
             **dict(row),
-            "is_verified": bool(row[4]),
+            "is_verified": bool(row["is_verified"]),
         }
         for row in conn.execute(
             """
             SELECT i.global_menu_item_id, i.canonical_name, i.canonical_type,
                    COUNT(r.rule_id) AS active_pos_rules, i.is_verified,
-                   i.server_revision, i.updated_at
+                   i.server_revision, i.updated_at,
+                   l.local_menu_item_id
             FROM global_menu_items i
             LEFT JOIN global_menu_mapping_rules r
               ON r.target_global_menu_item_id=i.global_menu_item_id
@@ -657,9 +691,13 @@ def fetch_group_menu_catalog(
              AND r.locator_kind IN ('pos-item', 'pos-addon')
              AND r.lifecycle_state='active'
              AND (? IS NULL OR r.restaurant_id=?)
+            LEFT JOIN menu_item_global_links l
+              ON l.global_menu_item_id=i.global_menu_item_id
+             AND l.is_projection_owner=1
             WHERE i.menu_group_id=? AND i.lifecycle_state='active'
             GROUP BY i.global_menu_item_id, i.canonical_name, i.canonical_type,
-                     i.is_verified, i.server_revision, i.updated_at
+                     i.is_verified, i.server_revision, i.updated_at,
+                     l.local_menu_item_id
             ORDER BY i.canonical_type, i.canonical_name, i.global_menu_item_id
             """,
             (restaurant_id, restaurant_id, menu_group_id),
@@ -668,15 +706,19 @@ def fetch_group_menu_catalog(
     variants = [
         {
             **dict(row),
-            "is_verified": bool(row[5]),
+            "is_verified": bool(row["is_verified"]),
         }
         for row in conn.execute(
             """
-            SELECT global_variant_id, canonical_name, description, unit, value,
-                   is_verified, server_revision, updated_at
-            FROM global_variants
-            WHERE menu_group_id=? AND lifecycle_state='active'
-            ORDER BY canonical_name, unit, value, global_variant_id
+            SELECT v.global_variant_id, v.canonical_name, v.description, v.unit, v.value,
+                   v.is_verified, v.server_revision, v.updated_at,
+                   l.local_variant_id
+            FROM global_variants v
+            LEFT JOIN variant_global_links l
+              ON l.global_variant_id=v.global_variant_id
+             AND l.is_projection_owner=1
+            WHERE v.menu_group_id=? AND v.lifecycle_state='active'
+            ORDER BY v.canonical_name, v.unit, v.value, v.global_variant_id
             """,
             (menu_group_id,),
         ).fetchall()

@@ -91,7 +91,7 @@ Menu-identity endpoints add one optional top-level key, `identity_coverage` (see
 | Row tables (orders, items, addons, taxes, discounts, customers) | Sorted union; every row carries `restaurant_id`, `restaurant_name`, and `row_key = <restaurant_id>:<local key>`. NULL sort values order as SQLite does — first ascending, last descending |
 | Same variant priced differently per store | Lowest price shown; each store's own price stays in `contributors` |
 | Local integer PKs, Petpooja order IDs, menu IDs, customer IDs | Never treated as globally unique |
-| Menu/item analytics | Grouped by durable dimensions (item name, type, variant name, unit, value) with `contributors` back to `{restaurant_id, menu_item_id, variant_id}` — see the identity gate below |
+| Menu/item analytics | Global-only: grouped by canonical global item/variant IDs with `contributors` back to `{restaurant_id, menu_item_id, variant_id}`. Local/unlinked rows are omitted and counted in `identity_coverage`; they are never name-merged into a group aggregate. |
 | Customers | Profile-qualified. Two stores' records are never merged by name, phone, address, or local ID. Counts mean "store-customer records" |
 | Customer rates | Recomputed by re-running the same pure calculators over combined order atoms (`src/core/queries/customer_metric_sources.py`) |
 | Forecast revenue/orders/quantity/volume/prep | Summed per date and model |
@@ -101,9 +101,9 @@ Menu-identity endpoints add one optional top-level key, `identity_coverage` (see
 
 Reducers are declared per endpoint next to the route. There is deliberately no generic "sum every numeric field" helper — see `src/core/queries/multi_store_reducers.py`.
 
-### Menu identity gate
+### Global-only menu identity
 
-`group_menu_identity_rows` switches to global item/variant IDs **only if every included profile is `aggregation_ready`** (active global menu + aggregation advertised + bootstrap complete). Coverage is diagnostic and does not gate that switch. One lagging store keeps the whole request on the legacy name-based path — it never mixes bases. Rows without a global link are keyed by `restaurant_id` plus local IDs and flagged `identity_unlinked`; they are never name-merged into a global group. Linked/total counts and the quarantine count ride on the envelope's `identity_coverage`. A profile whose database predates the schema degrades to the legacy reducer and reports `active: false` — never a false global-ready.
+All Stores menu surfaces use canonical identity only. **Group Catalog** federates the cached global item/variant tables and de-duplicates by `(menu_group_id, global ID)`. Summary, Menu Items, Variants, and Menu Matrix group linked analytics by global item/variant ID even while a member is still enrolling; there is no legacy name-based fallback. A row without the required active global link is omitted from the aggregate, and `identity_coverage.global_only`, `linked_rows`, `total_rows`, and `omitted_unlinked_rows` make the gap explicit in the selector status. A profile whose global capability is inactive contributes no menu rows; the canonical catalog endpoint reports that profile as incomplete rather than treating it as an empty store.
 
 ### Business dates and timezones
 
@@ -158,7 +158,7 @@ Cost is linear in store count: one read-only connection per profile per request,
 |---|---|
 | `src/core/analytics_scope.py` | `AnalyticsScope`, snapshot resolution, `__all__` handling |
 | `src/core/queries/multi_store.py` | Read-only fan-out, envelope, per-profile timezone binding |
-| `src/core/queries/multi_store_reducers.py` | Declarative rules (`Sum`, `Ratio`, `Min`, `Max`, `First`, `AllTrue`, `AnyTrue`), row/group helpers, menu identity gate |
+| `src/core/queries/multi_store_reducers.py` | Declarative rules (`Sum`, `Ratio`, `Min`, `Max`, `First`, `AllTrue`, `AnyTrue`), row/group helpers, global-only menu identity reducer |
 | `src/core/queries/multi_store_forecast.py` | Forecast combination and incomplete-store reporting |
 | `src/core/queries/customer_metric_sources.py` | Profile-qualified customer order atoms |
 | `src/core/services/all_stores_sync.py` | Sequential Sync DB coordinator |

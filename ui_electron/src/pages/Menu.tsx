@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type CSSProperties } from 'react';
+import { useCallback, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { endpoints } from '../api';
 import { CollapsibleCard, ErrorPopup, SingleStoreOnly, TabButton } from '../components';
 import type { PopupMessage } from '../components';
@@ -23,17 +23,30 @@ import {
     isGlobalMenuCatalogReadable,
 } from '../globalMenuCapabilities';
 import {
+    canonicalItemRenameConflicts,
+    canonicalItemSelectionId,
+    canonicalVariantLabel,
+    canonicalVariantSelectionId,
     claimedCanonicalIdentity,
+    findCanonicalVariantByIdentity,
+    filterCanonicalItemTargets,
     GlobalIdentityMappedVerificationError,
     globalResolutionRoute,
     isEligibleMergeTarget,
-    isEligibleMergeTargetVariant,
+    isResolutionTargetSelectionMissing,
     mappedVerificationFailureMessage,
     repairGlobalIdentityCoverage,
     resolutionAttemptKey,
     runResolutionAttempt,
-    targetCoveragePlan,
 } from '../menuResolutionRouting';
+import {
+    collapseGroupHistoryBursts,
+    GROUP_HISTORY_FILTERS,
+    groupHistoryAction,
+    groupHistoryDetail,
+    type GroupHistoryEntryLike,
+    type GroupHistoryFilter,
+} from '../groupHistory';
 
 // --- Shared Components ---
 
@@ -50,12 +63,14 @@ interface MenuLookupItem {
     type: string;
     is_verified: boolean;
     is_globally_linked?: boolean;
+    global_menu_item_id?: string | null;
 }
 
 interface VariantOption {
     variant_id: string;
     name: string;
     is_globally_linked?: boolean;
+    global_variant_id?: string | null;
 }
 
 interface ResolutionItem {
@@ -77,6 +92,8 @@ interface ResolutionItem {
     suggestion_type?: string | null;
     suggested_variant_id?: string | null;
     suggested_variant_name?: string | null;
+    global_item_id?: string | null;
+    global_variant_id?: string | null;
     resolution_kind?: 'addon_gap' | 'unverified_mapping' | 'global_identity_gap' | null;
     is_verified?: boolean | number | null;
     has_complete_global_identity?: boolean;
@@ -105,7 +122,7 @@ interface SuspectMapping {
     seen_at?: string;
 }
 
-interface MergeHistoryEntry {
+interface MergeHistoryEntry extends GroupHistoryEntryLike {
     merge_id: number;
     source_id: string;
     target_id: string;
@@ -120,7 +137,13 @@ interface MergeHistoryEntry {
     event_type?: string;
     origin_restaurant_id?: string | null;
     actor?: string | null;
+    attribution?: {
+        restaurant_name?: string | null;
+        [key: string]: unknown;
+    } | null;
     is_undoable?: boolean;
+    is_system_event?: boolean;
+    detail?: Record<string, unknown> | null;
 }
 
 interface MergeHistoryVariantAssignment {
@@ -946,7 +969,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
     return (
         <div>
             <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-                Item-level analytics stay here. Use <b style={{ color: 'var(--text-color)' }}>Menu Matrix</b> to merge or consolidate specific menu item + variant pairs.
+                {isAllStores
+                    ? <>Global item aggregates across the included stores. Local-only and unlinked menu rows are omitted.</>
+                    : <>Item-level analytics stay here. Use <b style={{ color: 'var(--text-color)' }}>Menu Matrix</b> to merge or consolidate specific menu item + variant pairs.</>}
             </p>
 
             {/* Menu Items Table Container */}
@@ -992,7 +1017,9 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                         <table className="standard-table">
                             <thead>
                                 <tr>
-                                    {!isAllStores && (
+                                    {isAllStores ? (
+                                        <th>Global Item ID</th>
+                                    ) : (
                                         <th onClick={() => handleSort('menu_item_id')}>Menu Item ID{renderSortIcon('menu_item_id')}</th>
                                     )}
                                     <th onClick={() => handleSort('name')}>Name{renderSortIcon('name')}</th>
@@ -1006,8 +1033,10 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
                             </thead>
                             <tbody>
                                 {tableData.map((row, i) => (
-                                    <tr key={i}>
-                                        {!isAllStores && (
+                                    <tr key={row.global_menu_item_id || i}>
+                                        {isAllStores ? (
+                                            <td><code>{row.global_menu_item_id}</code></td>
+                                        ) : (
                                             <td style={{ fontSize: '0.8em', color: 'var(--text-secondary)' }}>{row["menu_item_id"]}</td>
                                         )}
                                         <td>{row["name"]}</td>
@@ -1054,6 +1083,7 @@ function MenuItemsTab({ lastDbSync }: { lastDbSync?: number }) {
 // --- Group Catalog Tab ---
 
 function GroupCatalogTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { isAllStores } = useStore();
     const [catalog, setCatalog] = useState<GlobalMenuCatalogResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
@@ -1075,25 +1105,33 @@ function GroupCatalogTab({ lastDbSync }: { lastDbSync?: number }) {
 
     if (loading) return <div>Loading group catalog...</div>;
 
+    const menuGroupIds = catalog?.menu_group_ids?.length
+        ? catalog.menu_group_ids
+        : catalog?.menu_group_id ? [catalog.menu_group_id] : [];
+    const showGroupColumn = menuGroupIds.length > 1;
+
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-                Canonical items and variants are owned by menu group <b>{catalog?.menu_group_id}</b>.
-                Store sales and availability remain on the restaurant-specific analytics tabs.
+                {isAllStores
+                    ? <>Canonical global items and variants for {menuGroupIds.length === 1 ? <>menu group <b>{menuGroupIds[0]}</b></> : <><b>{menuGroupIds.length}</b> menu groups</>}. Local-only rows are not shown.</>
+                    : <>Canonical items and variants are owned by menu group <b>{catalog?.menu_group_id}</b>. Store sales and availability remain on the restaurant-specific analytics tabs.</>}
             </p>
-            <Card title={`Group Items (${catalog?.items.length || 0})`}>
+            <Card title={`Global Group Items (${catalog?.items.length || 0})`}>
                 <div style={{ overflowX: 'auto' }}>
                     <table className="standard-table">
                         <thead>
                             <tr>
+                                {showGroupColumn && <th>Menu Group</th>}
                                 <th>Name</th><th>Type</th><th className="text-center">POS Rules</th>
                                 <th className="text-center">Verified</th><th>Global ID</th>
                             </tr>
                         </thead>
                         <tbody>
                             {(catalog?.items || []).map(item => (
-                                <tr key={item.global_menu_item_id}>
+                                <tr key={`${item.menu_group_id || catalog?.menu_group_id}:${item.global_menu_item_id}`}>
+                                    {showGroupColumn && <td><code>{item.menu_group_id}</code></td>}
                                     <td>{item.canonical_name}</td>
                                     <td>{item.canonical_type || '—'}</td>
                                     <td className="text-center">{item.active_pos_rules}</td>
@@ -1105,18 +1143,20 @@ function GroupCatalogTab({ lastDbSync }: { lastDbSync?: number }) {
                     </table>
                 </div>
             </Card>
-            <Card title={`Group Variants (${catalog?.variants.length || 0})`}>
+            <Card title={`Global Group Variants (${catalog?.variants.length || 0})`}>
                 <div style={{ overflowX: 'auto' }}>
                     <table className="standard-table">
                         <thead>
                             <tr>
+                                {showGroupColumn && <th>Menu Group</th>}
                                 <th>Name</th><th>Unit</th><th>Value</th>
                                 <th className="text-center">Verified</th><th>Global ID</th>
                             </tr>
                         </thead>
                         <tbody>
                             {(catalog?.variants || []).map(variant => (
-                                <tr key={variant.global_variant_id}>
+                                <tr key={`${variant.menu_group_id || catalog?.menu_group_id}:${variant.global_variant_id}`}>
+                                    {showGroupColumn && <td><code>{variant.menu_group_id}</code></td>}
                                     <td>{variant.canonical_name}</td>
                                     <td>{variant.unit || '—'}</td>
                                     <td>{variant.value ?? '—'}</td>
@@ -1188,7 +1228,7 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const displayColumns = isAllStores
-        ? ['variant_name', 'description', 'unit', 'value', 'is_verified']
+        ? ['global_variant_id', 'variant_name', 'description', 'unit', 'value', 'is_verified']
         : ['variant_id', 'variant_name', 'description', 'unit', 'value', 'is_verified', 'created_at', 'updated_at'];
 
     const resetAddForm = () => {
@@ -1264,7 +1304,9 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
         <div style={{ marginTop: '20px' }}>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Variants</h3>
+                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>
+                    {isAllStores ? 'Global Variants' : 'Variants'}
+                </h3>
                 {!isAllStores && (
                     <button
                         onClick={() => setShowAddForm(prev => !prev)}
@@ -1339,8 +1381,8 @@ function VariantsTab({ lastDbSync }: { lastDbSync?: number }) {
                         <thead>
                             <tr>
                                 {displayColumns.map(col => (
-                                    <th key={col} onClick={() => handleSort(col)}>
-                                        {formatColumnHeader(col)}{renderSortIcon(col)}
+                                    <th key={col} onClick={col === 'global_variant_id' ? undefined : () => handleSort(col)}>
+                                        {formatColumnHeader(col)}{col === 'global_variant_id' ? null : renderSortIcon(col)}
                                     </th>
                                 ))}
                             </tr>
@@ -2233,7 +2275,7 @@ function MatrixTab({
             <div style={{ marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '15px', flexWrap: 'wrap' }}>
                     <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>
-                        Menu Matrix ({matrixData.length} unique pairs)
+                        {isAllStores ? 'Global Menu Matrix' : 'Menu Matrix'} ({matrixData.length} unique pairs)
                     </h3>
                     <input
                         placeholder="Search Name..."
@@ -2248,8 +2290,10 @@ function MatrixTab({
                         <thead>
                             <tr>
                                 {!isAllStores && canonicalControlsEnabled && <th>Action</th>}
+                                {isAllStores && <th onClick={() => handleSort('global_menu_item_id')}>Global Item ID{renderSortIcon('global_menu_item_id')}</th>}
                                 <th onClick={() => handleSort('name')}>Item{renderSortIcon('name')}</th>
                                 <th onClick={() => handleSort('type')}>Type{renderSortIcon('type')}</th>
+                                {isAllStores && <th onClick={() => handleSort('global_variant_id')}>Global Variant ID{renderSortIcon('global_variant_id')}</th>}
                                 <th onClick={() => handleSort('variant_name')}>Variant{renderSortIcon('variant_name')}</th>
                                 <th className="text-center" onClick={() => handleSort('mapping_count')}>Mappings{renderSortIcon('mapping_count')}</th>
                                 <th className="text-center" onClick={() => handleSort('order_count')}>Orders{renderSortIcon('order_count')}</th>
@@ -2262,7 +2306,7 @@ function MatrixTab({
                         </thead>
                         <tbody>
                             {displayData.map((r, i) => (
-                                <tr key={i}>
+                                <tr key={isAllStores ? `${r.global_menu_item_id}:${r.global_variant_id}` : i}>
                                     {!isAllStores && canonicalControlsEnabled && <td>
                                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                             <button
@@ -2293,6 +2337,7 @@ function MatrixTab({
                                             </button>
                                         </div>
                                     </td>}
+                                    {isAllStores && <td><code>{r.global_menu_item_id}</code></td>}
                                     <td>
                                         <span>{r.name}</span>
                                         {isUnverifiedFlag(r.is_verified) && (
@@ -2300,6 +2345,7 @@ function MatrixTab({
                                         )}
                                     </td>
                                     <td>{r.type}</td>
+                                    {isAllStores && <td><code>{r.global_variant_id}</code></td>}
                                     <td>{r.variant_name}</td>
                                     <td className="text-center">{r.mapping_count}</td>
                                     <td className="text-center">
@@ -2552,7 +2598,6 @@ function ResolutionsTab({
     const { selectedStore } = useStore();
     const globalMenuAdvertised = hasGlobalMenuMutationCapability(selectedStore);
     const globalResolutionAdvertised = hasGlobalMenuResolutionCapability(selectedStore);
-    const globalResolutionOnly = globalResolutionAdvertised && !globalMenuAdvertised;
     const [items, setItems] = useState<ResolutionItem[]>([]);
     const [resolutionCounts, setResolutionCounts] = useState<ResolutionCounts>({
         local_unverified: 0,
@@ -2562,6 +2607,7 @@ function ResolutionsTab({
     const [lookupItems, setLookupItems] = useState<MenuLookupItem[]>([]);
     const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
     const [typeOptions, setTypeOptions] = useState<string[]>([]);
+    const [globalCatalog, setGlobalCatalog] = useState<GlobalMenuCatalogResponse | null>(null);
     const [mergeHistory, setMergeHistory] = useState<MergeHistoryEntry[]>([]);
     const [historyPage, setHistoryPage] = useState(1);
     const [historyTotal, setHistoryTotal] = useState(0);
@@ -2571,14 +2617,18 @@ function ResolutionsTab({
     const [modalItem, setModalItem] = useState<ResolutionItem | null>(null);
     const [modalEntryPoint, setModalEntryPoint] = useState<'search' | 'rename'>('search');
     const [targetSearch, setTargetSearch] = useState('');
+    const [targetSelectionNotice, setTargetSelectionNotice] = useState<string | null>(null);
     const [selectedTargetId, setSelectedTargetId] = useState('');
+    const [selectedGlobalTargetItemId, setSelectedGlobalTargetItemId] = useState('');
     const [mergePreview, setMergePreview] = useState<MergePreview | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
     const [renameName, setRenameName] = useState('');
     const [renameType, setRenameType] = useState('');
     const [renameVariantId, setRenameVariantId] = useState('');
+    const [renameVariantName, setRenameVariantName] = useState('');
     const [mergeSubmitting, setMergeSubmitting] = useState(false);
     const [renameSubmitting, setRenameSubmitting] = useState(false);
+    const [verifyingExistingKey, setVerifyingExistingKey] = useState<string | null>(null);
     const [selectedTargetVariants, setSelectedTargetVariants] = useState<Record<string, string>>({});
     const [newVariantNames, setNewVariantNames] = useState<Record<string, string>>({});
     const renameSectionRef = useRef<HTMLDivElement>(null);
@@ -2620,6 +2670,16 @@ function ResolutionsTab({
         return res.data;
     };
 
+    const loadGlobalCatalog = async () => {
+        if (!globalResolutionAdvertised) {
+            setGlobalCatalog(null);
+            return null;
+        }
+        const res = await endpoints.menu.globalCatalog();
+        setGlobalCatalog(res.data);
+        return res.data;
+    };
+
     const loadHistory = async (page = historyPage) => {
         const res = await endpoints.menu.mergeHistory({
             limit: HISTORY_PAGE_SIZE,
@@ -2649,12 +2709,13 @@ function ResolutionsTab({
             loadLookupItems(),
             loadVariantOptions(),
             loadTypeOptions(),
+            loadGlobalCatalog(),
             loadHistory(),
         ]);
         const failedRefreshes = results
             .map((result, index) => ({
                 result,
-                label: ['items', 'counts', 'lookup', 'variants', 'types', 'history'][index],
+                label: ['items', 'counts', 'lookup', 'variants', 'types', 'group catalog', 'history'][index],
             }))
             .filter(({ result }) => result.status === 'rejected')
             .map(({ label, result }) => `${label}: ${getApiErrorMessage((result as PromiseRejectedResult).reason)}`);
@@ -2671,7 +2732,7 @@ function ResolutionsTab({
 
     useEffect(() => {
         void refreshAll();
-    }, [lastDbSync]);
+    }, [lastDbSync, selectedStore?.restaurant_id]);
 
     const loadedHistoryPageRef = useRef(1);
     useEffect(() => {
@@ -2735,25 +2796,39 @@ function ResolutionsTab({
 
         const nextSelectedTargetVariants: Record<string, string> = {};
         const nextNewVariantNames: Record<string, string> = {};
-        const sourceHasCompleteGlobalIdentity = Boolean(
-            globalMenuAdvertised && modalItem?.has_complete_global_identity
-        );
         const suggestedVariantExists = Boolean(
+            !globalResolutionAdvertised &&
             modalItem?.suggested_variant_id &&
-            variantOptions.some(variant =>
-                variant.variant_id === modalItem.suggested_variant_id &&
-                isEligibleMergeTargetVariant(variant, sourceHasCompleteGlobalIdentity)
-            )
+            variantOptions.some(variant => variant.variant_id === modalItem.suggested_variant_id)
         );
 
         mergePreview.source_variants.forEach(sourceVariant => {
+            if (globalResolutionAdvertised) {
+                const suggestedGlobalVariantId = globalCatalog?.variants.find(
+                    variant => variant.local_variant_id === modalItem?.suggested_variant_id
+                )?.global_variant_id;
+                const matchingCanonicalVariant = findCanonicalVariantByIdentity(
+                    globalCatalog?.variants || [],
+                    modalItem?.global_variant_id,
+                    suggestedGlobalVariantId,
+                );
+                const shouldCreateCanonicalVariant = Boolean(
+                    globalCatalog &&
+                    !matchingCanonicalVariant &&
+                    modalItem?.suggested_variant_name
+                );
+                nextSelectedTargetVariants[sourceVariant.variant_id] =
+                    matchingCanonicalVariant?.global_variant_id ||
+                    (shouldCreateCanonicalVariant ? '__new__' : '');
+                nextNewVariantNames[sourceVariant.variant_id] = '';
+                return;
+            }
             const matchingTargetVariant = mergePreview.target_variants.find(
                 targetVariant => (
                     targetVariant.variant_id === sourceVariant.variant_id ||
                     targetVariant.variant_name === sourceVariant.variant_name
                 ) && variantOptions.some(variant =>
-                    variant.variant_id === targetVariant.variant_id &&
-                    isEligibleMergeTargetVariant(variant, sourceHasCompleteGlobalIdentity)
+                    variant.variant_id === targetVariant.variant_id
                 )
             );
 
@@ -2762,7 +2837,7 @@ function ResolutionsTab({
                 (shouldUseSuggestedVariant
                     ? (suggestedVariantExists
                         ? (modalItem?.suggested_variant_id || '')
-                        : (modalItem?.suggested_variant_name && !sourceHasCompleteGlobalIdentity
+                        : (modalItem?.suggested_variant_name
                             ? '__new__'
                             : ''))
                     : '');
@@ -2781,7 +2856,14 @@ function ResolutionsTab({
                     : mergePreview.source_variants[0].variant_id
             );
         }
-    }, [globalMenuAdvertised, mergePreview, modalItem, renameVariantId, variantOptions]);
+    }, [
+        globalCatalog,
+        globalResolutionAdvertised,
+        mergePreview,
+        modalItem,
+        renameVariantId,
+        variantOptions,
+    ]);
 
     useEffect(() => {
         if (!modalItem || modalEntryPoint !== 'rename') return;
@@ -2798,25 +2880,65 @@ function ResolutionsTab({
         initialTargetId?: string,
         entryPoint: 'search' | 'rename' = 'search'
     ) => {
+        const initialGlobalTarget = globalResolutionAdvertised
+            ? globalCatalog?.items.find(candidate => (
+                candidate.local_menu_item_id === initialTargetId
+            ))
+            : undefined;
+        const currentGlobalItem = globalResolutionAdvertised
+            ? globalCatalog?.items.find(candidate => (
+                candidate.global_menu_item_id === item.global_item_id
+            ))
+            : undefined;
+        const suggestedGlobalVariantId = globalCatalog?.variants.find(
+            candidate => candidate.local_variant_id === item.suggested_variant_id
+        )?.global_variant_id;
+        const initialGlobalVariant = globalResolutionAdvertised
+            ? findCanonicalVariantByIdentity(
+                globalCatalog?.variants || [],
+                item.global_variant_id,
+                suggestedGlobalVariantId,
+            )
+            : undefined;
+        let initialTargetNotice: string | null = null;
+        if (globalResolutionAdvertised && initialTargetId && !initialGlobalTarget) {
+            initialTargetNotice = 'The suggestion is not an active canonical group item, so it was not pre-selected. Choose a group item from this catalog.';
+        }
         setModalItem(item);
         setModalEntryPoint(entryPoint);
-        setTargetSearch(initialTargetId && item.suggestion_name ? item.suggestion_name : '');
-        setSelectedTargetId(initialTargetId || '');
+        setTargetSearch(globalResolutionAdvertised
+            ? (initialGlobalTarget?.canonical_name || '')
+            : (initialTargetId ? (item.suggestion_name || '') : ''));
+        setTargetSelectionNotice(initialTargetNotice);
+        setSelectedTargetId(globalResolutionAdvertised
+            ? (initialGlobalTarget?.local_menu_item_id || '')
+            : (initialTargetId || ''));
+        setSelectedGlobalTargetItemId(initialGlobalTarget?.global_menu_item_id || '');
         setMergePreview(null);
-        setRenameName(item.name);
-        setRenameType(item.type);
-        setRenameVariantId(item.suggested_variant_id || item.source_variant_id || '');
+        setRenameName(globalResolutionAdvertised
+            ? (currentGlobalItem?.canonical_name || '')
+            : item.name);
+        setRenameType(globalResolutionAdvertised
+            ? (currentGlobalItem?.canonical_type || '')
+            : item.type);
+        setRenameVariantId(globalResolutionAdvertised
+            ? (initialGlobalVariant?.global_variant_id || '__new__')
+            : (item.suggested_variant_id || item.source_variant_id || ''));
+        setRenameVariantName('');
     };
 
     const closeResolutionModal = () => {
         setModalItem(null);
         setModalEntryPoint('search');
         setTargetSearch('');
+        setTargetSelectionNotice(null);
         setSelectedTargetId('');
+        setSelectedGlobalTargetItemId('');
         setMergePreview(null);
         setRenameName('');
         setRenameType('');
         setRenameVariantId('');
+        setRenameVariantName('');
         setMergeSubmitting(false);
         setRenameSubmitting(false);
         setSelectedTargetVariants({});
@@ -2909,7 +3031,11 @@ function ResolutionsTab({
             expected_global_variant_id: expectedGlobalVariantId,
             mutation_id: mutationId,
         });
-        const refreshed = await loadItems();
+        const [refreshed] = await Promise.all([
+            loadItems(),
+            loadResolutionCounts(),
+            loadLookupItems(),
+        ]);
         const assignmentIdSet = new Set(assignmentIds);
         const stillUnresolved = refreshed.some(candidate =>
             (candidate.assignment_order_item_ids || []).some(
@@ -2924,6 +3050,49 @@ function ResolutionsTab({
         verificationMutationIdsRef.current.delete(requestKey);
         mappedResolutionIdentitiesRef.current.delete(requestKey);
         return response.data.message || 'Assignment verified successfully.';
+    };
+
+    const handleVerifyCurrentGlobalLink = async (item: ResolutionItem) => {
+        const attemptKey = resolutionAttemptKey(item);
+        setVerifyingExistingKey(attemptKey);
+        try {
+            await runResolutionAttempt(resolutionInFlightRef.current, attemptKey, async () => {
+                const context = await loadGlobalResolutionContext(
+                    item.menu_item_id,
+                    item.source_variant_id,
+                );
+                if (!context.global_item_id || !context.global_variant_id) {
+                    throw new Error(
+                        'This assignment does not yet have a complete global identity. Choose a canonical group item and variant first.',
+                    );
+                }
+                const canonicalItem = globalCatalog?.items.find(
+                    candidate => candidate.global_menu_item_id === context.global_item_id
+                );
+                const canonicalVariant = globalCatalog?.variants.find(
+                    candidate => candidate.global_variant_id === context.global_variant_id
+                );
+                if (!canonicalItem || !canonicalVariant) {
+                    throw new Error(
+                        'The current global identity is missing from the active group catalog. Run Sync DB and choose a canonical match.',
+                    );
+                }
+                const message = await verifyExistingGlobalAssignment(item, {
+                    globalItemId: context.global_item_id,
+                    globalVariantId: context.global_variant_id,
+                });
+                if (!message) return;
+                setPopup({ type: 'success', message });
+                if (modalItem?.menu_item_id === item.menu_item_id &&
+                    modalItem.source_variant_id === item.source_variant_id) {
+                    closeResolutionModal();
+                }
+            });
+        } catch (error) {
+            setPopup({ type: 'error', message: getApiErrorMessage(error) });
+        } finally {
+            setVerifyingExistingKey(null);
+        }
     };
 
     const ensureGlobalResolutionItem = async (
@@ -2992,8 +3161,20 @@ function ResolutionsTab({
     };
 
     const handleMerge = async () => {
-        if (!modalItem || !selectedTargetId) {
-            setPopup({ type: 'error', message: 'Select a verified target item first.' });
+        if (
+            !modalItem ||
+            isResolutionTargetSelectionMissing(
+                globalResolutionAdvertised,
+                selectedTargetId,
+                selectedGlobalTargetItemId,
+            )
+        ) {
+            setPopup({
+                type: 'error',
+                message: globalResolutionAdvertised
+                    ? 'Select an active canonical group item first.'
+                    : 'Select a verified target item first.',
+            });
             return;
         }
 
@@ -3032,94 +3213,60 @@ function ResolutionsTab({
                 closeResolutionModal();
                 return;
             }
-            const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
-            const sourceResolutionContext = globalResolutionAdvertised
-                ? await loadGlobalResolutionContext(
+            if (globalResolutionAdvertised) {
+                const selectedCanonicalItem = globalCatalog?.items.find(
+                    candidate => candidate.global_menu_item_id === selectedGlobalTargetItemId
+                );
+                const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
+                const selectedCanonicalVariant = selectedTargetVariant === '__new__'
+                    ? undefined
+                    : globalCatalog?.variants.find(
+                        candidate => candidate.global_variant_id === selectedTargetVariant
+                    );
+                if (!selectedCanonicalItem?.local_menu_item_id) {
+                    throw new Error(
+                        'The selected canonical item has no local projection. Run Sync DB and try again.',
+                    );
+                }
+                if (selectedTargetVariant !== '__new__' && (
+                    !selectedCanonicalVariant?.local_variant_id
+                )) {
+                    throw new Error('Choose an active canonical group variant.');
+                }
+                const sourceContext = await loadGlobalResolutionContext(
                     modalItem.menu_item_id,
                     modalItem.source_variant_id,
-                )
-                : null;
-            const targetResolutionContext = sourceResolutionContext
-                ? (selectedTargetVariant === '__new__'
-                    ? await loadGlobalResolutionContext(selectedTargetId)
-                    : await loadGlobalResolutionContext(selectedTargetId, selectedTargetVariant))
-                : null;
-            const resolutionRoute = sourceResolutionContext
-                ? globalResolutionRoute(
-                    modalItem.resolution_kind,
-                    sourceResolutionContext,
-                    targetResolutionContext,
-                )
-                : 'locator_map';
-            if (resolutionRoute === 'verify_assignment') {
-                const message = await verifyExistingGlobalAssignment(modalItem, {
-                    globalItemId: sourceResolutionContext!.global_item_id!,
-                    globalVariantId: sourceResolutionContext!.global_variant_id!,
-                });
-                if (!message) return;
-                setPopup({ type: 'success', message });
-                closeResolutionModal();
-                return;
-            }
-            const sourceIdentityMissing = Boolean(
-                sourceResolutionContext && (
-                    !sourceResolutionContext.global_item_id ||
-                    !sourceResolutionContext.global_variant_id
-                ),
-            );
-            const useCoverageRepair = Boolean(
-                sourceResolutionContext && (
-                    sourceIdentityMissing ||
-                    (globalResolutionOnly && resolutionRoute === 'locator_map')
-                ),
-            );
-            if (useCoverageRepair && sourceResolutionContext) {
-                const sourceContext = sourceResolutionContext;
-                const targetContext = targetResolutionContext!;
-                const targetCoverage = targetCoveragePlan(
-                    {
-                        globalItemId: targetContext.global_item_id,
-                        globalVariantId: targetContext.global_variant_id,
-                        locatorCount: targetContext.locators.length,
-                    },
-                    selectedTargetVariant === '__new__',
                 );
+                const intendedIdentity = {
+                    global_item_id: selectedCanonicalItem.global_menu_item_id,
+                    global_variant_id: selectedCanonicalVariant?.global_variant_id || null,
+                };
+                const resolutionRoute = globalResolutionRoute(
+                    modalItem.resolution_kind,
+                    sourceContext,
+                    intendedIdentity,
+                );
+                if (resolutionRoute === 'verify_assignment') {
+                    const message = await verifyExistingGlobalAssignment(modalItem, {
+                        globalItemId: intendedIdentity.global_item_id,
+                        globalVariantId: intendedIdentity.global_variant_id!,
+                    });
+                    if (!message) return;
+                    setPopup({ type: 'success', message });
+                    closeResolutionModal();
+                    return;
+                }
                 const message = await repairGlobalIdentityCoverage({
-                    ensureItem: () => ensureGlobalResolutionItem(
-                        targetContext,
-                        targetContext.canonical_name,
-                        targetContext.canonical_type,
-                    ),
+                    ensureItem: async () => selectedCanonicalItem.global_menu_item_id,
                     ensureVariant: async () => {
-                        const globalVariantId = await ensureGlobalResolutionVariant(
-                            selectedTargetVariant === '__new__' ? null : targetContext,
-                            selectedTargetVariant === '__new__'
-                                ? (newVariantNames[selectedSourceVariant.variant_id] || '')
-                                : undefined,
-                        );
-                        if (!globalVariantId) {
-                            throw new Error('The target canonical variant could not be created or resolved.');
+                        if (selectedCanonicalVariant) {
+                            return selectedCanonicalVariant.global_variant_id;
                         }
-                        return globalVariantId;
+                        return ensureGlobalResolutionVariant(
+                            null,
+                            (newVariantNames[selectedSourceVariant.variant_id] || '').trim(),
+                        );
                     },
-                    mapTargetLocators: targetCoverage.mapLocators
-                        ? async (globalItemId, globalVariantId) => mapGlobalResolutionLocators(
-                            // A variant-scoped context holds no locators when the
-                            // pair carries no POS evidence — the target item does
-                            // not carry this variant, or its rows are synthetic.
-                            // The item's own evidence lives on its item-scoped
-                            // context, and that is what an item-level mapping
-                            // needs. Only mapAtItemLevel reaches this fallback,
-                            // so the item's other-variant locators are never
-                            // mapped under one variant's identity.
-                            targetContext.locators.length
-                                ? targetContext
-                                : await loadGlobalResolutionContext(selectedTargetId),
-                            globalItemId,
-                            targetCoverage.mapAtItemLevel ? null : globalVariantId,
-                            targetContext.canonical_name,
-                        )
-                        : undefined,
                     mapSourceLocators: (globalItemId, globalVariantId) => (
                         mapGlobalResolutionLocators(
                             sourceContext,
@@ -3146,23 +3293,7 @@ function ResolutionsTab({
                 closeResolutionModal();
                 return;
             }
-            let globalPreview: GlobalMenuPreview | undefined;
-            if (globalMenuAdvertised) {
-                const previewResponse = await endpoints.menu.globalLocalPreview({
-                    mutation_type: 'variant_merge',
-                    source_local_menu_item_id: modalItem.menu_item_id,
-                    source_local_variant_id: modalItem.source_variant_id,
-                    target_local_menu_item_id: selectedTargetId,
-                    target_local_variant_id: selectedTargetVariant === '__new__'
-                        ? undefined
-                        : selectedTargetVariant,
-                    details: selectedTargetVariant === '__new__'
-                        ? { new_variant_name: (newVariantNames[selectedSourceVariant.variant_id] || '').trim() }
-                        : undefined,
-                });
-                globalPreview = previewResponse.data;
-                if (!confirmGlobalImpact(globalPreview, 'Resolving this canonical menu pair')) return;
-            }
+            const selectedTargetVariant = selectedTargetVariants[selectedSourceVariant.variant_id];
             const res = await endpoints.menu.resolve({
                 source_menu_item_id: modalItem.menu_item_id,
                 source_variant_id: modalItem.source_variant_id,
@@ -3171,7 +3302,6 @@ function ResolutionsTab({
                 new_variant_name: selectedTargetVariant === '__new__'
                     ? (newVariantNames[selectedSourceVariant.variant_id] || '').trim()
                     : undefined,
-                ...globalPreviewReference(globalPreview),
             });
             removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
             setPopup({ type: 'success', message: res.data.message || 'Variant resolved successfully.' });
@@ -3216,6 +3346,14 @@ function ResolutionsTab({
             setPopup({ type: 'error', message: 'Select a variant type before saving.' });
             return;
         }
+        if (
+            globalResolutionAdvertised &&
+            renameVariantId === '__new__' &&
+            !renameVariantName.trim()
+        ) {
+            setPopup({ type: 'error', message: 'Enter a canonical group variant name before saving.' });
+            return;
+        }
 
         const attemptKey = resolutionAttemptKey(modalItem);
         await runResolutionAttempt(resolutionInFlightRef.current, attemptKey, async () => {
@@ -3238,78 +3376,61 @@ function ResolutionsTab({
                     modalItem.source_variant_id,
                 )
                 : null;
-            const variantContext = sourceResolutionContext
-                ? await loadGlobalResolutionContext(
-                    modalItem.menu_item_id,
-                    renameVariantId,
+            const selectedRenameCanonicalVariant = sourceResolutionContext && renameVariantId !== '__new__'
+                ? globalCatalog?.variants.find(
+                    candidate => candidate.global_variant_id === renameVariantId
                 )
-                : null;
+                : undefined;
+            if (
+                sourceResolutionContext &&
+                renameVariantId !== '__new__' &&
+                !selectedRenameCanonicalVariant
+            ) {
+                throw new Error('Choose an active canonical group variant.');
+            }
             const resolutionRoute = sourceResolutionContext
                 ? globalResolutionRoute(
                     modalItem.resolution_kind,
                     sourceResolutionContext,
                     {
                         global_item_id: sourceResolutionContext.global_item_id,
-                        global_variant_id: variantContext?.global_variant_id,
+                        global_variant_id: selectedRenameCanonicalVariant?.global_variant_id,
                     },
                 )
                 : 'locator_map';
-            const localResolutionUnchanged = Boolean(
-                trimmedName === modalItem.name &&
-                trimmedType === modalItem.type &&
-                renameVariantId === modalItem.source_variant_id,
-            );
-            if (resolutionRoute === 'verify_assignment' && localResolutionUnchanged) {
-                const message = await verifyExistingGlobalAssignment(modalItem, {
-                    globalItemId: sourceResolutionContext!.global_item_id!,
-                    globalVariantId: sourceResolutionContext!.global_variant_id!,
-                });
-                if (!message) return;
-                setPopup({ type: 'success', message });
-                closeResolutionModal();
-                return;
-            }
-            if (
-                resolutionRoute === 'verify_assignment' &&
-                globalResolutionOnly &&
-                !localResolutionUnchanged
-            ) {
-                throw new Error(
-                    'Renaming an existing canonical item requires active global-menu mutations. Choose its current canonical name/type or wait for activation.',
-                );
-            }
-            const sourceIdentityMissing = Boolean(
-                sourceResolutionContext && (
-                    !sourceResolutionContext.global_item_id ||
-                    !sourceResolutionContext.global_variant_id
-                ),
-            );
-            const useCoverageRepair = Boolean(
-                sourceResolutionContext && (
-                    sourceIdentityMissing ||
-                    (globalResolutionOnly && resolutionRoute === 'locator_map')
-                ),
-            );
-            if (useCoverageRepair && sourceResolutionContext) {
-                const sourceContext = sourceResolutionContext;
-                if (sourceContext.global_item_id && (
-                    sourceContext.canonical_name !== trimmedName ||
-                    sourceContext.canonical_type !== trimmedType
+            if (sourceResolutionContext) {
+                if (canonicalItemRenameConflicts(
+                    sourceResolutionContext,
+                    globalCatalog?.items || [],
+                    trimmedName,
+                    trimmedType,
                 )) {
                     throw new Error(
-                        'Renaming an existing canonical item requires active global-menu mutations. Choose its current canonical name/type or wait for activation.',
+                        'This assignment is already linked to a canonical item. Choose a different existing group match on the left; canonical group renames are group-wide catalog edits.',
                     );
+                }
+                if (resolutionRoute === 'verify_assignment') {
+                    const message = await verifyExistingGlobalAssignment(modalItem, {
+                        globalItemId: sourceResolutionContext.global_item_id!,
+                        globalVariantId: sourceResolutionContext.global_variant_id!,
+                    });
+                    if (!message) return;
+                    setPopup({ type: 'success', message });
+                    closeResolutionModal();
+                    return;
                 }
                 const message = await repairGlobalIdentityCoverage({
                     ensureItem: () => ensureGlobalResolutionItem(
-                        sourceContext,
+                        sourceResolutionContext,
                         trimmedName,
                         trimmedType,
                     ),
                     ensureVariant: async () => {
-                        const globalVariantId = await ensureGlobalResolutionVariant(
-                            variantContext,
-                        );
+                        const globalVariantId = selectedRenameCanonicalVariant?.global_variant_id ||
+                            await ensureGlobalResolutionVariant(
+                                null,
+                                renameVariantName.trim(),
+                            );
                         if (!globalVariantId) {
                             throw new Error('The selected canonical variant could not be created or resolved.');
                         }
@@ -3317,7 +3438,7 @@ function ResolutionsTab({
                     },
                     mapSourceLocators: (globalItemId, globalVariantId) => (
                         mapGlobalResolutionLocators(
-                            sourceContext,
+                            sourceResolutionContext,
                             globalItemId,
                             globalVariantId,
                             modalItem.display_name || modalItem.name,
@@ -3341,26 +3462,12 @@ function ResolutionsTab({
                 closeResolutionModal();
                 return;
             }
-            let globalPreview: GlobalMenuPreview | undefined;
-            if (globalMenuAdvertised) {
-                const previewResponse = await endpoints.menu.globalLocalPreview({
-                    mutation_type: 'verify_or_rename',
-                    source_local_menu_item_id: modalItem.menu_item_id,
-                    source_local_variant_id: modalItem.source_variant_id,
-                    target_local_menu_item_id: modalItem.menu_item_id,
-                    target_local_variant_id: renameVariantId,
-                    details: { canonical_name: trimmedName, canonical_type: trimmedType },
-                });
-                globalPreview = previewResponse.data;
-                if (!confirmGlobalImpact(globalPreview, 'Verifying this canonical menu pair')) return;
-            }
             const res = await endpoints.menu.resolve({
                 source_menu_item_id: modalItem.menu_item_id,
                 source_variant_id: modalItem.source_variant_id,
                 new_name: trimmedName,
                 new_type: trimmedType,
                 target_variant_id: renameVariantId,
-                ...globalPreviewReference(globalPreview),
             });
             removeResolvedItem(modalItem.menu_item_id, modalItem.source_variant_id);
             setPopup({ type: 'success', message: res.data.message || 'Resolution saved successfully.' });
@@ -3429,25 +3536,42 @@ function ResolutionsTab({
         }
     };
 
-    const eligibleTargets = modalItem
+    const eligibleLocalTargets = modalItem
         ? lookupItems.filter(candidate => isEligibleMergeTarget(
             candidate,
             modalItem.menu_item_id,
-            Boolean(
-                globalMenuAdvertised && modalItem.has_complete_global_identity
-            ),
         ))
         : [];
 
-    const filteredTargets = eligibleTargets.filter(candidate =>
+    const filteredLocalTargets = eligibleLocalTargets.filter(candidate =>
         `${candidate.name} ${candidate.type}`.toLowerCase().includes(targetSearch.toLowerCase())
     );
 
-    const sourceHasCompleteGlobalIdentity = Boolean(
-        globalMenuAdvertised && modalItem?.has_complete_global_identity
+    const filteredCanonicalTargets = filterCanonicalItemTargets(
+        globalCatalog?.items || [],
+        targetSearch,
     );
-    const eligibleTargetVariants = variantOptions.filter(candidate =>
-        isEligibleMergeTargetVariant(candidate, sourceHasCompleteGlobalIdentity)
+    const selectedCanonicalTarget = globalCatalog?.items.find(
+        candidate => candidate.global_menu_item_id === selectedGlobalTargetItemId
+    );
+
+    const canonicalTargetVariants = globalCatalog?.variants || [];
+    const canonicalTypeOptions = Array.from(new Set(
+        (globalCatalog?.items || [])
+            .map(item => item.canonical_type.trim())
+            .filter(Boolean),
+    )).sort((left, right) => left.localeCompare(right));
+    const renameTypeOptions = globalResolutionAdvertised
+        ? canonicalTypeOptions
+        : typeOptions;
+    const hasCompleteCurrentGlobalIdentity = (item: ResolutionItem) => Boolean(
+        item.has_complete_global_identity &&
+        globalCatalog?.items.some(candidate => (
+            candidate.global_menu_item_id === item.global_item_id
+        )) &&
+        globalCatalog?.variants.some(candidate => (
+            candidate.global_variant_id === item.global_variant_id
+        ))
     );
 
     const renameCollisionTarget = modalItem
@@ -3472,8 +3596,13 @@ function ResolutionsTab({
     // leaves an empty source-variant list, which makes variantMappingsComplete
     // vacuously true and would otherwise re-enable the button. This also keeps
     // every preview error fail-closed.
+    const mergeTargetMissing = isResolutionTargetSelectionMissing(
+        globalResolutionAdvertised,
+        selectedTargetId,
+        selectedGlobalTargetItemId,
+    );
     const mergeDisabled = (
-        !selectedTargetId
+        mergeTargetMissing
         || previewLoading
         || mergeSubmitting
         || !mergePreview
@@ -3485,7 +3614,9 @@ function ResolutionsTab({
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <h2 style={{ color: 'var(--text-color)' }}>✨ Unclustered Data Resolution</h2>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                Resolve each unclustered or globally unlinked menu item + variant pair by merging it into a canonical match, verifying it as a distinct pair, or manually renaming/searching for the right target.
+                {globalResolutionAdvertised
+                    ? 'Resolve each local POS item + variant by linking it directly to a canonical group item and group variant. Local projection IDs are used only for previews and analytics relinking.'
+                    : 'Resolve each unclustered menu item + variant pair by merging it into a verified local match, verifying it as a distinct pair, or manually renaming/searching for the right target.'}
             </p>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
                 Local unverified: {resolutionCounts.local_unverified}
@@ -3564,20 +3695,38 @@ function ResolutionsTab({
                                         {getMergeSuggestionLabel(item)}
                                     </button>
                                 )}
-                                <button
-                                    onClick={() => handleVerifyAsNew(item)}
-                                    style={{ padding: '12px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
-                                >
-                                    Verify as New Item
-                                </button>
+                                {globalResolutionAdvertised && hasCompleteCurrentGlobalIdentity(item) ? (
+                                    <button
+                                        onClick={() => void handleVerifyCurrentGlobalLink(item)}
+                                        disabled={verifyingExistingKey === resolutionAttemptKey(item)}
+                                        style={{ padding: '12px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, opacity: verifyingExistingKey === resolutionAttemptKey(item) ? 0.7 : 1 }}
+                                    >
+                                        {verifyingExistingKey === resolutionAttemptKey(item)
+                                            ? 'Verifying...'
+                                            : 'Verify Existing Global Link'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => handleVerifyAsNew(item)}
+                                        style={{ padding: '12px', background: '#44aa44', color: 'white', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
+                                    >
+                                        {globalResolutionAdvertised
+                                            ? 'Create / Verify in Group Catalog'
+                                            : 'Verify as New Item'}
+                                    </button>
+                                )}
                                 <p style={{ margin: 0, fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                                    Keeps this variant as its own verified menu item + variant pair.
+                                    {globalResolutionAdvertised
+                                        ? (hasCompleteCurrentGlobalIdentity(item)
+                                            ? 'Confirms the exact POS assignment against its existing canonical item and variant.'
+                                            : 'Use this only when no existing canonical group match is correct.')
+                                        : 'Keeps this variant as its own verified menu item + variant pair.'}
                                 </p>
                                 <button
                                     onClick={() => openResolutionModal(item)}
                                     style={{ padding: '12px', background: 'var(--card-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)', cursor: 'pointer', borderRadius: '8px', fontWeight: 700 }}
                                 >
-                                    Rename / Search
+                                    {globalResolutionAdvertised ? 'Choose Group Match / Rename' : 'Rename / Search'}
                                 </button>
                             </div>
                         </div>
@@ -3678,12 +3827,23 @@ function ResolutionsTab({
                     >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '12px', marginBottom: '20px' }}>
                             <div>
-                                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>Resolve {formatResolutionTitle(modalItem)}</h3>
+                                <h3 style={{ margin: 0, color: 'var(--accent-color)' }}>
+                                    {globalResolutionAdvertised
+                                        ? 'Resolve POS assignment'
+                                        : `Resolve ${formatResolutionTitle(modalItem)}`}
+                                </h3>
                                 <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)' }}>
-                                    {modalEntryPoint === 'rename'
-                                        ? 'Review the name, type, and target variant for this specific unresolved source variant.'
-                                        : 'Choose an existing verified target for this specific unresolved source variant, or rename it before verifying it.'}
+                                    {globalResolutionAdvertised
+                                        ? 'Choose the canonical group identity for this restaurant POS assignment. The central mapping and exact assignment verification are committed together.'
+                                        : (modalEntryPoint === 'rename'
+                                            ? 'Review the name, type, and target variant for this specific unresolved source variant.'
+                                            : 'Choose an existing verified target for this specific unresolved source variant, or rename it before verifying it.')}
                                 </p>
+                                {globalResolutionAdvertised && (
+                                    <div style={{ marginTop: '10px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
+                                        Raw POS label: {modalItem.sample_order_name || '—'}
+                                    </div>
+                                )}
                             </div>
                             <button
                                 onClick={closeResolutionModal}
@@ -3695,14 +3855,25 @@ function ResolutionsTab({
 
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
                             <div style={{ border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
-                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Search &amp; Merge</h4>
+                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>
+                                    {globalResolutionAdvertised ? 'Search Group Catalog & Link' : 'Search & Merge'}
+                                </h4>
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    Move only this unresolved source variant into an existing verified menu item and target variant.
+                                    {globalResolutionAdvertised
+                                        ? 'Select an active canonical item, then its canonical variant. Catalog verification and this restaurant’s assignment verification are shown separately. This does not merge two group catalog records.'
+                                        : 'Move only this unresolved source variant into an existing verified menu item and target variant.'}
                                 </p>
+                                {targetSelectionNotice && (
+                                    <div style={{ marginBottom: '12px', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '8px', padding: '10px 12px', background: 'rgba(245, 158, 11, 0.08)', color: '#D97706', fontSize: '0.9em' }}>
+                                        {targetSelectionNotice}
+                                    </div>
+                                )}
                                 <input
                                     value={targetSearch}
                                     onChange={(event) => setTargetSearch(event.target.value)}
-                                    placeholder="Search verified menu items"
+                                    placeholder={globalResolutionAdvertised
+                                        ? 'Search canonical group items'
+                                        : 'Search verified menu items'}
                                     style={{
                                         width: '100%',
                                         padding: '10px 12px',
@@ -3715,13 +3886,69 @@ function ResolutionsTab({
                                     }}
                                 />
                                 <div style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', marginBottom: '12px' }}>
-                                    {filteredTargets.length === 0 ? (
+                                    {globalResolutionAdvertised ? (
+                                        !globalCatalog ? (
+                                            <div style={{ padding: '12px', color: '#F59E0B' }}>
+                                                Group catalog unavailable. Run Sync DB before resolving this assignment.
+                                            </div>
+                                        ) : filteredCanonicalTargets.length === 0 ? (
+                                            <div style={{ padding: '12px', color: 'var(--text-secondary)' }}>
+                                                No canonical group items match this search.
+                                            </div>
+                                        ) : filteredCanonicalTargets.slice(0, 40).map(candidate => {
+                                            const disabled = !candidate.local_menu_item_id;
+                                            return (
+                                            <button
+                                                key={candidate.global_menu_item_id}
+                                                disabled={disabled}
+                                                onClick={() => {
+                                                    if (disabled) return;
+                                                    setSelectedGlobalTargetItemId(canonicalItemSelectionId(candidate));
+                                                    setSelectedTargetId(candidate.local_menu_item_id || '');
+                                                    setTargetSelectionNotice(null);
+                                                }}
+                                                style={{
+                                                    width: '100%',
+                                                    textAlign: 'left',
+                                                    padding: '12px',
+                                                    border: 'none',
+                                                    borderBottom: '1px solid var(--border-color)',
+                                                    background: selectedGlobalTargetItemId === candidate.global_menu_item_id ? 'rgba(37, 99, 235, 0.12)' : 'transparent',
+                                                    color: 'var(--text-color)',
+                                                    cursor: disabled ? 'not-allowed' : 'pointer',
+                                                    opacity: disabled ? 0.6 : 1,
+                                                }}
+                                            >
+                                                <div style={{ fontWeight: 700 }}>
+                                                    {candidate.canonical_name}
+                                                    {candidate.global_menu_item_id === modalItem.global_item_id && (
+                                                        <span style={{ marginLeft: '8px', fontSize: '0.75em', fontWeight: 600, color: '#3B82F6', background: 'rgba(59, 130, 246, 0.12)', padding: '2px 8px', borderRadius: '999px' }}>
+                                                            Current link
+                                                        </span>
+                                                    )}
+                                                    {!candidate.is_verified && (
+                                                        <span style={{ marginLeft: '8px', fontSize: '0.75em', color: '#F59E0B' }}>Catalog unverified</span>
+                                                    )}
+                                                    {!candidate.local_menu_item_id && (
+                                                        <span style={{ marginLeft: '8px', fontSize: '0.75em', color: '#F59E0B' }}>Sync required</span>
+                                                    )}
+                                                </div>
+                                                <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                                                    {candidate.canonical_type || '—'} · {candidate.active_pos_rules} active POS rules
+                                                </div>
+                                            </button>
+                                            );
+                                        })
+                                    ) : filteredLocalTargets.length === 0 ? (
                                         <div style={{ padding: '12px', color: 'var(--text-secondary)' }}>No verified targets match this search.</div>
                                     ) : (
-                                        filteredTargets.slice(0, 40).map(candidate => (
+                                        filteredLocalTargets.slice(0, 40).map(candidate => (
                                             <button
                                                 key={candidate.menu_item_id}
-                                                onClick={() => setSelectedTargetId(candidate.menu_item_id)}
+                                                onClick={() => {
+                                                    setSelectedTargetId(candidate.menu_item_id);
+                                                    setTargetSelectionNotice(null);
+                                                }}
                                                 style={{
                                                     width: '100%',
                                                     textAlign: 'left',
@@ -3752,7 +3979,11 @@ function ResolutionsTab({
                                     ) : mergePreview ? (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                             <div style={{ color: 'var(--text-color)', fontWeight: 700 }}>
-                                                {mergePreview.source.name} ({mergePreview.source.type}) → {mergePreview.target.name} ({mergePreview.target.type})
+                                                {globalResolutionAdvertised
+                                                    ? `POS assignment → ${selectedCanonicalTarget
+                                                        ? `${selectedCanonicalTarget.canonical_name} (${selectedCanonicalTarget.canonical_type})`
+                                                        : 'canonical group target'}`
+                                                    : `${mergePreview.source.name} (${mergePreview.source.type}) → ${mergePreview.target.name} (${mergePreview.target.type})`}
                                             </div>
                                             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
                                                 This will relink {mergePreview.stats.order_items_relinked} order items, {mergePreview.stats.addon_items_relinked} addon rows, and {mergePreview.stats.mappings_updated} item mappings for the selected source variant.
@@ -3761,7 +3992,9 @@ function ResolutionsTab({
                                                 Selected source-variant totals to be absorbed: {mergePreview.stats.source_total_sold} sold, ₹{Math.round(mergePreview.stats.source_total_revenue).toLocaleString()} revenue.
                                             </div>
                                             <div style={{ color: '#F59E0B', fontSize: '0.9em' }}>
-                                                Sibling unresolved variants, if any, will remain separate. You can undo resolutions from Resolution History.
+                                                {globalResolutionAdvertised
+                                                    ? 'Sibling unresolved variants remain separate. The locator-map mutation is recorded in Group History and the assignment is projected back into this restaurant’s local clustering.'
+                                                    : 'Sibling unresolved variants, if any, will remain separate. You can undo resolutions from Resolution History.'}
                                             </div>
                                         </div>
                                     ) : (
@@ -3787,7 +4020,9 @@ function ResolutionsTab({
                                                     }}
                                                 >
                                                     <div style={{ fontWeight: 700, color: 'var(--text-color)' }}>
-                                                        {sourceVariant.variant_name}
+                                                        {globalResolutionAdvertised
+                                                            ? 'Canonical group variant'
+                                                            : sourceVariant.variant_name}
                                                     </div>
                                                     <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)', margin: '6px 0 10px' }}>
                                                         {sourceVariant.order_item_rows} order rows / {sourceVariant.addon_rows} addon rows / {sourceVariant.mapping_rows} cluster mappings
@@ -3803,7 +4038,9 @@ function ResolutionsTab({
                                                             if (nextValue === '__new__') {
                                                                 setNewVariantNames(current => ({
                                                                     ...current,
-                                                                    [sourceVariant.variant_id]: current[sourceVariant.variant_id] || sourceVariant.variant_name,
+                                                                    [sourceVariant.variant_id]: globalResolutionAdvertised
+                                                                        ? ''
+                                                                        : (current[sourceVariant.variant_id] || sourceVariant.variant_name),
                                                                 }));
                                                             }
                                                         }}
@@ -3818,14 +4055,28 @@ function ResolutionsTab({
                                                         }}
                                                     >
                                                         <option value="">Select variant type</option>
-                                                        {eligibleTargetVariants.map(targetVariant => (
-                                                            <option key={targetVariant.variant_id} value={targetVariant.variant_id}>
-                                                                {targetVariant.name}
-                                                            </option>
-                                                        ))}
-                                                        {!sourceHasCompleteGlobalIdentity && (
-                                                            <option value="__new__">Create new variant type...</option>
-                                                        )}
+                                                        {globalResolutionAdvertised
+                                                            ? canonicalTargetVariants.map(targetVariant => (
+                                                                <option
+                                                                    key={targetVariant.global_variant_id}
+                                                                    value={canonicalVariantSelectionId(targetVariant)}
+                                                                    disabled={!targetVariant.local_variant_id}
+                                                                >
+                                                                    {canonicalVariantLabel(targetVariant)}
+                                                                    {!targetVariant.is_verified ? ' (catalog unverified)' : ''}
+                                                                    {!targetVariant.local_variant_id ? ' (sync required)' : ''}
+                                                                </option>
+                                                            ))
+                                                            : variantOptions.map(targetVariant => (
+                                                                <option key={targetVariant.variant_id} value={targetVariant.variant_id}>
+                                                                    {targetVariant.name}
+                                                                </option>
+                                                            ))}
+                                                        <option value="__new__">
+                                                            {globalResolutionAdvertised
+                                                                ? 'Create new canonical group variant...'
+                                                                : 'Create new variant type...'}
+                                                        </option>
                                                     </select>
                                                     {selectedTargetVariants[sourceVariant.variant_id] === '__new__' && (
                                                         <input
@@ -3850,7 +4101,9 @@ function ResolutionsTab({
                                             ))}
                                         </div>
                                         <div style={{ marginTop: '12px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                                            This dropdown includes every variant type currently available in the database.
+                                            {globalResolutionAdvertised
+                                                ? 'These are canonical group variants. Local projection IDs are not used for matching and are never shown as identity.'
+                                                : 'This dropdown includes every variant type currently available in the database.'}
                                         </div>
                                     </div>
                                 )}
@@ -3870,7 +4123,9 @@ function ResolutionsTab({
                                         opacity: mergeDisabled ? 0.7 : 1,
                                     }}
                                 >
-                                    {mergeSubmitting ? 'Resolving...' : 'Confirm Variant Move'}
+                                    {mergeSubmitting
+                                        ? 'Resolving...'
+                                        : (globalResolutionAdvertised ? 'Link & Verify Assignment' : 'Confirm Variant Move')}
                                 </button>
                             </div>
 
@@ -3883,9 +4138,13 @@ function ResolutionsTab({
                                     boxShadow: modalEntryPoint === 'rename' ? '0 0 0 4px rgba(16, 185, 129, 0.12)' : 'none',
                                 }}
                             >
-                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>Rename / Verify</h4>
+                                <h4 style={{ marginTop: 0, color: 'var(--text-color)' }}>
+                                    {globalResolutionAdvertised ? 'Create / Verify in Group Catalog' : 'Rename / Verify'}
+                                </h4>
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    Use this when the selected source variant should stay separate, but under a cleaner menu item name, type, or variant assignment.
+                                    {globalResolutionAdvertised
+                                        ? 'Use this only when no existing canonical group item is correct. The name and type become group-owned canonical catalog data.'
+                                        : 'Use this when the selected source variant should stay separate, but under a cleaner menu item name, type, or variant assignment.'}
                                 </p>
                                 <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>Name</label>
                                 <input
@@ -3918,9 +4177,9 @@ function ResolutionsTab({
                                     }}
                                 >
                                     <option value="">Select type</option>
-                                    {(renameType && !typeOptions.includes(renameType)
-                                        ? [renameType, ...typeOptions]
-                                        : typeOptions
+                                    {(renameType && !renameTypeOptions.includes(renameType)
+                                        ? [renameType, ...renameTypeOptions]
+                                        : renameTypeOptions
                                     ).map(type => (
                                         <option key={type} value={type}>{type}</option>
                                     ))}
@@ -3941,19 +4200,60 @@ function ResolutionsTab({
                                     }}
                                 >
                                     <option value="">Select variant type</option>
-                                    {variantOptions.map(variant => (
-                                        <option key={variant.variant_id} value={variant.variant_id}>
-                                            {variant.name}
+                                    {globalResolutionAdvertised
+                                        ? canonicalTargetVariants.map(variant => (
+                                            <option
+                                                key={variant.global_variant_id}
+                                                value={canonicalVariantSelectionId(variant)}
+                                                disabled={!variant.local_variant_id}
+                                            >
+                                                {canonicalVariantLabel(variant)}
+                                                {!variant.is_verified ? ' (catalog unverified)' : ''}
+                                                {!variant.local_variant_id ? ' (sync required)' : ''}
+                                            </option>
+                                        ))
+                                        : variantOptions.map(variant => (
+                                            <option key={variant.variant_id} value={variant.variant_id}>
+                                                {variant.name}
+                                            </option>
+                                        ))}
+                                    {globalResolutionAdvertised && (
+                                        <option value="__new__">
+                                            Create new canonical group variant...
                                         </option>
-                                    ))}
+                                    )}
                                 </select>
+                                {globalResolutionAdvertised && renameVariantId === '__new__' && (
+                                    <>
+                                        <label style={{ display: 'block', fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                                            New canonical variant name
+                                        </label>
+                                        <input
+                                            value={renameVariantName}
+                                            onChange={(event) => setRenameVariantName(event.target.value)}
+                                            placeholder="Enter group variant name"
+                                            style={{
+                                                width: '100%',
+                                                padding: '10px 12px',
+                                                borderRadius: '8px',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'var(--input-bg)',
+                                                color: 'var(--text-color)',
+                                                marginBottom: '12px',
+                                                boxSizing: 'border-box',
+                                            }}
+                                        />
+                                    </>
+                                )}
                                 <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '0.85em' }}>
                                     The selected variant will be applied only to this source variant&apos;s current rows when you save the resolution.
                                 </div>
                                 <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(16, 185, 129, 0.08)', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                    If the new name and type exactly match an existing verified item, saving here will move this source variant into that item and keep the selected variant assignment.
+                                    {globalResolutionAdvertised
+                                        ? 'If this canonical identity already exists, the server adopts that global row instead of creating a duplicate. Every change is previewed before commit.'
+                                        : 'If the new name and type exactly match an existing verified item, saving here will move this source variant into that item and keep the selected variant assignment.'}
                                 </div>
-                                {renameCollisionTarget && (
+                                {!globalResolutionAdvertised && renameCollisionTarget && (
                                     <div style={{ marginTop: '12px', border: '1px solid rgba(245, 158, 11, 0.35)', borderRadius: '8px', padding: '12px', background: 'rgba(245, 158, 11, 0.08)', color: '#D97706', fontSize: '0.9em' }}>
                                         Exact match found: {renameCollisionTarget.name} ({renameCollisionTarget.type}). Saving this rename will merge into that verified item.
                                     </div>
@@ -3974,7 +4274,11 @@ function ResolutionsTab({
                                         opacity: renameSubmitting ? 0.7 : 1,
                                     }}
                                 >
-                                    {renameSubmitting ? 'Saving...' : 'Save Variant Resolution'}
+                                    {renameSubmitting
+                                        ? 'Saving...'
+                                        : (globalResolutionAdvertised
+                                            ? 'Create / Verify Canonical Resolution'
+                                            : 'Save Variant Resolution')}
                                 </button>
                             </div>
                         </div>
@@ -3988,30 +4292,52 @@ function ResolutionsTab({
 // --- Group History Tab ---
 
 function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
+    const { stores, selectedStore } = useStore();
     const [entries, setEntries] = useState<MergeHistoryEntry[]>([]);
     const [total, setTotal] = useState(0);
+    const [unfilteredTotal, setUnfilteredTotal] = useState(0);
+    const [historyRestaurants, setHistoryRestaurants] = useState<Array<{
+        restaurant_id: string;
+        restaurant_name?: string | null;
+    }>>([]);
     const [page, setPage] = useState(1);
+    const [historyFilter, setHistoryFilter] = useState<GroupHistoryFilter>('global');
+    const [restaurantFilter, setRestaurantFilter] = useState('');
     const [loading, setLoading] = useState(true);
     const [undoing, setUndoing] = useState<string | null>(null);
     const [popup, setPopup] = useState<PopupMessage | null>(null);
 
-    const load = async (requestedPage = page) => {
+    const load = useCallback(async (requestedPage: number) => {
         setLoading(true);
         try {
             const response = await endpoints.menu.mergeHistory({
                 limit: HISTORY_PAGE_SIZE,
                 offset: (requestedPage - 1) * HISTORY_PAGE_SIZE,
+                category: historyFilter,
+                restaurant_id: restaurantFilter || undefined,
             });
             setEntries(response.data.entries);
             setTotal(response.data.total);
+            setUnfilteredTotal(response.data.unfiltered_total ?? response.data.total);
+            setHistoryRestaurants(response.data.restaurants ?? []);
         } catch (error) {
             setPopup({ type: 'error', message: getApiErrorMessage(error) });
         } finally {
             setLoading(false);
         }
+    }, [historyFilter, restaurantFilter]);
+
+    useEffect(() => { void load(page); }, [load, page, lastDbSync]);
+
+    const selectHistoryFilter = (nextFilter: GroupHistoryFilter) => {
+        setPage(1);
+        setHistoryFilter(nextFilter);
     };
 
-    useEffect(() => { void load(page); }, [page, lastDbSync]);
+    const selectRestaurantFilter = (restaurantId: string) => {
+        setPage(1);
+        setRestaurantFilter(restaurantId);
+    };
 
     const handleUndo = async (entry: MergeHistoryEntry) => {
         if (!entry.is_undoable || !entry.global_mutation_id) return;
@@ -4034,35 +4360,135 @@ function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
     };
 
     const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+    const displayRows = collapseGroupHistoryBursts(entries);
+    const storeNames = new Map(stores.map(store => [store.restaurant_id, store.display_name]));
+    const groupStores = stores.filter(store => (
+        store.menu_group_id
+        && store.menu_group_id === selectedStore?.menu_group_id
+    ));
+    const restaurantOptionsById = new Map(groupStores.map(store => [
+        store.restaurant_id,
+        store.display_name,
+    ]));
+    historyRestaurants.forEach(restaurant => {
+        const existingName = restaurantOptionsById.get(restaurant.restaurant_id);
+        restaurantOptionsById.set(
+            restaurant.restaurant_id,
+            restaurant.restaurant_name || existingName || restaurant.restaurant_id,
+        );
+    });
+    const restaurantOptions = Array.from(restaurantOptionsById.entries())
+        .map(([restaurantId, restaurantName]) => ({ restaurantId, restaurantName }))
+        .sort((left, right) => left.restaurantName.localeCompare(right.restaurantName));
+    const filterDescription = historyFilter === 'global'
+        ? 'Showing current human-authored group changes. Legacy and system activity are available in the filters.'
+        : historyFilter === 'legacy'
+            ? 'Historical restaurant-scoped changes are retained for audit and are never presented as undoable.'
+            : historyFilter === 'system'
+                ? 'System migrations and older nameless synchronization events.'
+                : historyFilter === 'undoable'
+                    ? 'Changes the server currently permits you to undo.'
+                    : 'Current, legacy, and system audit events together.';
+    const cardCount = unfilteredTotal === total
+        ? String(total)
+        : `${total} shown · ${unfilteredTotal} total`;
     return (
         <div>
             <ErrorPopup popup={popup} onClose={() => setPopup(null)} />
             <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-                One group-wide audit timeline. Legacy restaurant events remain visible but are never presented as undoable.
+                {filterDescription}
             </p>
-            <Card title={`Group History (${total})`}>
+            <Card title={`Group History (${cardCount})`}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '14px' }}>
+                    {GROUP_HISTORY_FILTERS.map(filter => (
+                        <button
+                            key={filter.id}
+                            type="button"
+                            onClick={() => selectHistoryFilter(filter.id)}
+                            aria-pressed={historyFilter === filter.id}
+                            style={{
+                                padding: '7px 11px',
+                                borderRadius: '999px',
+                                border: historyFilter === filter.id
+                                    ? '1px solid var(--accent-color)'
+                                    : '1px solid var(--border-color)',
+                                background: historyFilter === filter.id
+                                    ? 'color-mix(in srgb, var(--accent-color) 16%, transparent)'
+                                    : 'transparent',
+                                color: historyFilter === filter.id
+                                    ? 'var(--accent-color)'
+                                    : 'var(--text-secondary)',
+                                cursor: 'pointer',
+                                fontWeight: historyFilter === filter.id ? 700 : 500,
+                            }}
+                        >
+                            {filter.label}
+                        </button>
+                    ))}
+                    <select
+                        aria-label="Filter group history by restaurant"
+                        value={restaurantFilter}
+                        onChange={event => selectRestaurantFilter(event.target.value)}
+                        style={{
+                            marginLeft: 'auto',
+                            minWidth: '180px',
+                            padding: '7px 10px',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--card-bg)',
+                            color: 'var(--text-color)',
+                        }}
+                    >
+                        <option value="">All restaurants</option>
+                        {restaurantOptions.map(restaurant => (
+                            <option key={restaurant.restaurantId} value={restaurant.restaurantId}>
+                                {restaurant.restaurantName}
+                            </option>
+                        ))}
+                    </select>
+                </div>
                 {loading ? <p>Loading...</p> : entries.length === 0 ? (
-                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No group history has been cached yet.</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No history matches these filters.</p>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        {entries.map(entry => {
+                        {displayRows.map(group => {
+                            const entry = group.entry;
                             const busyKey = entry.history_id || entry.global_mutation_id || String(entry.merge_id);
+                            const restaurantName = entry.attribution?.restaurant_name
+                                || (entry.origin_restaurant_id
+                                    ? storeNames.get(entry.origin_restaurant_id)
+                                    : null);
+                            const unavailableDetail = groupHistoryDetail(entry);
+                            const occurredLabel = group.count > 1
+                                ? `${new Date(group.earliestAt).toLocaleString()}–${new Date(group.latestAt).toLocaleTimeString()}`
+                                : new Date(entry.merged_at).toLocaleString();
                             return (
                                 <div key={busyKey} style={{ padding: '12px 0', borderBottom: '1px solid var(--border-color)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center' }}>
                                         <div>
-                                            <div style={{ color: 'var(--text-color)' }}>
-                                                <span style={{ color: '#EF4444' }}>{entry.source_name}</span>
-                                                {' → '}
-                                                <span style={{ color: '#10B981' }}>{entry.target_name || entry.source_name}</span>
+                                            <div style={{ color: 'var(--text-color)', fontWeight: 600 }}>
+                                                {groupHistoryAction(entry)}
+                                                {group.count > 1 ? ` · ${group.count} events` : ''}
                                             </div>
                                             <div style={{ color: 'var(--text-secondary)', fontSize: '0.84em', marginTop: '4px' }}>
-                                                {entry.source_kind === 'legacy_restaurant_event' ? 'Legacy restaurant history' : 'Global menu mutation'}
-                                                {entry.event_type ? ` · ${entry.event_type}` : ''}
-                                                {entry.origin_restaurant_id ? ` · origin ${entry.origin_restaurant_id}` : ''}
+                                                {entry.is_system_event
+                                                    ? 'System activity'
+                                                    : entry.source_kind === 'legacy_restaurant_event'
+                                                        ? 'Legacy restaurant history'
+                                                        : 'Global menu change'}
+                                                {restaurantName
+                                                    ? ` · at ${restaurantName}`
+                                                    : entry.origin_restaurant_id
+                                                        ? ` · origin ${entry.origin_restaurant_id}`
+                                                        : ''}
                                                 {entry.actor ? ` · by ${entry.actor}` : ''}
-                                                {` · ${new Date(entry.merged_at).toLocaleString()}`}
+                                                {` · ${occurredLabel}`}
                                             </div>
+                                            {unavailableDetail && (
+                                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8em', marginTop: '3px' }}>
+                                                    {unavailableDetail}
+                                                </div>
+                                            )}
                                         </div>
                                         {entry.is_undoable && entry.global_mutation_id ? (
                                             <button
@@ -4110,8 +4536,8 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
         ? globalStatusSelection.status
         : null;
     const groupOwnedReady = isGroupOwnedMenuReady(selectedStore, globalStatus, isAllStores);
-    const catalogReadable = isGlobalMenuCatalogReadable(selectedStore, globalStatus, isAllStores);
-    const labels = globalMenuViewLabels(groupOwnedReady);
+    const catalogReadable = isAllStores || isGlobalMenuCatalogReadable(selectedStore, globalStatus, isAllStores);
+    const labels = globalMenuViewLabels(groupOwnedReady || isAllStores);
 
     useEffect(() => {
         let cancelled = false;
@@ -4138,10 +4564,10 @@ export default function Menu({ lastDbSync }: { lastDbSync?: number }) {
 
     const menuTabs = [
         { id: 'summary' as const, label: '📊 Summary' },
-        ...(catalogReadable ? [{ id: 'catalog' as const, label: '📚 Group Catalog' }] : []),
-        { id: 'items' as const, label: '📋 Menu Items' },
-        { id: 'variants' as const, label: '📏 Variants' },
-        { id: 'matrix' as const, label: `🕸️ ${labels.matrix}` },
+        ...(catalogReadable ? [{ id: 'catalog' as const, label: isAllStores ? '📚 Global Group Catalog' : '📚 Group Catalog' }] : []),
+        { id: 'items' as const, label: isAllStores ? '📋 Global Menu Items' : '📋 Menu Items' },
+        { id: 'variants' as const, label: isAllStores ? '📏 Global Variants' : '📏 Variants' },
+        { id: 'matrix' as const, label: `🕸️ ${isAllStores ? 'Global Menu Matrix' : labels.matrix}` },
         ...(groupOwnedReady ? [{ id: 'history' as const, label: `🕘 ${labels.history}` }] : []),
         { id: 'resolutions' as const, label: '✨ Resolutions' },
     ];

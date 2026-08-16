@@ -2458,11 +2458,11 @@ The response has `schema_version`, `menu_group_id`, `rows`, `next_cursor`, and `
 
 - stable `history_id` and `source_event_id`;
 - `source_kind`: `legacy_restaurant_event` or `global_menu_event`;
-- `event_type`, `origin_restaurant_id`, actor/attribution when known, and timestamps;
-- source/target snapshots with names plus nullable global ids;
+- `event_type`, `origin_restaurant_id`, actor/attribution when known, and timestamps; attribution includes the configured `restaurant_name` when the origin is a current member;
+- source/target snapshots with names plus nullable global ids; for `global_locator.map`, the source name is the raw POS item/addon label captured when the mutation commits, with older events resolved from retained order facts when available;
 - `mutation_id` when one exists, `is_undoable`, and a compact audit `detail` object.
 
-The server projects this unified page from the existing restaurant `MenuMergeEvent` rows for **all current group members** plus the group's `GlobalMenuEvent`/`GlobalMenuMutationLog`; it does not copy old rows into the convergence stream and does not manufacture mutation logs. Legacy rows therefore always have `mutation_id: null` and `is_undoable: false`. Global rows appear once, group-wide, and are undoable only when the normal §25.8 preview currently permits it. The client caches this read model separately from its legacy `merge_history` mutation table.
+The server projects this unified page from the existing restaurant `MenuMergeEvent` rows for **all current group members** plus the group's `GlobalMenuEvent`/`GlobalMenuMutationLog`; it does not copy old rows into the convergence stream and does not manufacture mutation logs. Machine-authored `derived_assignment_v1` merge events are convergence bookkeeping rather than human actions and are excluded from this projection without deleting their authoritative event rows. Legacy rows that remain therefore always have `mutation_id: null` and `is_undoable: false`. Global rows appear once, group-wide, and are undoable only when the normal §25.8 preview currently permits it. The client caches this read model separately from its legacy `merge_history` mutation table.
 
 ### 25.11 Removing a group
 

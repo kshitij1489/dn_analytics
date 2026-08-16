@@ -198,6 +198,10 @@ Pull order (in `src/core/services/cloud_pull_orchestrator.py` — keep code and 
 
 **The cache mirrors the projection, so it also prunes.** Because membership is a per-restaurant config field on the server, a restaurant leaving the group retires its legacy rows from the page; an insert/update-only drain would leave them in `global_menu_history` and Resolution History would keep showing them forever. A drain that reaches the end of the feed therefore deletes the group's cached rows it did not see, tracked through a temp table rather than a parameter list so the feed is not bounded by SQLite's variable limit. **Pruning runs only after a complete drain** — an unread tail and a retired row are indistinguishable locally, so an interrupted one must prune nothing. A feed that served zero rows also prunes nothing: an empty group and a wrong answer look the same from the client, and blanking the audit view is the worse outcome.
 
+**Human history excludes assignment-sync bookkeeping (2026-08-15).** Central retains `derived_assignment_v1` `MenuMergeEvent` rows as convergence authority but does not project them through `global-menu/history`. They were the nameless `menu_merge.applied → menu_merge.applied` bursts in Group History, not operator edits. After the server change is deployed, the next complete desktop history drain removes those stale cached rows through the ordinary projection-pruning path above; no event or audit table is destructively purged.
+
+For `global_locator.map`, Group History renders the source's raw POS label rather than the generic locator kind. New global events snapshot that label at commit time; the central history projector resolves older locator-map events from retained order facts when possible. The canonical target remains the right-hand label, so the audit reads “Mapped `<raw POS name>` to `<canonical item>`”.
+
 **Every Sync DB step names itself.** The pull chain is ~15 sequential round trips to one host, so a slow server used to look identical to a hung job: the progress bar simply stopped. `run_best_effort_cloud_pulls` takes an `on_phase` callback, the router streams those names as job statuses (running the pull on a worker thread so they arrive while it waits), and the UI renders the current one under the bar. The wait for `CLOUD_PULL_LOCK` is announced too.
 
 **One Sync DB per restaurant.** `POST /api/sync/run` claims every restaurant a job will write — All Stores claims the token and each member — and returns `409 sync_already_running` while that job is live, so two overlapping runs can no longer serialize against each other inside SQLite.
@@ -517,9 +521,9 @@ are:
 - `global_menu_v1`: pull/cache the projection and report coverage.
 - `global_menu_resolution_v1`: canonical create, locator-map, and matching undo
   writes used to resolve a joining store's unlinked rows.
-- `global_menu_aggregation_v1`: global-ID All Stores aggregation after every
-  participating profile has finished client bootstrap. Unlinked rows stay
-  store-qualified.
+- `global_menu_aggregation_v1`: reports that a member finished the aggregation
+  projection bootstrap. All Stores is global-only regardless; rows still
+  missing a global link are omitted with explicit coverage metadata.
 - `global_menu_mutations_v1`: author global mutations. All Stores remains
   read-only. The editor credential (`X-Global-Menu-Key`) remains mandatory.
 
@@ -539,8 +543,10 @@ The client sequence is:
 4. Global edits require `global_menu_mutations_v1`, one physical origin
    restaurant, and the editor credential. Preview and commit use the frozen
    envelope, stable global IDs, group OCC revision, and `preview_digest`.
-5. Enable global-ID All Stores grouping with `global_menu_aggregation_v1`.
-   Unlinked rows remain explicitly store-qualified.
+5. All Stores exposes the de-duplicated Group Catalog and uses global IDs only
+   for menu analytics. Unlinked rows never enter group aggregates; the response
+   reports their omitted count. `global_menu_aggregation_v1` remains readiness
+   telemetry, not permission to fall back to name grouping.
 
 The frozen revision 1.10 payloads are in
 `contracts/fixtures/1/global_menu_fixtures.json` and are byte-identical to the
@@ -568,8 +574,9 @@ central-repository copy.
    backup restore. The server refuses out-of-order undo
    (`undo_not_latest_mutation`) and refuses when a later mutation overwrote the
    provenance marks it would need (`undo_effects_superseded`).
-9. **No partial All Stores lie** — rows without global identity stay visibly
-   store-qualified and are never silently name-grouped.
+9. **No partial All Stores lie** — rows without global identity are omitted from
+   group aggregates, counted in coverage metadata, and never silently
+   name-grouped.
 10. **Rebuild only derived state** — order facts and local projections are
     regenerable; global IDs, reviewed equivalences, rules, redirects and audit
     attribution are central authority and cannot be reconstructed from raw order
@@ -582,6 +589,15 @@ group that owns a canonical catalog advertises the four capabilities at once.
 A joining restaurant's unmapped rows arrive globally unlinked, stay
 store-qualified, and are resolved one at a time through Unclustered Data
 Resolution. Coverage does not change capabilities.
+
+For an active member, the desktop Resolutions workflow is **global-first**:
+the operator searches canonical group items and variants, while the raw POS
+label and local cluster remain source context only. Choosing a different target
+authors restaurant-scoped locator mappings and then verifies the exact
+assignment; it does not reinterpret one restaurant's resolution as a
+group-wide item/variant merge. Local projection IDs are used only for previews
+and analytics relinking. Legacy non-global restaurants keep the local-catalog
+merge workflow.
 
 ### 17.3 Locator ownership
 

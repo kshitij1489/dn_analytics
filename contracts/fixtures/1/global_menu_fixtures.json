@@ -293,7 +293,9 @@
             "event_type": "global_item.merge",
             "origin_restaurant_id": "1c8w7fp500",
             "actor": "ops",
-            "attribution": null,
+            "attribution": {
+              "restaurant_name": "Dach & Nona"
+            },
             "occurred_at": "2026-08-09T08:08:55.056714+00:00",
             "server_ingested_at": "2026-08-09T08:08:55.056775+00:00",
             "source": {
@@ -320,6 +322,7 @@
             "origin_restaurant_id": "9zz9zz9zz9",
             "actor": null,
             "attribution": {
+              "restaurant_name": "Restaurant 2",
               "employee_name": "Owner",
               "device_label": "Super Mart Mac"
             },

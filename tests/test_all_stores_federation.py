@@ -11,9 +11,120 @@ from fastapi import HTTPException
 
 from src.api.dependencies import ScopedReader, get_restaurant_profile
 from src.core.analytics_scope import all_stores_scope, restaurant_scope
-from src.core.profiles import ALL_STORES_TOKEN, upsert_allowed_restaurants
+from src.core.profiles import (
+    ALL_STORES_TOKEN,
+    select_all_stores,
+    upsert_allowed_restaurants,
+)
 from src.core.queries.multi_store import read_only_connection
 from tests.all_stores_test_helpers import TwoStoreFixture, allowed
+
+
+GLOBAL_MENU_CAPABILITIES = [
+    "global_menu_v1",
+    "global_menu_resolution_v1",
+    "global_menu_aggregation_v1",
+    "global_menu_mutations_v1",
+]
+
+
+def enroll_fixture_in_global_menu(fixture: TwoStoreFixture) -> None:
+    upsert_allowed_restaurants(
+        [
+            {
+                "restaurant_id": profile.restaurant_id,
+                "display_name": profile.display_name,
+                "timezone": profile.timezone,
+                "menu_group_id": "group-1",
+                "menu_capabilities": GLOBAL_MENU_CAPABILITIES,
+            }
+            for profile in fixture.profiles
+        ]
+    )
+    for profile in fixture.profiles:
+        conn = fixture.connection(profile.restaurant_id)
+        try:
+            conn.execute(
+                """
+                UPDATE global_menu_state
+                SET mode='global_menu_v1', menu_group_id='group-1',
+                    bootstrap_status='complete', coverage_linked=1, coverage_total=1
+                WHERE singleton_id=1
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    select_all_stores()
+
+
+def link_global_item(
+    fixture: TwoStoreFixture,
+    restaurant_id: str,
+    *,
+    local_id: str,
+    global_id: str,
+    canonical_name: str,
+    canonical_type: str = "Dessert",
+) -> None:
+    conn = fixture.connection(restaurant_id)
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO global_menu_items (
+                global_menu_item_id, menu_group_id, canonical_name, canonical_type,
+                is_verified, lifecycle_state, server_revision
+            ) VALUES (?, 'group-1', ?, ?, 1, 'active', 1)
+            """,
+            (global_id, canonical_name, canonical_type),
+        )
+        conn.execute(
+            """
+            INSERT INTO menu_item_global_links (
+                local_menu_item_id, global_menu_item_id, provenance,
+                server_revision, is_projection_owner
+            ) VALUES (?, ?, 'server-link', 1, 1)
+            """,
+            (local_id, global_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def link_global_variant(
+    fixture: TwoStoreFixture,
+    restaurant_id: str,
+    *,
+    local_id: str,
+    global_id: str,
+    canonical_name: str,
+    unit: str,
+    value: int,
+) -> None:
+    conn = fixture.connection(restaurant_id)
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name, unit, value,
+                is_verified, lifecycle_state, server_revision
+            ) VALUES (?, 'group-1', ?, ?, ?, 1, 'active', 1)
+            """,
+            (global_id, canonical_name, unit, value),
+        )
+        conn.execute(
+            """
+            INSERT INTO variant_global_links (
+                local_variant_id, global_variant_id, provenance,
+                server_revision, is_projection_owner
+            ) VALUES (?, ?, 'server-link', 1, 1)
+            """,
+            (local_id, global_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class AllStoresFederationTests(unittest.TestCase):
@@ -116,9 +227,24 @@ class AllStoresFederationTests(unittest.TestCase):
         self.assertEqual(len(data["categories"]), 1)
         self.assertEqual(data["categories"][0]["revenue"], 400.0)
 
-    def test_menu_rows_combine_on_name_and_type_only(self) -> None:
+    def test_menu_rows_use_global_identity_and_omit_unlinked_rows(self) -> None:
         from src.api.routers import menu
 
+        enroll_fixture_in_global_menu(self.fixture)
+        link_global_item(
+            self.fixture,
+            "rest-A",
+            local_id="mi-1",
+            global_id="global-brownie",
+            canonical_name="Chocolate Brownie",
+        )
+        link_global_item(
+            self.fixture,
+            "rest-B",
+            local_id="mi-1",
+            global_id="global-brownie",
+            canonical_name="Chocolate Brownie",
+        )
         conn = self.fixture.connection("rest-B")
         try:
             conn.execute(
@@ -132,16 +258,116 @@ class AllStoresFederationTests(unittest.TestCase):
             page=1, page_size=50, sort_by="total_revenue", sort_desc=True,
             filters=None, start_date=None, end_date=None,
             reader=ScopedReader(all_stores_scope()),
-        )["data"]["data"]
-        by_key = {(row["name"], row["type"]): row for row in rows}
-        self.assertIn(("Brownie", "Dessert"), by_key)
-        self.assertIn(("Brownie", "Beverage"), by_key)
-        combined = by_key[("Brownie", "Dessert")]
+        )
+        data = rows["data"]["data"]
+        self.assertEqual(len(data), 1)
+        combined = data[0]
+        self.assertEqual(combined["global_menu_item_id"], "global-brownie")
+        self.assertEqual(combined["name"], "Chocolate Brownie")
         self.assertEqual(len(combined["contributors"]), 2)
         self.assertEqual(sorted(combined["restaurant_ids"]), ["rest-A", "rest-B"])
         # Local identifiers exist only inside contributors; a grouped row must
         # never inherit one store's transient ID by iteration order.
         self.assertNotIn("menu_item_id", combined)
+        self.assertTrue(rows["identity_coverage"]["global_only"])
+        self.assertEqual(rows["identity_coverage"]["omitted_unlinked_rows"], 1)
+
+    def test_all_stores_group_catalog_deduplicates_cached_global_tables(self) -> None:
+        from src.api.routers import menu
+
+        enroll_fixture_in_global_menu(self.fixture)
+        for restaurant_id in ("rest-A", "rest-B"):
+            link_global_item(
+                self.fixture,
+                restaurant_id,
+                local_id="mi-1",
+                global_id="global-brownie",
+                canonical_name="Chocolate Brownie",
+            )
+
+        envelope = menu.get_global_menu_catalog(
+            reader=ScopedReader(all_stores_scope())
+        )
+        catalog = envelope["data"]
+
+        self.assertEqual(catalog["menu_group_id"], "group-1")
+        self.assertEqual(catalog["menu_group_ids"], ["group-1"])
+        self.assertEqual(len(catalog["items"]), 1)
+        item = catalog["items"][0]
+        self.assertEqual(item["global_menu_item_id"], "global-brownie")
+        self.assertEqual(item["restaurant_ids"], ["rest-A", "rest-B"])
+        self.assertNotIn("local_menu_item_id", item)
+
+    def test_menu_matrix_aggregates_global_pairs_only(self) -> None:
+        from src.api.routers import menu
+
+        enroll_fixture_in_global_menu(self.fixture)
+        for restaurant_id, variant_id, price in (
+            ("rest-A", "v-a", 120),
+            ("rest-B", "v-b", 100),
+        ):
+            conn = self.fixture.connection(restaurant_id)
+            try:
+                conn.execute(
+                    "INSERT INTO variants (variant_id, variant_name, unit, value) VALUES (?, ?, 'GMS', 100)",
+                    (variant_id, f"Local {variant_id}"),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO menu_item_variants (
+                        order_item_id, menu_item_id, variant_id, price, is_active,
+                        addon_eligible, delivery_eligible, is_verified
+                    ) VALUES (?, 'mi-1', ?, ?, 1, 0, 1, 1)
+                    """,
+                    (f"assignment-{restaurant_id}", variant_id, price),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            link_global_item(
+                self.fixture,
+                restaurant_id,
+                local_id="mi-1",
+                global_id="global-brownie",
+                canonical_name="Chocolate Brownie",
+            )
+            link_global_variant(
+                self.fixture,
+                restaurant_id,
+                local_id=variant_id,
+                global_id="global-100g",
+                canonical_name="100 GMS",
+                unit="GMS",
+                value=100,
+            )
+
+        conn = self.fixture.connection("rest-B")
+        try:
+            conn.execute(
+                "INSERT INTO variants (variant_id, variant_name, unit, value) VALUES ('v-unlinked', 'Mystery', 'GMS', 200)"
+            )
+            conn.execute(
+                """
+                INSERT INTO menu_item_variants (
+                    order_item_id, menu_item_id, variant_id, price, is_active,
+                    addon_eligible, delivery_eligible, is_verified
+                ) VALUES ('assignment-unlinked', 'mi-1', 'v-unlinked', 90, 1, 0, 1, 1)
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        envelope = menu.get_menu_matrix(reader=ScopedReader(all_stores_scope()))
+        rows = envelope["data"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["global_menu_item_id"], "global-brownie")
+        self.assertEqual(rows[0]["global_variant_id"], "global-100g")
+        self.assertEqual(rows[0]["name"], "Chocolate Brownie")
+        self.assertEqual(rows[0]["variant_name"], "100 GMS")
+        self.assertEqual(rows[0]["price"], 100)
+        self.assertEqual(len(rows[0]["contributors"]), 2)
+        self.assertEqual(envelope["identity_coverage"]["omitted_unlinked_rows"], 1)
 
     def test_hourly_average_divides_by_union_of_business_days(self) -> None:
         from src.api.routers import insights
@@ -736,9 +962,10 @@ class AllStoresIsolationAndBudgetTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_variants_combine_only_on_name_unit_and_value(self) -> None:
+    def test_variants_use_global_identity_and_omit_unlinked_rows(self) -> None:
         from src.api.routers import menu
 
+        enroll_fixture_in_global_menu(self.fixture)
         for restaurant_id, rows in (
             ("rest-A", [("v-1", "Regular 250ml", "ML", 250), ("v-2", "Large 500ml", "ML", 500)]),
             ("rest-B", [("v-9", "Regular 250ml", "ML", 250), ("v-8", "Regular 250g", "G", 250)]),
@@ -753,17 +980,47 @@ class AllStoresIsolationAndBudgetTests(unittest.TestCase):
             finally:
                 conn.close()
 
-        payload = menu.get_variants_view(
+        link_global_variant(
+            self.fixture,
+            "rest-A",
+            local_id="v-1",
+            global_id="global-regular",
+            canonical_name="Regular",
+            unit="ML",
+            value=250,
+        )
+        link_global_variant(
+            self.fixture,
+            "rest-B",
+            local_id="v-9",
+            global_id="global-regular",
+            canonical_name="Regular",
+            unit="ML",
+            value=250,
+        )
+        link_global_variant(
+            self.fixture,
+            "rest-A",
+            local_id="v-2",
+            global_id="global-large",
+            canonical_name="Large",
+            unit="ML",
+            value=500,
+        )
+
+        envelope = menu.get_variants_view(
             page=1, page_size=50, sort_by="variant_name", sort_desc=False,
             filters=None, reader=ScopedReader(all_stores_scope()),
-        )["data"]
-        keyed = {(row["variant_name"], row["unit"], row["value"]): row for row in payload["data"]}
-        self.assertEqual(payload["total"], 3)
-        # Same name, unit, and value: one combined row with both contributors.
-        self.assertEqual(len(keyed[("Regular 250ml", "ML", 250)]["contributors"]), 2)
-        # Same value, different unit: never merged.
-        self.assertEqual(len(keyed[("Regular 250g", "G", 250)]["contributors"]), 1)
-        self.assertEqual(len(keyed[("Large 500ml", "ML", 500)]["contributors"]), 1)
+        )
+        payload = envelope["data"]
+        keyed = {row["global_variant_id"]: row for row in payload["data"]}
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(keyed["global-regular"]["variant_name"], "Regular")
+        self.assertEqual(keyed["global-regular"]["unit"], "ML")
+        self.assertEqual(keyed["global-regular"]["value"], 250)
+        self.assertEqual(len(keyed["global-regular"]["contributors"]), 2)
+        self.assertEqual(len(keyed["global-large"]["contributors"]), 1)
+        self.assertEqual(envelope["identity_coverage"]["omitted_unlinked_rows"], 1)
 
     def test_one_request_opens_each_profile_exactly_once(self) -> None:
         """Performance budget: fan-out cost is linear in stores, never quadratic."""
@@ -818,6 +1075,31 @@ class AllStoresHttpSurfaceTests(unittest.TestCase):
         self.assertEqual(body["data"]["total_revenue"], 400.0)
         self.assertEqual(
             [store["restaurant_id"] for store in body["stores"]], ["rest-A", "rest-B"]
+        )
+
+    def test_all_scope_exposes_the_global_group_catalog(self) -> None:
+        enroll_fixture_in_global_menu(self.fixture)
+        for restaurant_id in ("rest-A", "rest-B"):
+            link_global_item(
+                self.fixture,
+                restaurant_id,
+                local_id="mi-1",
+                global_id="global-brownie",
+                canonical_name="Chocolate Brownie",
+            )
+
+        response = self.client.get(
+            "/api/menu/global/catalog",
+            headers={"X-Analytics-Scope": ALL_STORES_TOKEN},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["scope"], "all")
+        self.assertEqual(body["data"]["menu_group_id"], "group-1")
+        self.assertEqual(len(body["data"]["items"]), 1)
+        self.assertEqual(
+            body["data"]["items"][0]["global_menu_item_id"], "global-brownie"
         )
 
     def test_single_scope_header_keeps_the_plain_response(self) -> None:

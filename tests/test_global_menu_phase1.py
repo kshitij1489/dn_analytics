@@ -72,6 +72,7 @@ from src.core.queries.multi_store_reducers import (
     group_menu_identity_rows,
 )
 from src.core.queries.menu_queries import (
+    fetch_group_menu_catalog,
     fetch_resolution_counts,
     fetch_unverified_items,
 )
@@ -1325,9 +1326,20 @@ class GlobalMenuHistoryTests(unittest.TestCase):
             history = get_merge_history(conn=conn)
 
         self.assertEqual(
-            set(history), {"entries", "total", "limit", "offset"}
+            set(history),
+            {
+                "entries",
+                "total",
+                "unfiltered_total",
+                "limit",
+                "offset",
+                "filter",
+                "restaurant_id",
+                "restaurants",
+            },
         )
         self.assertEqual(history["total"], 2)
+        self.assertEqual(history["unfiltered_total"], 2)
         global_row, legacy_row = history["entries"]
         self.assertTrue(global_row["is_undoable"])
         self.assertEqual(
@@ -1349,6 +1361,64 @@ class GlobalMenuHistoryTests(unittest.TestCase):
             narrowed_history = get_merge_history(conn=conn)
         self.assertFalse(narrowed_history["entries"][0]["is_undoable"])
         self.assertIsNone(narrowed_history["entries"][0]["global_mutation_id"])
+
+    def test_global_history_filters_are_server_paginated_and_classify_noise(self) -> None:
+        conn = self._connection()
+        self.addCleanup(conn.close)
+        payload = json.loads(json.dumps(self.payload))
+        system_row = json.loads(json.dumps(payload["rows"][1]))
+        system_row.update(
+            {
+                "history_id": "legacy:rest-1:derived-1",
+                "source_event_id": "derived-1",
+                "origin_restaurant_id": "rest-1",
+                "occurred_at": "2026-08-09T09:00:00+00:00",
+                "server_ingested_at": "2026-08-09T09:00:01+00:00",
+                "source": {
+                    "global_item_id": None,
+                    "name": "",
+                    "item_type": "",
+                },
+                "target": {
+                    "global_item_id": None,
+                    "name": "",
+                    "item_type": "",
+                },
+            }
+        )
+        payload["rows"].insert(0, system_row)
+        apply_global_menu_history_page(
+            conn,
+            payload,
+            capability=capability(group_id="group-1"),
+            page_cursor=None,
+        )
+        active = capability(group_id="group-1")
+        with patch(
+            "src.core.global_menu_schema.resolve_global_menu_capability",
+            return_value=active,
+        ):
+            current = get_merge_history(category="global", conn=conn)
+            legacy = get_merge_history(category="legacy", conn=conn)
+            system = get_merge_history(category="system", conn=conn)
+            undoable = get_merge_history(category="undoable", conn=conn)
+            restaurant = get_merge_history(
+                category="all", restaurant_id="rest-1", limit=1, conn=conn
+            )
+
+        self.assertEqual(current["total"], 1)
+        self.assertEqual(legacy["total"], 2)
+        self.assertEqual(system["total"], 1)
+        self.assertEqual(system["entries"][0]["source_name"], "")
+        self.assertTrue(system["entries"][0]["is_system_event"])
+        self.assertEqual(undoable["total"], 1)
+        self.assertEqual(restaurant["total"], 1)
+        self.assertEqual(len(restaurant["entries"]), 1)
+        self.assertEqual(restaurant["unfiltered_total"], 3)
+        self.assertEqual(
+            {row["restaurant_id"] for row in restaurant["restaurants"]},
+            {"1c8w7fp500", "9zz9zz9zz9", "rest-1"},
+        )
 
     def test_global_history_route_does_not_fall_back_on_capability_error(self) -> None:
         conn = self._connection()
@@ -1398,6 +1468,22 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             "SELECT snapshot_cursor, event_cursor FROM global_menu_state WHERE singleton_id=1"
         ).fetchone()
         self.assertEqual(tuple(state), ("snapshot-7", "event-7"))
+
+    def test_group_catalog_exposes_canonical_labels_with_projection_handles(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn, self.fixture, stream="snapshot", capability=capability(complete=False)
+        )
+
+        catalog = fetch_group_menu_catalog(
+            self.conn, "group-desserts", restaurant_id="rest-1"
+        )
+
+        self.assertEqual(catalog["items"][0]["canonical_name"], "Eggless Vanilla Ice Cream")
+        self.assertEqual(catalog["items"][0]["global_menu_item_id"], "global-vanilla")
+        self.assertTrue(catalog["items"][0]["local_menu_item_id"])
+        self.assertEqual(catalog["variants"][0]["canonical_name"], "Regular Tub")
+        self.assertEqual(catalog["variants"][0]["global_variant_id"], "global-regular")
+        self.assertTrue(catalog["variants"][0]["local_variant_id"])
 
     def test_snapshot_does_not_implicitly_link_same_label_store_rows(self) -> None:
         self.conn.execute(
@@ -3448,6 +3534,72 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
 
         rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
         self.assertTrue(bool(rows.iloc[0]["has_complete_global_identity"]))
+        self.assertEqual(rows.iloc[0]["global_item_id"], "global-kulfi")
+        self.assertEqual(rows.iloc[0]["global_variant_id"], "global-regular")
+
+        conn.execute(
+            "UPDATE global_menu_items SET lifecycle_state='redirected' "
+            "WHERE global_menu_item_id='global-kulfi'"
+        )
+        conn.execute(
+            "UPDATE global_variants SET lifecycle_state='redirected' "
+            "WHERE global_variant_id='global-regular'"
+        )
+        conn.execute(
+            """
+            INSERT INTO global_menu_items (
+                global_menu_item_id, menu_group_id, canonical_name,
+                canonical_type, is_verified, lifecycle_state, server_revision
+            ) VALUES (
+                'global-kulfi-survivor', 'group-1', 'Kulfi', 'Dessert',
+                1, 'active', 8
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO global_variants (
+                global_variant_id, menu_group_id, canonical_name,
+                is_verified, lifecycle_state, server_revision
+            ) VALUES (
+                'global-regular-survivor', 'group-1', 'Regular',
+                1, 'active', 8
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO global_menu_redirects (
+                redirect_id, menu_group_id, entity_type,
+                source_global_menu_item_id, target_global_menu_item_id,
+                source_global_variant_id, target_global_variant_id,
+                server_revision
+            ) VALUES (?, 'group-1', ?, ?, ?, ?, ?, 8)
+            """,
+            [
+                (
+                    "redirect-kulfi",
+                    "item",
+                    "global-kulfi",
+                    "global-kulfi-survivor",
+                    None,
+                    None,
+                ),
+                (
+                    "redirect-regular",
+                    "variant",
+                    None,
+                    None,
+                    "global-regular",
+                    "global-regular-survivor",
+                ),
+            ],
+        )
+
+        rows = fetch_unverified_items(conn, include_global_identity_gaps=True)
+        self.assertTrue(bool(rows.iloc[0]["has_complete_global_identity"]))
+        self.assertEqual(rows.iloc[0]["global_item_id"], "global-kulfi-survivor")
+        self.assertEqual(rows.iloc[0]["global_variant_id"], "global-regular-survivor")
         conn.close()
 
     def test_verified_non_pos_synthetic_rows_are_not_global_identity_gaps(self) -> None:
@@ -3860,6 +4012,69 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         self.assertEqual({c["price"] for c in linked[0]["contributors"]}, {100, 120})
         self.assertEqual(len(unlinked), 2)
         self.assertTrue(coverage["global_aggregation_active"])
+
+    def test_global_only_groups_linked_rows_without_legacy_fallback(self) -> None:
+        enrolling = {
+            "active": True,
+            "aggregation_ready": False,
+            "coverage_linked": 1,
+            "coverage_total": 2,
+            "quarantine_count": 0,
+        }
+        pairs = [
+            (
+                profile("rest-1"),
+                {
+                    "identity": enrolling,
+                    "rows": [
+                        {
+                            "menu_item_id": "local-a",
+                            "name": "Vanilla",
+                            "qty": 2,
+                            "global_menu_item_id": "global-vanilla",
+                            "canonical_name": "Vanilla Ice Cream",
+                        },
+                        {"menu_item_id": "unlinked-a", "name": "Mystery", "qty": 4},
+                    ],
+                },
+            ),
+            (
+                profile("rest-2"),
+                {
+                    "identity": enrolling,
+                    "rows": [
+                        {
+                            "menu_item_id": "local-b",
+                            "name": "Vanilla Scoop",
+                            "qty": 3,
+                            "global_menu_item_id": "global-vanilla",
+                            "canonical_name": "Vanilla Ice Cream",
+                        },
+                        {"menu_item_id": "unlinked-b", "name": "Mystery", "qty": 5},
+                    ],
+                },
+            ),
+        ]
+
+        rows, coverage = group_menu_identity_rows(
+            pairs,
+            legacy_group_by=("name",),
+            spec={"qty": Sum()},
+            item_id_field="menu_item_id",
+            canonical_item_name_field="name",
+            contributor_fields=("menu_item_id",),
+            global_only=True,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["global_menu_item_id"], "global-vanilla")
+        self.assertEqual(rows[0]["name"], "Vanilla Ice Cream")
+        self.assertEqual(rows[0]["qty"], 5)
+        self.assertTrue(coverage["global_only"])
+        self.assertFalse(coverage["global_aggregation_active"])
+        self.assertEqual(coverage["linked_rows"], 2)
+        self.assertEqual(coverage["total_rows"], 4)
+        self.assertEqual(coverage["omitted_unlinked_rows"], 2)
 
     def test_item_without_variant_still_uses_global_item_identity(self) -> None:
         ready = {

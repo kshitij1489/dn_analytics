@@ -41,6 +41,10 @@ _SOURCE_KINDS = frozenset({"legacy_restaurant_event", "global_menu_event"})
 _RESOLUTION_UNDO_EVENT_TYPES = frozenset(
     {"global_item.create", "global_variant.create", "global_locator.map"}
 )
+GLOBAL_MENU_HISTORY_FILTERS = frozenset(
+    {"all", "global", "legacy", "system", "undoable"}
+)
+_SYSTEM_EVENT_TYPES = frozenset({"global_catalog.verification_backfill"})
 
 
 class GlobalMenuHistoryError(RuntimeError):
@@ -490,16 +494,67 @@ def _current_undo_permission(
     return capability.resolution_ready and event_type in _RESOLUTION_UNDO_EVENT_TYPES
 
 
+def _is_system_history_entry(
+    *,
+    source_kind: str,
+    event_type: str,
+    actor: Optional[str],
+    source: Dict[str, Any],
+    target: Dict[str, Any],
+) -> bool:
+    """Classify non-human audit noise without changing the stored projection."""
+    if actor and actor.startswith("system:"):
+        return True
+    if event_type in _SYSTEM_EVENT_TYPES or event_type.endswith(".backfill"):
+        return True
+    # Older derived-assignment rows were projected without their merge kind.
+    # Both snapshots are blank, which is also why the old UI rendered
+    # ``menu_merge.applied -> menu_merge.applied``. Keep them reachable through
+    # Legacy History, but make System Activity able to isolate that noise until
+    # the next complete server history pull prunes it.
+    return (
+        source_kind == "legacy_restaurant_event"
+        and not str(source.get("name") or "").strip()
+        and not str(target.get("name") or "").strip()
+    )
+
+
+def _history_entry_matches(
+    entry: Dict[str, Any],
+    *,
+    history_filter: str,
+    restaurant_id: Optional[str],
+) -> bool:
+    if restaurant_id and entry.get("origin_restaurant_id") != restaurant_id:
+        return False
+    if history_filter == "all":
+        return True
+    if history_filter == "undoable":
+        return bool(entry.get("is_undoable"))
+    if history_filter == "legacy":
+        return entry.get("source_kind") == "legacy_restaurant_event"
+    if history_filter == "system":
+        return bool(entry.get("is_system_event"))
+    return (
+        entry.get("source_kind") == "global_menu_event"
+        and not entry.get("is_system_event")
+    )
+
+
 def list_cached_global_menu_history(
     conn,
     *,
     capability: GlobalMenuCapabilityStatus,
     limit: int,
     offset: int,
+    history_filter: str = "all",
+    restaurant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return the legacy frontend envelope from the unified history cache."""
+    """Return a filtered, paginated view of the unified history cache."""
+    if history_filter not in GLOBAL_MENU_HISTORY_FILTERS:
+        raise ValueError(f"Unsupported group history filter: {history_filter}")
     group_id = capability.menu_group_id
-    total = int(
+    unfiltered_total = int(
         conn.execute(
             "SELECT COUNT(*) FROM global_menu_history WHERE menu_group_id=?",
             (group_id,),
@@ -515,11 +570,11 @@ def list_cached_global_menu_history(
         FROM global_menu_history
         WHERE menu_group_id=?
         ORDER BY occurred_at DESC, source_kind ASC, source_event_id DESC
-        LIMIT ? OFFSET ?
         """,
-        (group_id, limit, offset),
+        (group_id,),
     ).fetchall()
     entries: List[Dict[str, Any]] = []
+    available_restaurants: Dict[str, Optional[str]] = {}
     for row in rows:
         source = _read_json_object(row[9])
         target = _read_json_object(row[10])
@@ -534,41 +589,75 @@ def list_cached_global_menu_history(
         history_id = str(row[0])
         source_id = str(source.get("global_item_id") or f"{history_id}:source")
         target_id = str(target.get("global_item_id") or f"{history_id}:target")
-        source_name = str(source.get("name") or row[3])
-        target_name = str(target.get("name") or source_name)
+        source_name = str(source.get("name") or "")
+        target_name = str(target.get("name") or "")
         variant_assignments = detail.get("variant_reconciliation")
-        entries.append(
-            {
-                "merge_id": _stable_merge_id(history_id),
-                "history_id": history_id,
-                "source_event_id": str(row[1]),
-                "source_kind": str(row[2]),
-                "event_type": str(row[3]),
-                "origin_restaurant_id": row[4],
-                "actor": row[5],
-                "attribution": _read_json_object(row[6]) if row[6] is not None else None,
-                "source_id": source_id,
-                "target_id": target_id,
-                "source_name": source_name,
-                "target_name": target_name,
-                "source": source or None,
-                "target": target or None,
-                "merged_at": str(row[7]),
-                "server_ingested_at": str(row[8]),
-                "detail": detail,
-                "variant_assignments": (
-                    variant_assignments if isinstance(variant_assignments, list) else []
-                ),
-                "is_undoable": can_undo,
-                "global_mutation_id": mutation_id if can_undo else None,
-                "global_menu_group_id": group_id,
-            }
+        entry = {
+            "merge_id": _stable_merge_id(history_id),
+            "history_id": history_id,
+            "source_event_id": str(row[1]),
+            "source_kind": str(row[2]),
+            "event_type": str(row[3]),
+            "origin_restaurant_id": row[4],
+            "actor": row[5],
+            "attribution": _read_json_object(row[6]) if row[6] is not None else None,
+            "source_id": source_id,
+            "target_id": target_id,
+            "source_name": source_name,
+            "target_name": target_name,
+            "source": source or None,
+            "target": target or None,
+            "merged_at": str(row[7]),
+            "server_ingested_at": str(row[8]),
+            "detail": detail,
+            "variant_assignments": (
+                variant_assignments if isinstance(variant_assignments, list) else []
+            ),
+            "is_undoable": can_undo,
+            "global_mutation_id": mutation_id if can_undo else None,
+            "global_menu_group_id": group_id,
+        }
+        entry["is_system_event"] = _is_system_history_entry(
+            source_kind=entry["source_kind"],
+            event_type=entry["event_type"],
+            actor=entry["actor"],
+            source=source,
+            target=target,
         )
-    return {"entries": entries, "total": total, "limit": limit, "offset": offset}
+        origin_restaurant_id = str(entry.get("origin_restaurant_id") or "").strip()
+        if origin_restaurant_id:
+            attribution = entry.get("attribution") or {}
+            restaurant_name = str(attribution.get("restaurant_name") or "").strip()
+            if origin_restaurant_id not in available_restaurants or restaurant_name:
+                available_restaurants[origin_restaurant_id] = restaurant_name or None
+        if _history_entry_matches(
+            entry,
+            history_filter=history_filter,
+            restaurant_id=restaurant_id,
+        ):
+            entries.append(entry)
+    total = len(entries)
+    return {
+        "entries": entries[offset : offset + limit],
+        "total": total,
+        "unfiltered_total": unfiltered_total,
+        "limit": limit,
+        "offset": offset,
+        "filter": history_filter,
+        "restaurant_id": restaurant_id,
+        "restaurants": [
+            {
+                "restaurant_id": origin_restaurant_id,
+                "restaurant_name": available_restaurants[origin_restaurant_id],
+            }
+            for origin_restaurant_id in sorted(available_restaurants)
+        ],
+    }
 
 
 __all__ = [
     "GlobalMenuHistoryError",
+    "GLOBAL_MENU_HISTORY_FILTERS",
     "apply_global_menu_history_page",
     "get_global_menu_history_endpoint",
     "list_cached_global_menu_history",

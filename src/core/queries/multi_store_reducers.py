@@ -376,7 +376,8 @@ def menu_identity_payload(
                 if variant_id:
                     variant = conn.execute(
                         """
-                        SELECT canonical_name, unit, value FROM global_variants
+                        SELECT canonical_name, description, unit, value, is_verified
+                        FROM global_variants
                         WHERE global_variant_id=? AND lifecycle_state='active'
                         """,
                         (variant_id,),
@@ -385,8 +386,12 @@ def menu_identity_payload(
                         row.update(
                             {
                                 "canonical_variant_name": variant[0],
-                                "canonical_variant_unit": variant[1],
-                                "canonical_variant_value": variant[2],
+                                "canonical_variant_unit": variant[2],
+                                "canonical_variant_value": variant[3],
+                                "description": variant[1],
+                                "unit": variant[2],
+                                "value": variant[3],
+                                "is_verified": bool(variant[4]),
                             }
                         )
                 annotated.append(row)
@@ -431,12 +436,14 @@ def group_menu_identity_rows(
     limit: Optional[int] = None,
     contributor_fields: Sequence[str] = (),
     default: Rule = Ignore(),
+    global_only: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Use global IDs only when every included profile is aggregation-ready.
+    """Group menu rows by global identity when it is safe or explicitly required.
 
-    Unlinked rows are never normalized/name-grouped in global mode; their key
-    includes restaurant plus local item/variant identity and they remain
-    visibly marked ``identity_unlinked``.
+    The compatibility path keeps legacy durable-dimension grouping until every
+    included profile is aggregation-ready.  Global-only surfaces instead use
+    canonical IDs immediately and omit unlinked rows; coverage metadata makes
+    that omission explicit so local rows are never presented as group rows.
     """
     statuses = [
         value.get("identity") or {}
@@ -449,13 +456,14 @@ def group_menu_identity_rows(
     coverage = {
         "global_mode_active": any(bool(status.get("active")) for status in statuses),
         "global_aggregation_active": globally_ready,
+        "global_only": bool(global_only),
         "linked": sum(int(status.get("coverage_linked") or 0) for status in statuses),
         "total": sum(int(status.get("coverage_total") or 0) for status in statuses),
         "quarantine_count": sum(
             int(status.get("quarantine_count") or 0) for status in statuses
         ),
     }
-    if not globally_ready:
+    if not globally_ready and not global_only:
         return (
             group_rows(
                 pairs,
@@ -472,9 +480,10 @@ def group_menu_identity_rows(
         )
 
     prepared_pairs = []
-    total_source_rows = linked_source_rows = 0
+    total_source_rows = linked_source_rows = omitted_unlinked_rows = 0
     for profile, value in pairs:
         prepared = []
+        profile_active = bool((value.get("identity") or {}).get("active"))
         for raw in value.get("rows", []):
             total_source_rows += 1
             row = dict(raw)
@@ -492,6 +501,9 @@ def group_menu_identity_rows(
                     not local_variant_present or bool(global_variant_id)
                 )
             )
+            # Global-only tables must never promote a stale local link from a
+            # profile whose group capability is inactive into canonical data.
+            linked = linked and (profile_active or not global_only)
             if linked:
                 linked_source_rows += 1
                 identity_key = (
@@ -509,6 +521,9 @@ def group_menu_identity_rows(
                 if canonical_variant_name_field and row.get("canonical_variant_name"):
                     row[canonical_variant_name_field] = row["canonical_variant_name"]
             else:
+                if global_only:
+                    omitted_unlinked_rows += 1
+                    continue
                 local_item = row.get(item_id_field) if item_id_field else ""
                 local_variant = row.get(variant_id_field) if variant_id_field else ""
                 identity_key = (
@@ -549,7 +564,13 @@ def group_menu_identity_rows(
         row.pop("__global_identity_key", None)
         row["identity_coverage_linked"] = linked_source_rows
         row["identity_coverage_total"] = total_source_rows
-    coverage.update({"linked_rows": linked_source_rows, "total_rows": total_source_rows})
+    coverage.update(
+        {
+            "linked_rows": linked_source_rows,
+            "total_rows": total_source_rows,
+            "omitted_unlinked_rows": omitted_unlinked_rows,
+        }
+    )
     return rows, coverage
 
 

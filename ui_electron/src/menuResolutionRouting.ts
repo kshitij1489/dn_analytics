@@ -1,5 +1,102 @@
 export type GlobalResolutionRoute = 'verify_assignment' | 'locator_map';
 
+export type CanonicalItemTarget = {
+    global_menu_item_id: string;
+    local_menu_item_id?: string | null;
+    canonical_name: string;
+    canonical_type: string;
+    is_verified: boolean;
+};
+
+export type CanonicalVariantTarget = {
+    global_variant_id: string;
+    local_variant_id?: string | null;
+    canonical_name: string;
+    unit?: string | null;
+    value?: string | number | null;
+    is_verified: boolean;
+};
+
+/**
+ * Global-first resolution targets. Catalog verification and assignment
+ * verification are separate concerns: enrollment catalogs may legitimately
+ * contain active rows whose catalog flag is still false. Human resolution must
+ * therefore search every active canonical row. Rows without a local projection
+ * stay visible but are disabled by the UI until Sync DB repairs the cache.
+ */
+export function filterCanonicalItemTargets<T extends CanonicalItemTarget>(
+    items: T[],
+    search: string,
+): T[] {
+    const needle = search.trim().toLowerCase();
+    return items.filter(item => !needle || `${item.canonical_name} ${item.canonical_type}`
+        .toLowerCase()
+        .includes(needle));
+}
+
+export function canonicalVariantLabel(variant: CanonicalVariantTarget): string {
+    const dimension = [
+        variant.unit?.trim(),
+        variant.value === null || variant.value === undefined || variant.value === ''
+            ? ''
+            : String(variant.value),
+    ].filter(Boolean).join(' ');
+    return dimension ? `${variant.canonical_name} · ${dimension}` : variant.canonical_name;
+}
+
+/** Global selectors store only canonical identity; local projection IDs are not choices. */
+export function canonicalItemSelectionId(item: CanonicalItemTarget): string {
+    return item.global_menu_item_id;
+}
+
+export function canonicalVariantSelectionId(variant: CanonicalVariantTarget): string {
+    return variant.global_variant_id;
+}
+
+type LinkedCanonicalItemContext = {
+    global_item_id?: string | null;
+    canonical_name: string;
+    canonical_type: string;
+};
+
+/**
+ * A resolution must not reinterpret edits to an already-linked item as a new
+ * canonical row. Prefer the active catalog metadata, but retain the resolution
+ * context as a fail-closed fallback when the catalog request is unavailable.
+ */
+export function canonicalItemRenameConflicts(
+    context: LinkedCanonicalItemContext,
+    catalogItems: CanonicalItemTarget[],
+    requestedName: string,
+    requestedType: string,
+): boolean {
+    if (!context.global_item_id) return false;
+    const catalogItem = catalogItems.find(
+        candidate => candidate.global_menu_item_id === context.global_item_id,
+    );
+    const currentName = (catalogItem?.canonical_name ?? context.canonical_name).trim();
+    const currentType = (catalogItem?.canonical_type ?? context.canonical_type).trim();
+    return currentName !== requestedName.trim() || currentType !== requestedType.trim();
+}
+
+/** Select a canonical variant only from stable identity, never from its label. */
+export function findCanonicalVariantByIdentity<T extends CanonicalVariantTarget>(
+    variants: T[],
+    currentGlobalVariantId?: string | null,
+    suggestedGlobalVariantId?: string | null,
+): T | undefined {
+    const candidateIds = [currentGlobalVariantId, suggestedGlobalVariantId]
+        .map(value => value?.trim())
+        .filter((value): value is string => Boolean(value));
+    for (const globalVariantId of candidateIds) {
+        const match = variants.find(
+            variant => variant.global_variant_id === globalVariantId,
+        );
+        if (match) return match;
+    }
+    return undefined;
+}
+
 type Identity = {
     global_item_id?: string | null;
     global_variant_id?: string | null;
@@ -46,47 +143,27 @@ export async function runResolutionAttempt<T>(
 export type MergeTargetCandidate = {
     menu_item_id: string;
     is_verified: boolean;
-    is_globally_linked?: boolean;
 };
 
 /**
- * Which menu items may receive this source variant.
- *
- * `sourceHasCompleteGlobalIdentity` follows the source item + variant pair. A
- * complete source takes the direct global-mutation path, where an unlinked
- * target would be rejected at preview time. An incomplete source takes the
- * coverage-repair path, which establishes target identity too. `is_verified`
- * cannot stand in for link coverage: the global catalog owns the flag now, so a
- * row can read verified and still hold no link.
- *
- * The item being resolved is always eligible — picking it just moves this source
- * variant onto another variant of the same item, and it may legitimately be
- * unverified while sibling variants are still unresolved.
+ * Legacy local resolution targets. Global resolution renders canonical targets
+ * through a separate branch, so global-link coverage has no role here.
  */
 export function isEligibleMergeTarget(
     candidate: MergeTargetCandidate,
     sourceMenuItemId: string,
-    sourceHasCompleteGlobalIdentity: boolean,
 ): boolean {
     if (candidate.menu_item_id === sourceMenuItemId) return true;
-    if (!candidate.is_verified) return false;
-    return !sourceHasCompleteGlobalIdentity || candidate.is_globally_linked === true;
+    return candidate.is_verified;
 }
 
-export type MergeTargetVariantCandidate = {
-    is_globally_linked?: boolean;
-};
-
-/**
- * A direct global variant merge needs canonical identity on both variants.
- * Coverage repair can establish missing identity only while the source pair is
- * incomplete, so otherwise the dropdown must fail closed on an unlinked target.
- */
-export function isEligibleMergeTargetVariant(
-    candidate: MergeTargetVariantCandidate,
-    sourceHasCompleteGlobalIdentity: boolean,
+export function isResolutionTargetSelectionMissing(
+    globalResolutionAdvertised: boolean,
+    localTargetId: string,
+    globalTargetId: string,
 ): boolean {
-    return !sourceHasCompleteGlobalIdentity || candidate.is_globally_linked === true;
+    if (!localTargetId) return true;
+    return globalResolutionAdvertised && !globalTargetId;
 }
 
 export function mappedVerificationFailureMessage(
@@ -100,43 +177,6 @@ export function mappedVerificationFailureMessage(
     }
     return `Global identity mapping succeeded, but assignment verification was not confirmed: ${detail} `
         + 'The resolution remains open; retry to verify the existing identities.';
-}
-
-export type TargetCoverageContext = {
-    globalItemId?: string | null;
-    globalVariantId?: string | null;
-    locatorCount: number;
-};
-
-export type TargetCoveragePlan = {
-    mapLocators: boolean;
-    mapAtItemLevel: boolean;
-};
-
-/**
- * What coverage repair still owes the merge target.
- *
- * The decision turns on whether the target *pair* carries POS evidence of its
- * own, which is what `locatorCount` reports. Two different situations produce
- * none, and they want the same repair: the operator picked a variant the target
- * item does not carry yet (“Create new variant type”, or any variant type the
- * dropdown offers from the database at large), or the pair exists but holds only
- * synthetic, non-POS rows. Either way there is no locator that could carry a
- * variant-level mapping, so no variant link is owed — one cannot be established
- * without evidence. What can still be owed is the target *item*: while it
- * carries no global identity, its own locators must map at item level.
- */
-export function targetCoveragePlan(
-    target: TargetCoverageContext,
-    creatingNewVariant: boolean,
-): TargetCoveragePlan {
-    const pairHasOwnPosEvidence = !creatingNewVariant && target.locatorCount > 0;
-    return {
-        mapLocators: !target.globalItemId || (
-            pairHasOwnPosEvidence && !target.globalVariantId
-        ),
-        mapAtItemLevel: !pairHasOwnPosEvidence,
-    };
 }
 
 /**
@@ -173,10 +213,6 @@ export class GlobalIdentityMappedVerificationError extends Error {
 type CoverageRepairSteps<T> = {
     ensureItem: () => Promise<string | null>;
     ensureVariant: (globalItemId: string) => Promise<string | null>;
-    mapTargetLocators?: (
-        globalItemId: string,
-        globalVariantId: string,
-    ) => Promise<boolean>;
     mapSourceLocators: (
         globalItemId: string,
         globalVariantId: string,
@@ -203,13 +239,6 @@ export async function repairGlobalIdentityCoverage<T>(
     if (!globalItemId) return null;
     const globalVariantId = await steps.ensureVariant(globalItemId);
     if (!globalVariantId) return null;
-    if (steps.mapTargetLocators) {
-        const targetMapped = await steps.mapTargetLocators(
-            globalItemId,
-            globalVariantId,
-        );
-        if (!targetMapped) return null;
-    }
     const sourceMapped = await steps.mapSourceLocators(
         globalItemId,
         globalVariantId,

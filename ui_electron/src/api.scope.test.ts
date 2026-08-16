@@ -285,8 +285,12 @@ describe('All Stores scope', () => {
             identity_coverage: {
                 global_mode_active: true,
                 global_aggregation_active: false,
+                global_only: true,
                 linked: 7,
                 total: 9,
+                linked_rows: 7,
+                total_rows: 9,
+                omitted_unlinked_rows: 2,
                 quarantine_count: 0,
             },
             data: { total_revenue: 400 },
@@ -301,8 +305,10 @@ describe('All Stores scope', () => {
             incompleteProfiles: [{ restaurant_id: 'rest-B' }],
             identityCoverage: {
                 global_aggregation_active: false,
+                global_only: true,
                 linked: 7,
                 total: 9,
+                omitted_unlinked_rows: 2,
             },
         });
         unsubscribe();

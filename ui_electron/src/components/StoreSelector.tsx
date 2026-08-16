@@ -23,11 +23,15 @@ export function StoreSelector() {
 
     const includedStores = completeness?.profilesIncluded ?? allStores.member_count;
     const identity = completeness?.identityCoverage;
-    const identityStatus = identity?.global_aggregation_active
-        ? ` · global menu identity ${identity.linked}/${identity.total}`
-        : identity?.global_mode_active
-            ? ` · legacy menu grouping (global coverage ${identity.linked}/${identity.total})`
-            : '';
+    const globalRows = identity?.total_rows ?? identity?.total;
+    const linkedGlobalRows = identity?.linked_rows ?? identity?.linked;
+    const identityStatus = identity?.global_only
+        ? ` · global menu only ${linkedGlobalRows}/${globalRows}${identity.omitted_unlinked_rows ? ` · ${identity.omitted_unlinked_rows} unlinked omitted` : ''}`
+        : identity?.global_aggregation_active
+            ? ` · global menu identity ${identity.linked}/${identity.total}`
+            : identity?.global_mode_active
+                ? ` · legacy menu grouping (global coverage ${identity.linked}/${identity.total})`
+                : '';
     const allStoresStatus = `All Stores · ${includedStores} of ${allStores.member_count} available${identityStatus}`;
 
     const status = error

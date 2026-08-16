@@ -239,17 +239,124 @@ def _require_group_catalog_view(conn):
 
 
 @router.get("/global/catalog")
-def get_global_menu_catalog(conn=Depends(get_db)):
-    """Active canonical items and variants owned by the selected menu group."""
-    capability = _require_group_catalog_view(conn)
-    catalog = menu_queries.fetch_group_menu_catalog(
-        conn, capability.menu_group_id, capability.restaurant_id
-    )
-    return {
-        "menu_group_id": capability.menu_group_id,
-        "catalog_revision": capability.catalog_revision,
-        **catalog,
-    }
+def get_global_menu_catalog(reader: ScopedReader = Depends(get_reader)):
+    """Active canonical group tables for one restaurant or All Stores.
+
+    All Stores de-duplicates cached copies by ``(menu_group_id, global ID)``.
+    It never exposes local projection handles as canonical rows.
+    """
+
+    def query(conn, _profile):
+        if reader.is_all:
+            from src.core.global_menu_schema import (
+                GlobalMenuCapabilityError,
+                resolve_global_menu_capability,
+            )
+
+            capability = resolve_global_menu_capability(
+                conn, allow_federated_read=True
+            )
+            if not capability.active:
+                error = GlobalMenuCapabilityError(
+                    "Global menu catalog is unavailable for this restaurant"
+                )
+                error.code = "global_menu_catalog_unavailable"
+                raise error
+        else:
+            capability = _require_group_catalog_view(conn)
+        catalog = menu_queries.fetch_group_menu_catalog(
+            conn, capability.menu_group_id, capability.restaurant_id
+        )
+        return {
+            "menu_group_id": capability.menu_group_id,
+            "catalog_revision": capability.catalog_revision,
+            **catalog,
+        }
+
+    def reduce(pairs):
+        def canonical_rows(kind: str, id_field: str):
+            buckets: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            contributors: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+            item_rule_counts: Dict[Tuple[str, str], int] = {}
+            local_id_field = (
+                "local_menu_item_id" if kind == "items" else "local_variant_id"
+            )
+            for profile, catalog in pairs:
+                group_id = str(catalog.get("menu_group_id") or "")
+                for raw in catalog.get(kind, []):
+                    global_id = str(raw.get(id_field) or "")
+                    if not group_id or not global_id:
+                        continue
+                    key = (group_id, global_id)
+                    candidate = dict(raw)
+                    candidate.pop(local_id_field, None)
+                    candidate["menu_group_id"] = group_id
+                    current = buckets.get(key)
+                    if current is None or int(candidate.get("server_revision") or 0) > int(
+                        current.get("server_revision") or 0
+                    ):
+                        buckets[key] = candidate
+                    contributors.setdefault(key, []).append(
+                        {
+                            "restaurant_id": profile.restaurant_id,
+                            "restaurant_name": profile.display_name,
+                        }
+                    )
+                    if kind == "items":
+                        item_rule_counts[key] = item_rule_counts.get(key, 0) + int(
+                            raw.get("active_pos_rules") or 0
+                        )
+
+            rows = []
+            for key, row in buckets.items():
+                if kind == "items":
+                    row["active_pos_rules"] = item_rule_counts.get(key, 0)
+                row["contributors"] = contributors[key]
+                row["restaurant_ids"] = sorted(
+                    {entry["restaurant_id"] for entry in contributors[key]}
+                )
+                rows.append(row)
+            if kind == "items":
+                rows.sort(
+                    key=lambda row: (
+                        str(row.get("menu_group_id") or ""),
+                        str(row.get("canonical_type") or ""),
+                        str(row.get("canonical_name") or ""),
+                        str(row.get(id_field) or ""),
+                    )
+                )
+            else:
+                rows.sort(
+                    key=lambda row: (
+                        str(row.get("menu_group_id") or ""),
+                        str(row.get("canonical_name") or ""),
+                        str(row.get("unit") or ""),
+                        row.get("value") is None,
+                        str(row.get("value") or ""),
+                        str(row.get(id_field) or ""),
+                    )
+                )
+            return rows
+
+        menu_group_ids = sorted(
+            {
+                str(value.get("menu_group_id"))
+                for _profile, value in pairs
+                if value.get("menu_group_id")
+            }
+        )
+        return {
+            "menu_group_id": menu_group_ids[0] if len(menu_group_ids) == 1 else None,
+            "menu_group_ids": menu_group_ids,
+            "catalog_revision": max(
+                (int(value.get("catalog_revision") or 0) for _profile, value in pairs),
+                default=0,
+            ),
+            "items": canonical_rows("items", "global_menu_item_id"),
+            "variants": canonical_rows("variants", "global_variant_id"),
+        }
+
+    return reader.read(query, reduce)
 
 
 @router.get("/global/matrix")
@@ -452,6 +559,7 @@ def get_menu_stats(
             canonical_item_name_field="Item Name",
             canonical_item_type_field="Type",
             contributor_fields=("menu_item_id",),
+            global_only=True,
         )
         return identity_aware_federated_data(rows, coverage)
 
@@ -555,6 +663,7 @@ def get_menu_summary(
             canonical_item_name_field="name",
             canonical_item_type_field="type",
             additional_group_by=("unit",) if mode == "volume" else (),
+            global_only=True,
         )
         start = (page - 1) * page_size
         as_of_dates = {
@@ -649,6 +758,7 @@ def get_menu_summary_timeseries(
                 item_id_field="menu_item_id",
                 canonical_item_name_field="menu_item_name",
                 additional_group_by=("date",),
+                global_only=True,
             )
         return identity_aware_federated_data({
             "data": rows,
@@ -735,6 +845,7 @@ def get_menu_items_view(
             item_id_field="menu_item_id",
             canonical_item_name_field="name",
             canonical_item_type_field="type",
+            global_only=True,
         )
         start = (page - 1) * page_size
         return identity_aware_federated_data(
@@ -789,7 +900,8 @@ def get_variants_view(
         }
 
     def reduce(pairs):
-        # Variants combine on their durable dimensions: name, unit, and value.
+        # The legacy dimensions remain declared for compatibility callers;
+        # All Stores is explicitly global-only below.
         identity_pairs = [
             (profile, {"rows": value["data"], "identity": value.get("identity") or {}})
             for profile, value in pairs
@@ -797,7 +909,12 @@ def get_variants_view(
         rows, coverage = group_menu_identity_rows(
             identity_pairs,
             legacy_group_by=("variant_name", "unit", "value"),
-            spec={"description": First(), "is_verified": AllTrue()},
+            spec={
+                "description": First(),
+                "unit": First(),
+                "value": First(),
+                "is_verified": AllTrue(),
+            },
             sort_by=sort_by,
             descending=sort_desc,
             contributor_fields=("variant_id",),
@@ -805,6 +922,7 @@ def get_variants_view(
             variant_id_field="variant_id",
             canonical_variant_name_field="variant_name",
             identity_kind="variant",
+            global_only=True,
         )
         start = (page - 1) * page_size
         return identity_aware_federated_data(
@@ -859,6 +977,7 @@ def get_menu_matrix(reader: ScopedReader = Depends(get_reader)):
             canonical_item_name_field="name",
             canonical_item_type_field="type",
             canonical_variant_name_field="variant_name",
+            global_only=True,
         )
         return identity_aware_federated_data(rows, coverage)
 
@@ -881,12 +1000,12 @@ def get_menu_list(reader: ScopedReader = Depends(get_reader)):
 
 def _menu_list_rows(conn, _profile=None):
     cursor = conn.cursor()
-    # is_globally_linked drives target eligibility when the source pair already
-    # has complete global identity. An incomplete source takes the coverage-
-    # repair path, which can establish target identity too.
+    # Global IDs let a local suggestion preselect the same stable canonical row;
+    # global-mode target eligibility itself comes from the canonical catalog.
     cursor.execute("""
         SELECT m.menu_item_id, m.name, m.type, m.is_verified,
-               CASE WHEN l.local_menu_item_id IS NULL THEN 0 ELSE 1 END
+               CASE WHEN l.local_menu_item_id IS NULL THEN 0 ELSE 1 END,
+               l.global_menu_item_id
         FROM menu_items m
         LEFT JOIN menu_item_global_links l
             ON l.local_menu_item_id = m.menu_item_id
@@ -899,6 +1018,7 @@ def _menu_list_rows(conn, _profile=None):
             "type": row[2],
             "is_verified": bool(row[3]),
             "is_globally_linked": bool(row[4]),
+            "global_menu_item_id": row[5],
         }
         for row in cursor.fetchall()
     ]
@@ -920,7 +1040,8 @@ def _variant_list_rows(conn, _profile=None):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT v.variant_id, v.variant_name,
-               CASE WHEN l.local_variant_id IS NULL THEN 0 ELSE 1 END
+               CASE WHEN l.local_variant_id IS NULL THEN 0 ELSE 1 END,
+               l.global_variant_id
         FROM variants v
         LEFT JOIN variant_global_links l
             ON l.local_variant_id = v.variant_id
@@ -931,6 +1052,7 @@ def _variant_list_rows(conn, _profile=None):
             "variant_id": row[0],
             "name": row[1],
             "is_globally_linked": bool(row[2]),
+            "global_variant_id": row[3],
         }
         for row in cursor.fetchall()
     ]
@@ -957,7 +1079,13 @@ def create_variant_type_endpoint(req: CreateVariantTypeRequest, conn=Depends(get
 # --- Merge Logic ---
 
 @router.get("/merge/history")
-def get_merge_history(limit: int = 20, offset: int = 0, conn=Depends(get_db)):
+def get_merge_history(
+    limit: int = 20,
+    offset: int = 0,
+    category: str = "all",
+    restaurant_id: Optional[str] = None,
+    conn=Depends(get_db),
+):
     """Get paginated merge/resolution history"""
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -965,13 +1093,29 @@ def get_merge_history(limit: int = 20, offset: int = 0, conn=Depends(get_db)):
 
     global_capability = resolve_global_menu_capability(conn)
     if global_capability is not None and global_capability.active:
-        from src.core.global_menu_history import list_cached_global_menu_history
+        from src.core.global_menu_history import (
+            GLOBAL_MENU_HISTORY_FILTERS,
+            list_cached_global_menu_history,
+        )
+
+        category = str(category or "all").strip().lower()
+        if category not in GLOBAL_MENU_HISTORY_FILTERS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_group_history_filter",
+                    "error": f"Unknown group history filter: {category}",
+                },
+            )
+        restaurant_id = str(restaurant_id or "").strip() or None
 
         return list_cached_global_menu_history(
             conn,
             capability=global_capability,
             limit=limit,
             offset=offset,
+            history_filter=category,
+            restaurant_id=restaurant_id,
         )
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM merge_history")

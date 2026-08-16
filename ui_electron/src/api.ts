@@ -36,6 +36,8 @@ export interface ScopeCompleteness {
         quarantine_count: number;
         linked_rows?: number;
         total_rows?: number;
+        global_only?: boolean;
+        omitted_unlinked_rows?: number;
     };
 }
 
@@ -416,7 +418,12 @@ export const endpoints = {
             value?: number;
         } & GlobalMenuPreviewReference) => api.post('/menu/variants/create', data),
 
-        mergeHistory: (params?: { limit?: number; offset?: number }) => api.get('/menu/merge/history', { params }),
+        mergeHistory: (params?: {
+            limit?: number;
+            offset?: number;
+            category?: 'all' | 'global' | 'legacy' | 'system' | 'undoable';
+            restaurant_id?: string;
+        }) => api.get('/menu/merge/history', { params }),
         mergePreview: (params: {
             source_id: string;
             target_id: string;

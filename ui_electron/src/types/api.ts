@@ -513,6 +513,8 @@ export interface GlobalMenuStatus {
 
 export interface GlobalMenuCatalogItem {
     global_menu_item_id: string;
+    menu_group_id?: string;
+    local_menu_item_id?: string | null;
     canonical_name: string;
     canonical_type: string;
     active_pos_rules: number;
@@ -523,6 +525,8 @@ export interface GlobalMenuCatalogItem {
 
 export interface GlobalMenuCatalogVariant {
     global_variant_id: string;
+    menu_group_id?: string;
+    local_variant_id?: string | null;
     canonical_name: string;
     description?: string | null;
     unit?: string | null;
@@ -533,7 +537,8 @@ export interface GlobalMenuCatalogVariant {
 }
 
 export interface GlobalMenuCatalogResponse {
-    menu_group_id: string;
+    menu_group_id: string | null;
+    menu_group_ids?: string[];
     catalog_revision: number;
     items: GlobalMenuCatalogItem[];
     variants: GlobalMenuCatalogVariant[];
