@@ -199,7 +199,8 @@ class SchemaOwnershipTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS restaurant_profile_identity", profile_schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS global_menu_history", profile_schema)
         self.assertIn("history_cursor TEXT", profile_schema)
-        self.assertIn(
+        self.assertIn("cache_epoch INTEGER NOT NULL DEFAULT 2", profile_schema)
+        self.assertNotIn(
             "price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0)",
             profile_schema,
         )

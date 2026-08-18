@@ -77,21 +77,22 @@ See [MENU_SYNC_ARCHITECTURE.md](./MENU_SYNC_ARCHITECTURE.md) and [central_server
 | `src/core/order_item_key.py` | Assignment key ↔ local POS row backing (`AssignmentKeyIndex`). |
 | `src/core/menu_catalog_seed.py` | In-memory catalog seed + bootstrap-payload builders (`seed_catalog`). |
 
-### Global-menu projection (revision 1.10; active enrollment)
+### Global-menu projection (revision 1.10; catalog-cutover wire cache)
 
 The modules below execute when the selected, authorized physical profile's
 server-managed registry row advertises a `menu_group_id` and `global_menu_v1`.
 A configured member of a group that owns a canonical catalog advertises all
 four capabilities together. Unlinked member assignments are a normal enrollment
-state and appear in Unclustered Data Resolution.
+state and appear in Unclustered Data Resolution. SQLite does not port
+PostgreSQL `menu_catalog`; it caches the §25 wire.
 
 | Path | Role |
 |------|------|
-| `src/core/global_menu_schema.py` | Additive projection validation, structured status, quarantine access, and the single fail-closed capability resolver. |
-| `src/core/global_menu_sync.py` | Snapshot/event/assignment adapters; validates group/revision/redirect integrity. POS mapping rules are restaurant-scoped and carry no price. |
-| `src/core/global_menu_identity.py` | Stable local/global links, redirect traversal, approved locator precedence, canonical projection planner, and All Stores row annotation. |
-| `src/core/global_menu_history.py` | Strict unified-history paging/cache with cursor-safe page commits and legacy undo refusal. |
-| `src/core/global_menu_mutation.py` | Stable-ID preview/commit/status transport and trusted local locator context; reconciles uncertain POST outcomes without blind replay. Coverage does not gate commit. |
+| `src/core/global_menu_schema.py` | Additive projection validation, structured status, quarantine access, the single fail-closed capability resolver, and the one-way `cache_epoch` wipe/rebuild. |
+| `src/core/global_menu_sync.py` | Snapshot/event/assignment apply against live §25. Hex snapshot cursors including server `rule_id`; integer event `after` only; genesis watermark 1/1. POS mapping rules are restaurant-scoped and carry no price. |
+| `src/core/global_menu_identity.py` | Stable local/global links, redirect traversal, approved locator precedence, canonical projection planner, and All Stores row annotation. Alias locators are never authority. |
+| `src/core/global_menu_history.py` | Strict unified-history paging/cache with cursor-safe page commits, genesis as non-undoable system/backfill, and legacy undo refusal. |
+| `src/core/global_menu_mutation.py` | Stable-ID preview/commit/status transport and trusted local locator context; reconciles uncertain POST outcomes without blind replay. OCC token is catalog `menu_group_revision` (genesis = 1). Coverage does not gate commit. |
 | `src/core/queries/global_menu_diagnostics.py` | Clean-rebuild counts, coverage/cursor/quarantine state and deterministic catalog/matrix/history digests. |
 | `src/core/db/reset.py` | Opaque archive-and-recreate path for one captured profile; never opens a revision-1.6 file before replacement. |
 | `ui_electron/src/globalMenuCapabilities.ts` | Pure frontend predicates for catalog/history labels and mutation controls. Coverage is not a gate. |

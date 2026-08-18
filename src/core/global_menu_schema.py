@@ -9,6 +9,8 @@ global writes by itself. Coverage is diagnostic and does not gate capability.
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
@@ -21,6 +23,20 @@ GLOBAL_MENU_MUTATION_CAPABILITY = "global_menu_mutations_v1"
 GLOBAL_MENU_SCHEMA_VERSION = 1
 LEGACY_MENU_MODE = "legacy_restaurant_v1"
 GLOBAL_MENU_MODE = "global_menu_v1"
+# Catalog cutover (§25 menu_catalog). Stored epoch 0/1 is pre-cutover wire cache.
+GLOBAL_MENU_CACHE_EPOCH = 2
+_HEX_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_GLOBAL_MENU_CACHE_TABLES = (
+    "menu_item_global_links",
+    "variant_global_links",
+    "global_menu_mapping_rules",
+    "global_menu_redirects",
+    "global_menu_events",
+    "global_menu_history",
+    "global_menu_sync_quarantine",
+    "global_menu_items",
+    "global_variants",
+)
 
 GLOBAL_MENU_TABLES: Mapping[str, Tuple[str, ...]] = {
     "global_menu_state": (
@@ -34,6 +50,7 @@ GLOBAL_MENU_TABLES: Mapping[str, Tuple[str, ...]] = {
         "event_cursor",
         "assignment_cursor",
         "history_cursor",
+        "cache_epoch",
         "bootstrap_status",
         "coverage_linked",
         "coverage_total",
@@ -75,7 +92,6 @@ GLOBAL_MENU_TABLES: Mapping[str, Tuple[str, ...]] = {
         "restaurant_id",
         "locator_kind",
         "normalized_locator",
-        "price",
         "server_revision",
     ),
     "global_menu_sync_quarantine": (
@@ -236,11 +252,115 @@ def ensure_global_menu_schema(conn) -> None:
         conn.execute(
             """
             INSERT INTO global_menu_state (
-                singleton_id, mode, capability_schema_version, bootstrap_status
-            ) VALUES (1, ?, ?, 'not_started')
+                singleton_id, mode, capability_schema_version, bootstrap_status,
+                cache_epoch
+            ) VALUES (1, ?, ?, 'not_started', ?)
             """,
-            (LEGACY_MENU_MODE, GLOBAL_MENU_SCHEMA_VERSION),
+            (LEGACY_MENU_MODE, GLOBAL_MENU_SCHEMA_VERSION, GLOBAL_MENU_CACHE_EPOCH),
         )
+
+
+def is_catalog_hex_id(value: Any) -> bool:
+    return bool(_HEX_ID_RE.fullmatch(str(value or "").strip()))
+
+
+def _held_event_cursor_is_valid_prefix(
+    held: Any, *, latest_event_seq: Optional[int]
+) -> bool:
+    """True when the cached event cursor can tail the live catalog sequence."""
+    text = str(held or "").strip()
+    if not text:
+        return True
+    try:
+        cursor = int(text)
+    except (TypeError, ValueError):
+        return False
+    if str(cursor) != text or cursor < 0:
+        return False
+    if latest_event_seq is None:
+        return False
+    return cursor <= int(latest_event_seq)
+
+
+def global_menu_cache_needs_rebuild(
+    conn, *, latest_event_seq: Optional[int] = None
+) -> bool:
+    """Pre-catalog SQLite caches cannot tail the restarted event sequence."""
+    ensure_global_menu_schema(conn)
+    state = _state_row(conn)
+    if int(state.get("cache_epoch") or 0) < GLOBAL_MENU_CACHE_EPOCH:
+        return True
+    for row in conn.execute("SELECT rule_id FROM global_menu_mapping_rules"):
+        if not is_catalog_hex_id(row[0]):
+            return True
+    if not _held_event_cursor_is_valid_prefix(
+        state.get("event_cursor"), latest_event_seq=latest_event_seq
+    ):
+        return True
+    snapshot_cursor = str(state.get("snapshot_cursor") or "").strip()
+    if snapshot_cursor:
+        try:
+            progress = json.loads(snapshot_cursor)
+        except (TypeError, ValueError):
+            return True
+        after = progress.get("after") if isinstance(progress, dict) else None
+        if after not in (None, "") and not is_catalog_hex_id(after):
+            return True
+    return False
+
+
+def _global_menu_cache_rebuild_ddl(schema_sql: str) -> str:
+    """Return only the dropped §25 cache tables/indexes, not the full schema.
+
+    ``database/schema_sqlite.sql`` also contains unrelated ``DROP TABLE``
+    statements; executing the whole file would mutate other domains.
+    """
+    start = schema_sql.find("CREATE TABLE IF NOT EXISTS global_menu_items")
+    end = schema_sql.find("-- 18. SYSTEM CONFIGURATION")
+    if start < 0 or end <= start:
+        raise GlobalMenuSchemaError(
+            "Could not extract global-menu cache DDL from schema_sqlite.sql"
+        )
+    return schema_sql[start:end]
+
+
+def wipe_global_menu_projection(conn) -> None:
+    """Drop the local §25 cache so the next pull re-bootstraps from snapshot.
+
+    Recreating the tables also picks up CHECK changes (no live ``alias``,
+    no ``global-alias`` provenance, no mapping-rule ``price``) that
+    ``CREATE TABLE IF NOT EXISTS`` cannot apply to an existing profile.
+    """
+    from src.core.utils.path_helper import get_resource_path
+
+    schema_path = Path(get_resource_path(os.path.join("database", "schema_sqlite.sql")))
+    schema_sql = schema_path.read_text(encoding="utf-8")
+    cache_ddl = _global_menu_cache_rebuild_ddl(schema_sql)
+    foreign_keys_enabled = bool(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for table in _GLOBAL_MENU_CACHE_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.executescript(cache_ddl)
+    finally:
+        conn.execute(
+            f"PRAGMA foreign_keys = {'ON' if foreign_keys_enabled else 'OFF'}"
+        )
+    ensure_global_menu_schema(conn)
+    update_global_menu_state(
+        conn,
+        catalog_revision=0,
+        mutation_revision=0,
+        snapshot_cursor=None,
+        event_cursor=None,
+        assignment_cursor=None,
+        history_cursor=None,
+        bootstrap_status="not_started",
+        coverage_linked=0,
+        coverage_total=0,
+        last_error=None,
+        cache_epoch=GLOBAL_MENU_CACHE_EPOCH,
+    )
 
 
 def _state_row(conn) -> Dict[str, Any]:
@@ -476,6 +596,7 @@ def update_global_menu_state(conn, **values: Any) -> None:
         "coverage_linked",
         "coverage_total",
         "last_error",
+        "cache_epoch",
     }
     unknown = sorted(set(values) - allowed)
     if unknown:

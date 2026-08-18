@@ -4385,7 +4385,7 @@ function GroupHistoryTab({ lastDbSync }: { lastDbSync?: number }) {
         : historyFilter === 'legacy'
             ? 'Historical restaurant-scoped changes are retained for audit and are never presented as undoable.'
             : historyFilter === 'system'
-                ? 'System migrations and older nameless synchronization events.'
+                ? 'System activity includes catalog genesis/backfill and older nameless synchronization events. Genesis is never undoable.'
                 : historyFilter === 'undoable'
                     ? 'Changes the server currently permits you to undo.'
                     : 'Current, legacy, and system audit events together.';

@@ -2255,7 +2255,9 @@ Two shared bare IDs are **kept**, deliberately:
 
 **Base path:** `/desktop-analytics-sync/global-menu/`. Auth per §4.1, selector per §23.2. The two `mutations/` POST routes additionally require `X-Global-Menu-Key` (§25.3).
 
-**Server implementation:** `backend/desktop_analytics_app_sync/services/global_menu_*.py`, `views/global_menu.py`, `global_menu_auth.py`.
+**Server implementation:** `backend/menu_catalog/` is the canonical catalog (items, variants, redirects, mapping rules, mutation log, event tail, resolver, preview/commit). The §25 HTTP surface lives in `backend/desktop_analytics_app_sync/views/global_menu.py` and `global_menu_auth.py`; settings membership and capability advertisement in `services/global_menu_group.py`; assignment linking in `services/global_menu_ingest.py`; the human audit page in `services/global_menu_history.py`. The old `global_menu_*` tables remain in the database unread by these routes until an explicit drop.
+
+The catalog is a **singleton**: one `menu_catalog` row, one item namespace, one revision counter, one event sequence. The restaurant registry still permits any number of `menu_group` values, so `menu_catalog.E001` (`deploy=True`) refuses a release that configures more than one. A second catalog is a schema change, not a configuration one. `menu_group_id` on the wire is the caller's settings membership; it does not select a catalog.
 
 Restaurants that use the same business menu belong to one server-managed **menu group**. The group, not a restaurant, owns canonical menu identity and human menu decisions. A rename or a merge is committed once, centrally, and lands in every member restaurant.
 
@@ -2285,7 +2287,7 @@ A configured group that owns **no canonical catalog** is a deployment error, not
 
 - A global item/variant id is **server-issued and immutable**. It is never derived from a display name: a rename changes metadata, not identity, so historical analytics keyed on it do not split.
 - Uniqueness of *canonical identity* inside a group is enforced separately, on normalized name plus type (items) or name plus unit and value (variants), and only among **active** rows. A merged source releases its identity and keeps resolving through its redirect forever.
-- `menu_group_revision` is one monotonic integer per group, advanced by exactly one per accepted mutation. The revision-1.10 data migrations also advance it once per affected group while appending the corresponding semantic rule-normalization or tombstone event; this is the only system-authored exception. It is the OCC token for §25.8.
+- `menu_group_revision` is the singleton catalog's monotonic integer (`menu_catalog.revision`), advertised under the caller's `menu_group_id`. It advances by exactly one per accepted mutation. The backfill's genesis mutation is the only system-authored bump on this catalog (revision 1, event 1); the revision-1.10 data migrations wrote to the retired `global_menu_*` tables and do not touch it. It is the OCC token for §25.8.
 - Membership is **not on the wire and not in a table a request can change**: it is declared per restaurant in the server's settings registry. Moving a restaurant between groups is a deployment.
 
 ### 25.3 Capabilities and the editor permission
@@ -2330,9 +2332,10 @@ An addon never falls through to an itemcode rule: an addon id is a different id 
 | Param | Default | Rules |
 |---|---|---|
 | `section` | `items` | One of `items`, `variants`, `redirects`, `rules`. Unknown → `400` `invalid_snapshot_section` |
-| `after` | — | Last key of the previous page (`global_item_id`, `global_variant_id`, `source_global_id`, or the rule row id) |
+| `after` | — | Last key of the previous page (`global_item_id`, `global_variant_id`, `source_global_id`, or `rule_id`) |
 | `limit` | `500` | Clamped to `2000` |
 
+- **Every cursor in every section is a 32-character lowercase hex id**, the same wire form as the ids in the rows. `rule_id` included: it is the rule's own server-issued id, not a row number, and a numeric `after` is refused with `400` `invalid_page_parameter` rather than being read as an offset. Ordering within a section is by that id.
 - Paged **per section**: the four collections have different key spaces, and one merged cursor would make "resume where I left off" depend on the order the server concatenated them.
 - **Omission is never deletion.** Redirected and tombstoned entities are served explicitly with their `lifecycle_state`.
 - **Rules are filtered to the requesting restaurant** — every group-scoped rule plus that restaurant's own restaurant-scoped ones. A peer's POS locator values mean nothing here and are withheld.
@@ -2345,7 +2348,9 @@ Snapshot plus event tail plus the §17.6 assignment snapshot is also the **clien
 
 ### 25.6 `GET global-menu/events`
 
-`after` (integer event sequence, default `0`) and `limit` (default `500`, max `2000`). Non-integer `after` → `400` `invalid_page_parameter`.
+`after` (integer event sequence, default `0`) and `limit` (default `500`, max `2000`). Non-integer `after` → `400` `invalid_page_parameter`. This is the one paged global-menu surface whose cursor is an integer; §25.5's four sections are all hex ids.
+
+`event_seq` is a server-side sequence with no meaning across databases, and it **restarts from 1 at the ground-truth catalog cutover** — the backfill's genesis event is sequence 1 and the tail grows from there. A client does not reconcile a held `event_seq` against a new one: it re-runs the §25.5 snapshot bootstrap and tails from the watermark that snapshot pinned. `menu_group_revision` is likewise the catalog's own counter and starts at the genesis revision, not at whatever a pre-cutover client last saw.
 
 Every response has `schema_version: 1`, group identity/revision, `event_head_seq`, `events`, `next_cursor`, and `has_more`. Order is the server's own `event_seq`; the next request sends `after=<next_cursor>`. One commit transaction appends its event and advances the revision under the group lock, so a client that has read up to a sequence has seen every effect at or below the revision that sequence carries.
 
@@ -2462,7 +2467,7 @@ The response has `schema_version`, `menu_group_id`, `rows`, `next_cursor`, and `
 - source/target snapshots with names plus nullable global ids; for `global_locator.map`, the source name is the raw POS item/addon label captured when the mutation commits, with older events resolved from retained order facts when available;
 - `mutation_id` when one exists, `is_undoable`, and a compact audit `detail` object.
 
-The server projects this unified page from the existing restaurant `MenuMergeEvent` rows for **all current group members** plus the group's `GlobalMenuEvent`/`GlobalMenuMutationLog`; it does not copy old rows into the convergence stream and does not manufacture mutation logs. Machine-authored `derived_assignment_v1` merge events are convergence bookkeeping rather than human actions and are excluded from this projection without deleting their authoritative event rows. Legacy rows that remain therefore always have `mutation_id: null` and `is_undoable: false`. Global rows appear once, group-wide, and are undoable only when the normal §25.8 preview currently permits it. The client caches this read model separately from its legacy `merge_history` mutation table.
+The server projects this unified page from the existing restaurant `MenuMergeEvent` rows for **all current group members** plus the catalog's `MenuEvent` / `MenuMutation` rows; it does not copy old `global_menu_*` rows into the convergence stream and does not manufacture mutation logs. Machine-authored `derived_assignment_v1` merge events are convergence bookkeeping rather than human actions and are excluded from this projection without deleting their authoritative event rows. The backfill genesis event is visible here and is never undoable. Legacy rows that remain therefore always have `mutation_id: null` and `is_undoable: false`. Global rows appear once, group-wide, and are undoable only when the normal §25.8 preview currently permits it. The client caches this read model separately from its legacy `merge_history` mutation table.
 
 ### 25.11 Removing a group
 

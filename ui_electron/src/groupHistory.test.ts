@@ -37,6 +37,13 @@ describe('group history presentation', () => {
             event_type: 'global_variant.create',
             merged_at: '2026-08-14T20:47:50+05:30',
         })).toBe('Created canonical variant');
+        expect(groupHistoryAction({
+            source_kind: 'global_menu_event',
+            event_type: 'global_menu.genesis',
+            actor: 'backfill',
+            is_undoable: false,
+            merged_at: '2026-08-09T08:00:00+00:00',
+        })).toBe('Catalog backfill (genesis)');
     });
 
     it('collapses adjacent nameless legacy events from the same store', () => {

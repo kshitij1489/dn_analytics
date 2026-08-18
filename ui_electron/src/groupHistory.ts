@@ -42,6 +42,7 @@ const ACTION_LABELS: Record<string, string> = {
     'global_variant.merge': 'Merged canonical variant',
     'global_locator.map': 'Mapped item (raw name unavailable)',
     'global_menu.undo': 'Undid group menu change',
+    'global_menu.genesis': 'Catalog backfill (genesis)',
     'global_catalog.verification_backfill': 'Backfilled catalog verification',
     'menu_merge.applied': 'Applied legacy menu change',
     'menu_merge.undone': 'Undid legacy menu change',

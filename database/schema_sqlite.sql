@@ -688,6 +688,9 @@ CREATE TABLE IF NOT EXISTS global_menu_state (
     event_cursor TEXT,
     assignment_cursor TEXT,
     history_cursor TEXT,
+    -- One-way desktop cache epoch. Catalog cutover is 2; a stored value
+    -- below that wipes the §25 projection and re-bootstraps from snapshot.
+    cache_epoch INTEGER NOT NULL DEFAULT 2 CHECK (cache_epoch >= 0),
     bootstrap_status TEXT NOT NULL DEFAULT 'not_started'
         CHECK (bootstrap_status IN ('not_started', 'in_progress', 'complete', 'error')),
     coverage_linked INTEGER NOT NULL DEFAULT 0 CHECK (coverage_linked >= 0),
@@ -734,7 +737,7 @@ CREATE TABLE IF NOT EXISTS menu_item_global_links (
     global_menu_item_id TEXT NOT NULL
         REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
     provenance TEXT NOT NULL DEFAULT 'server-link'
-        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'global-alias', 'projection')),
+        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'projection')),
     server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
     is_projection_owner INTEGER NOT NULL DEFAULT 0 CHECK (is_projection_owner IN (0, 1)),
     linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -746,7 +749,7 @@ CREATE TABLE IF NOT EXISTS variant_global_links (
     global_variant_id TEXT NOT NULL
         REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
     provenance TEXT NOT NULL DEFAULT 'server-link'
-        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'global-alias', 'projection')),
+        CHECK (provenance IN ('server-link', 'restaurant-pos', 'group-itemcode', 'projection')),
     server_revision INTEGER NOT NULL CHECK (server_revision >= 0),
     is_projection_owner INTEGER NOT NULL DEFAULT 0 CHECK (is_projection_owner IN (0, 1)),
     linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -792,14 +795,13 @@ CREATE TABLE IF NOT EXISTS global_menu_mapping_rules (
     locator_scope TEXT NOT NULL CHECK (locator_scope IN ('restaurant', 'group')),
     restaurant_id TEXT,
     locator_kind TEXT NOT NULL
-        CHECK (locator_kind IN ('pos-item', 'pos-addon', 'itemcode', 'alias')),
+        CHECK (locator_kind IN ('pos-item', 'pos-addon', 'itemcode')),
     locator_value TEXT NOT NULL CHECK (TRIM(locator_value) <> ''),
     normalized_locator TEXT NOT NULL CHECK (TRIM(normalized_locator) <> ''),
     target_global_menu_item_id TEXT NOT NULL
         REFERENCES global_menu_items(global_menu_item_id) ON DELETE RESTRICT,
     target_global_variant_id TEXT
         REFERENCES global_variants(global_variant_id) ON DELETE RESTRICT,
-    price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0),
     provenance TEXT NOT NULL,
     is_verified INTEGER NOT NULL DEFAULT 1 CHECK (is_verified IN (0, 1)),
     lifecycle_state TEXT NOT NULL DEFAULT 'active'

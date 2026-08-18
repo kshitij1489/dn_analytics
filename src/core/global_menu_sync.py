@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.core.config.cloud_sync_config import get_cloud_sync_config
@@ -25,12 +23,14 @@ from src.core.global_menu_schema import (
     GLOBAL_MENU_SCHEMA_VERSION,
     GLOBAL_MENU_MODE,
     GlobalMenuCapabilityStatus,
-    clear_resolved_quarantine,
+    global_menu_cache_needs_rebuild,
+    is_catalog_hex_id,
     quarantine_global_menu_payload,
     require_global_menu_capability,
     resolve_global_menu_quarantine_page,
     resolve_global_menu_capability,
     update_global_menu_state,
+    wipe_global_menu_projection,
 )
 from utils.id_generator import generate_deterministic_id
 
@@ -43,10 +43,9 @@ _LOCATOR_TYPE_TO_LOCAL = {
     "pos_item": "pos-item",
     "pos_addon": "pos-addon",
     "itemcode": "itemcode",
-    "alias": "alias",
 }
 _POS_LOCATOR_KINDS = frozenset({"pos-item", "pos-addon"})
-_HISTORICAL_GROUP_LOCATOR_KINDS = frozenset({"itemcode", "alias"})
+_GROUP_LOCATOR_KINDS = frozenset({"itemcode"})
 
 
 class GlobalMenuSyncError(RuntimeError):
@@ -145,20 +144,7 @@ def _iter_dicts(value: Any, field: str) -> List[Dict[str, Any]]:
     return [dict(row) for row in value]
 
 
-def _contract_rule_id(row: Dict[str, Any], group_id: str) -> str:
-    identity = "\x1f".join(
-        (
-            group_id,
-            str(row.get("rule_scope") or ""),
-            str(row.get("restaurant_id") or ""),
-            str(row.get("locator_type") or ""),
-            str(row.get("locator_value") or ""),
-        )
-    )
-    return "contract-rule:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
-
-
-def _contract_snapshot_watermark(payload: Dict[str, Any]) -> tuple[Optional[int], int]:
+def _contract_snapshot_watermark(payload: Dict[str, Any]) -> tuple[int, int]:
     watermark = payload.get("snapshot_watermark")
     if not isinstance(watermark, dict):
         raise GlobalMenuSyncError("Global menu snapshot omitted its watermark")
@@ -173,26 +159,79 @@ def _contract_snapshot_watermark(payload: Dict[str, Any]) -> tuple[Optional[int]
         raise GlobalMenuSyncError(
             "Global menu snapshot watermark revision does not match the page"
         )
-    raw_event_seq = watermark.get("event_seq")
-    event_seq = (
-        None
-        if raw_event_seq is None
-        else _revision(raw_event_seq, "snapshot_watermark.event_seq")
+    if revision < 1:
+        raise GlobalMenuSyncError(
+            "Global menu snapshot watermark revision must be at least genesis (1)"
+        )
+    event_seq = _revision(
+        watermark.get("event_seq"), "snapshot_watermark.event_seq"
     )
+    if event_seq < 1:
+        raise GlobalMenuSyncError(
+            "Global menu snapshot watermark event_seq must be at least genesis (1)"
+        )
     return event_seq, revision
 
 
-def _contract_page_cursor(payload: Dict[str, Any]) -> tuple[Any, bool]:
+def _contract_snapshot_page_cursor(payload: Dict[str, Any]) -> tuple[Optional[str], bool]:
     has_more = payload.get("has_more")
     if not isinstance(has_more, bool):
         raise GlobalMenuSyncError("has_more must be a boolean")
     next_cursor = payload.get("next_cursor")
-    if has_more != (next_cursor is not None):
+    if next_cursor is None:
+        if has_more:
+            raise GlobalMenuSyncError("next_cursor and has_more are inconsistent")
+        return None, False
+    if isinstance(next_cursor, bool) or not isinstance(next_cursor, str):
+        raise GlobalMenuSyncError(
+            "Snapshot next_cursor must be a 32-character lowercase hex id"
+        )
+    text = next_cursor.strip()
+    if not is_catalog_hex_id(text):
+        raise GlobalMenuSyncError(
+            "Snapshot next_cursor must be a 32-character lowercase hex id"
+        )
+    if not has_more:
         raise GlobalMenuSyncError("next_cursor and has_more are inconsistent")
-    return next_cursor, has_more
+    return text, True
 
 
-def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _contract_snapshot_row_id(section: str, row: Dict[str, Any]) -> str:
+    key = {
+        "items": "global_item_id",
+        "variants": "global_variant_id",
+        "redirects": "source_global_id",
+        "rules": "rule_id",
+    }[section]
+    row_id = _nonblank(row, key)
+    if not is_catalog_hex_id(row_id):
+        raise GlobalMenuSyncError(
+            f"Snapshot {key} must be a 32-character lowercase hex id"
+        )
+    return row_id
+
+
+def _validate_contract_snapshot_order(
+    *,
+    section: str,
+    rows: Sequence[Dict[str, Any]],
+    next_cursor: Optional[str],
+    has_more: bool,
+) -> None:
+    row_ids = [_contract_snapshot_row_id(section, row) for row in rows]
+    if any(left >= right for left, right in zip(row_ids, row_ids[1:])):
+        raise GlobalMenuSyncError(
+            f"Snapshot {section} rows must be strictly ordered by id"
+        )
+    if has_more and (not row_ids or next_cursor != row_ids[-1]):
+        raise GlobalMenuSyncError(
+            "Snapshot next_cursor must match the final row id on a non-final page"
+        )
+
+
+def _normalize_contract_snapshot_page(
+    payload: Dict[str, Any], *, validate_paging: bool = True
+) -> Dict[str, Any]:
     """Translate the frozen §25.5 sectioned payload into the local projection shape."""
     _validate_schema_version(payload)
     section = str(payload.get("section") or "").strip()
@@ -201,8 +240,18 @@ def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]
     group_id = _nonblank(payload, "menu_group_id")
     revision = _revision(payload.get("menu_group_revision"), "menu_group_revision")
     watermark_event_seq, watermark_revision = _contract_snapshot_watermark(payload)
-    next_cursor, has_more = _contract_page_cursor(payload)
+    next_cursor, has_more = _contract_snapshot_page_cursor(payload)
     rows = _iter_dicts(payload.get("rows"), "rows")
+    if validate_paging:
+        _validate_contract_snapshot_order(
+            section=section,
+            rows=rows,
+            next_cursor=next_cursor,
+            has_more=has_more,
+        )
+    else:
+        for row in rows:
+            _contract_snapshot_row_id(section, row)
     normalized: Dict[str, Any] = {
         "schema_version": GLOBAL_MENU_SCHEMA_VERSION,
         "menu_group_id": group_id,
@@ -210,7 +259,6 @@ def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]
         "mutation_revision": revision,
         "next_cursor": next_cursor,
         "has_more": has_more,
-        "_contract_v1_4": True,
         "_snapshot_section": section,
         "_snapshot_watermark_event_seq": watermark_event_seq,
         "_snapshot_watermark_revision": watermark_revision,
@@ -266,9 +314,10 @@ def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]
             local_kind = _LOCATOR_TYPE_TO_LOCAL.get(locator_type)
             if local_kind is None:
                 raise GlobalMenuSyncError(f"Invalid global locator_type: {locator_type}")
+            rule_id = _nonblank(row, "rule_id")
             rules.append(
                 {
-                    "rule_id": _contract_rule_id(row, group_id),
+                    "rule_id": rule_id,
                     "locator_scope": row.get("rule_scope"),
                     "restaurant_id": row.get("restaurant_id") or None,
                     "locator_kind": local_kind,
@@ -279,7 +328,6 @@ def _normalize_contract_snapshot_page(payload: Dict[str, Any]) -> Dict[str, Any]
                         if locator_type == "itemcode"
                         else row.get("global_variant_id") or None
                     ),
-                    "price": row.get("price"),
                     "provenance": row.get("provenance") or "server-rule",
                     "is_verified": True,
                     "lifecycle_state": "active",
@@ -313,8 +361,14 @@ def _normalize_contract_event_page(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise GlobalMenuSyncError("Global menu event cursor exceeds the event head")
     rows = _iter_dicts(payload.get("events"), "events")
     events = []
+    previous_event_seq: Optional[int] = None
     for row in rows:
         event_seq = _revision(row.get("event_seq"), "event_seq")
+        if previous_event_seq is not None and event_seq <= previous_event_seq:
+            raise GlobalMenuSyncError(
+                "Global menu event sequences must be strictly increasing"
+            )
+        previous_event_seq = event_seq
         event_revision = _revision(
             row.get("menu_group_revision"), "menu_group_revision"
         )
@@ -391,7 +445,8 @@ def _normalize_contract_event_page(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "rows": body.get(normalized_key),
                     "next_cursor": None,
                     "has_more": False,
-                }
+                },
+                validate_paging=False,
             )
             normalized_body[normalized_key] = section_page.get(normalized_key, [])
         events.append(
@@ -425,7 +480,6 @@ def _normalize_contract_event_page(payload: Dict[str, Any]) -> Dict[str, Any]:
         "events": events,
         "next_cursor": str(next_cursor),
         "has_more": has_more,
-        "_contract_v1_4": True,
     }
 
 
@@ -647,7 +701,7 @@ def _rule_price_and_policy(
             f"Rule {rule_id} must not carry a price; prices stay restaurant-owned",
             "global_menu_price_invalid",
         )
-    if kind in _HISTORICAL_GROUP_LOCATOR_KINDS:
+    if kind in _GROUP_LOCATOR_KINDS:
         if scope != "group":
             raise _sync_error(
                 f"Rule {rule_id} has invalid restaurant scope for {kind}",
@@ -688,7 +742,6 @@ def _upsert_rules(
             "pos-item",
             "pos-addon",
             "itemcode",
-            "alias",
         }:
             raise GlobalMenuSyncError(f"Rule {rule_id} has invalid scope/kind")
         lifecycle = str(row.get("lifecycle_state") or "active")
@@ -726,8 +779,8 @@ def _upsert_rules(
                 rule_id, menu_group_id, locator_scope, restaurant_id,
                 locator_kind, locator_value, normalized_locator,
                 target_global_menu_item_id, target_global_variant_id,
-                price, provenance, is_verified, lifecycle_state, server_revision, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                provenance, is_verified, lifecycle_state, server_revision, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(rule_id) DO UPDATE SET
                 locator_scope=excluded.locator_scope,
                 restaurant_id=excluded.restaurant_id,
@@ -736,7 +789,6 @@ def _upsert_rules(
                 normalized_locator=excluded.normalized_locator,
                 target_global_menu_item_id=excluded.target_global_menu_item_id,
                 target_global_variant_id=excluded.target_global_variant_id,
-                price=excluded.price,
                 provenance=excluded.provenance,
                 is_verified=excluded.is_verified,
                 lifecycle_state=excluded.lifecycle_state,
@@ -754,7 +806,6 @@ def _upsert_rules(
                 normalized,
                 target_item_id,
                 target_variant_id,
-                None,
                 str(row.get("provenance") or "server-rule"),
                 1 if row.get("is_verified", True) else 0,
                 lifecycle,
@@ -864,7 +915,7 @@ def _apply_event_tombstones(
     for row in _iter_dicts(
         tombstones.get("mapping_rules"), "tombstones.mapping_rules"
     ):
-        rule_id = _contract_rule_id(row, group_id)
+        rule_id = _nonblank(row, "rule_id")
         existing = conn.execute(
             """
             SELECT locator_kind, locator_value
@@ -922,7 +973,6 @@ def apply_global_menu_payload_page(
     try:
         if stream == "events":
             events = _iter_dicts(payload.get("events"), "events")
-            advertised_page_revision = page_revision
             previous = current_revision
             page_previous: Optional[int] = None
             rows_applied = 0
@@ -1006,10 +1056,6 @@ def apply_global_menu_payload_page(
                 previous = event_revision
                 page_previous = event_revision
                 rows_applied += 1
-            if not payload.get("_contract_v1_4") and previous != advertised_page_revision:
-                raise GlobalMenuSyncError(
-                    "Global menu event page revision does not match its final event"
-                )
             page_revision = max(current_revision, previous)
         else:
             items = _iter_dicts(payload.get("items"), "items")
@@ -1252,52 +1298,6 @@ def _projection_owner_matches(
     return item_link is not None and variant_link is not None
 
 
-def _can_recover_legacy_watermark_projection(
-    conn,
-    *,
-    row: Dict[str, Any],
-    local: Any,
-    global_item_id: Optional[str],
-    global_variant_id: Optional[str],
-) -> bool:
-    """Recognize a false-stale revision-1.6 projection, without changing semantics.
-
-    Older assignment snapshot bootstrap stamped every row with the page's
-    blanket watermark.  A later global snapshot carries the true (often lower)
-    per-row sequence.  It is safe to ignore that artificial lead only when the
-    central row names the exact local item/variant already assigned, the row is
-    acknowledged (not pending), and neither local target is a projection owner.
-    The operation can then only add the central global identity; it cannot
-    replay an older semantic assignment over a newer local one.
-    """
-    if not global_item_id or not global_variant_id or int(local[4] or 0):
-        return False
-    incoming_item_id = str(row.get("menu_item_id") or "").strip()
-    incoming_variant_id = str(row.get("variant_id") or "").strip()
-    if (
-        not incoming_item_id
-        or not incoming_variant_id
-        or incoming_item_id != str(local[0])
-        or incoming_variant_id != str(local[1])
-    ):
-        return False
-    item_projected = conn.execute(
-        """
-        SELECT 1 FROM menu_item_global_links
-        WHERE local_menu_item_id=? AND is_projection_owner=1
-        """,
-        (str(local[0]),),
-    ).fetchone()
-    variant_projected = conn.execute(
-        """
-        SELECT 1 FROM variant_global_links
-        WHERE local_variant_id=? AND is_projection_owner=1
-        """,
-        (str(local[1]),),
-    ).fetchone()
-    return item_projected is None and variant_projected is None
-
-
 def _can_apply_reviewed_locator_projection(
     conn,
     *,
@@ -1379,7 +1379,7 @@ def apply_global_assignment_rows(
     capability = capability or resolve_global_menu_capability(conn)
     assignments = _iter_dicts(rows, "assignments")
     revision = _revision(server_revision or 0, "menu_group_revision")
-    applied = missing = stale = unlinked = recovered_legacy_watermark = 0
+    applied = missing = stale = unlinked = 0
     recovered_reviewed_locator = 0
     touched: set[str] = set()
     for row in assignments:
@@ -1413,13 +1413,6 @@ def apply_global_assignment_rows(
                         global_variant_id=global_variant_id,
                     )
                 )
-                recover_legacy_watermark = _can_recover_legacy_watermark_projection(
-                    conn,
-                    row=row,
-                    local=local,
-                    global_item_id=global_item_id,
-                    global_variant_id=global_variant_id,
-                )
                 recover_reviewed_locator = _can_apply_reviewed_locator_projection(
                     conn,
                     capability=capability,
@@ -1429,9 +1422,7 @@ def apply_global_assignment_rows(
                     global_variant_id=global_variant_id,
                     server_revision=revision,
                 )
-                if recover_legacy_watermark:
-                    recovered_legacy_watermark += 1
-                elif recover_reviewed_locator:
+                if recover_reviewed_locator:
                     recovered_reviewed_locator += 1
                 elif not already_projected:
                     stale += 1
@@ -1529,7 +1520,6 @@ def apply_global_assignment_rows(
         "rows_applied": applied,
         "rows_missing": missing,
         "rows_stale": stale,
-        "rows_recovered_legacy_watermark": recovered_legacy_watermark,
         "rows_recovered_reviewed_locator": recovered_reviewed_locator,
         "rows_unlinked": unlinked,
         "touched_menu_item_ids": touched,
@@ -1613,13 +1603,14 @@ def _decode_snapshot_cursor(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def _snapshot_row_identity(section: str, row: Dict[str, Any], group_id: str) -> str:
+    del group_id
     if section == "items":
         return _nonblank(row, "global_item_id")
     if section == "variants":
         return _nonblank(row, "global_variant_id")
     if section == "redirects":
         return f"{_nonblank(row, 'entity_type')}:{_nonblank(row, 'source_global_id')}"
-    return _contract_rule_id(row, group_id)
+    return _nonblank(row, "rule_id")
 
 
 def _reconcile_complete_snapshot_section(
@@ -1699,6 +1690,11 @@ def _apply_global_menu_status(
         "status": "applied",
         "menu_group_revision": _revision(
             payload.get("menu_group_revision"), "menu_group_revision"
+        ),
+        "latest_event_seq": (
+            _revision(payload.get("latest_event_seq"), "latest_event_seq")
+            if payload.get("latest_event_seq") is not None
+            else None
         ),
         "coverage_linked": linked,
         "coverage_total": total,
@@ -1788,25 +1784,19 @@ def pull_global_menu_state(
             "status": "error",
             "error": status_result.get("error") or "Global menu status failed",
         }
+    latest_event_seq = status_result.get("latest_event_seq")
+    if global_menu_cache_needs_rebuild(conn, latest_event_seq=latest_event_seq):
+        wipe_global_menu_projection(conn)
+        conn.commit()
     state = resolve_global_menu_capability(
         conn, allow_profile_sync=allow_profile_sync
     )
     stream = "snapshot" if state.bootstrap_status != "complete" else "events"
     pages = rows_applied = 0
     if stream == "snapshot":
-        atomic_snapshot = False
         progress = _decode_snapshot_cursor(state.snapshot_cursor)
-        update_global_menu_state(
-            conn,
-            bootstrap_status="in_progress",
-            **({"snapshot_cursor": None} if atomic_snapshot else {}),
-        )
+        update_global_menu_state(conn, bootstrap_status="in_progress")
         conn.commit()
-        if atomic_snapshot:
-            # Keep per-page SAVEPOINTs nested inside one outer transaction;
-            # releasing an outermost SQLite savepoint would otherwise commit
-            # each page and make a failed final materialization partially live.
-            conn.execute("BEGIN")
         for _page_number in range(GLOBAL_MENU_MAX_PAGES):
             section_index = int(progress["section_index"])
             section = GLOBAL_MENU_SNAPSHOT_SECTIONS[section_index]
@@ -1883,9 +1873,7 @@ def pull_global_menu_state(
                         )
                     else:
                         result.update({"rows_materialized": 0, "rows_deactivated": 0})
-                        event_cursor = str(
-                            progress.get("watermark_event_seq") or 0
-                        )
+                        event_cursor = str(progress["watermark_event_seq"])
                         update_global_menu_state(
                             conn,
                             bootstrap_status="complete",
@@ -1912,8 +1900,7 @@ def pull_global_menu_state(
                 resolve_global_menu_quarantine_page(
                     conn, stream="snapshot", page_cursor=state.snapshot_cursor
                 )
-                if not atomic_snapshot:
-                    conn.commit()
+                conn.commit()
             except Exception as exc:
                 conn.rollback()
                 _quarantine_failure(
@@ -2013,7 +2000,7 @@ def pull_global_assignment_snapshot(
     if not endpoint or not auth:
         return {"status": "error", "error": "Global assignment pull is not configured"}
     cursor = capability.assignment_cursor
-    pages = applied = missing = stale = recovered_legacy_watermark = 0
+    pages = applied = missing = stale = 0
     recovered_reviewed_locator = 0
     for _page_number in range(GLOBAL_MENU_MAX_PAGES):
         page = _fetch_page(conn, endpoint, auth=auth, cursor=cursor, limit=page_limit)
@@ -2066,9 +2053,6 @@ def pull_global_assignment_snapshot(
         applied += int(result.get("rows_applied") or 0)
         missing += int(result.get("rows_missing") or 0)
         stale += int(result.get("rows_stale") or 0)
-        recovered_legacy_watermark += int(
-            result.get("rows_recovered_legacy_watermark") or 0
-        )
         recovered_reviewed_locator += int(
             result.get("rows_recovered_reviewed_locator") or 0
         )
@@ -2080,7 +2064,6 @@ def pull_global_assignment_snapshot(
                 "rows_applied": applied,
                 "rows_missing": missing,
                 "rows_stale": stale,
-                "rows_recovered_legacy_watermark": recovered_legacy_watermark,
                 "rows_recovered_reviewed_locator": recovered_reviewed_locator,
                 "menu_revision": page.get("menu_revision"),
             }

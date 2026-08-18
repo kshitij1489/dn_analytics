@@ -48,15 +48,17 @@ from src.core.global_menu_mutation import (
     preview_global_mutation,
 )
 from src.core.global_menu_schema import (
+    GLOBAL_MENU_CACHE_EPOCH,
     GLOBAL_MENU_MODE,
     GlobalMenuCapabilityError,
     GlobalMenuCapabilityStatus,
+    global_menu_cache_needs_rebuild,
     require_global_menu_capability,
     resolve_global_menu_capability,
     update_global_menu_state,
+    wipe_global_menu_projection,
 )
 from src.core.global_menu_sync import (
-    _contract_rule_id,
     _fetch_page,
     apply_global_assignment_rows,
     apply_global_menu_payload_page,
@@ -185,7 +187,8 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
             for row in conn.execute("PRAGMA table_info(menu_item_variants)")
         }
         self.assertIn("history_cursor", state_columns)
-        self.assertIn("price", rule_columns)
+        self.assertIn("cache_epoch", state_columns)
+        self.assertNotIn("price", rule_columns)
         self.assertFalse(
             {"shared_pos_rule_tombstoned", "shared_pos_prior_is_active"}
             & mapping_columns
@@ -199,11 +202,16 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
         conn.close()
 
-    def test_mapping_rule_price_is_nullable_non_negative_decimal(self) -> None:
+    def test_mapping_rules_do_not_store_a_price_column(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         apply_analytics_schema(conn)
+        rule_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(global_menu_mapping_rules)")
+        }
+        self.assertNotIn("price", rule_columns)
         conn.execute(
             """
             INSERT INTO global_menu_items (
@@ -212,39 +220,22 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
             ) VALUES ('global-item', 'group-1', 'Cold Coffee', 'Beverage', 1)
             """
         )
-        values = (
-            "rule-1",
-            "group-1",
-            "group",
-            "pos-item",
-            "101",
-            "101",
-            "global-item",
-            "fixture",
-            1,
-        )
         conn.execute(
             """
             INSERT INTO global_menu_mapping_rules (
                 rule_id, menu_group_id, locator_scope, locator_kind,
                 locator_value, normalized_locator, target_global_menu_item_id,
-                price, provenance, server_revision
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, '290.00', ?, ?)
-            """,
-            values,
+                provenance, server_revision
+            ) VALUES (
+                'rule-1', 'group-1', 'group', 'itemcode',
+                '101', '101', 'global-item', 'fixture', 1
+            )
+            """
         )
         self.assertEqual(
-            conn.execute(
-                "SELECT printf('%.2f', price) FROM global_menu_mapping_rules"
-            ).fetchone()[0],
-            "290.00",
+            conn.execute("SELECT COUNT(*) FROM global_menu_mapping_rules").fetchone()[0],
+            1,
         )
-        with self.assertRaises(sqlite3.IntegrityError):
-            conn.execute(
-                """
-                UPDATE global_menu_mapping_rules SET price=-0.01 WHERE rule_id='rule-1'
-                """
-            )
         conn.close()
 
     def test_schema_upgrade_allows_blank_global_item_type_and_preserves_rows(self) -> None:
@@ -317,13 +308,12 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         conn.close()
 
-    def test_pre_revision_17_profile_upgrades_global_menu_columns_in_place(self) -> None:
+    def test_pre_catalog_profile_upgrades_cache_epoch_in_place(self) -> None:
         """A profile written by the previous release must still open.
 
-        ``CREATE TABLE IF NOT EXISTS`` cannot add ``global_menu_state.history_cursor``
-        or ``global_menu_mapping_rules.price`` to tables an older build already
-        created, so the additive upgrade has to run before the projection
-        validator. Without it every pre-revision-1.7 profile fails to open.
+        ``CREATE TABLE IF NOT EXISTS`` cannot add ``global_menu_state.cache_epoch``
+        (or ``history_cursor``) to tables an older build already created, so the
+        additive upgrade has to run before the projection validator.
         """
         from src.core.db.connection import analytics_schema_path
 
@@ -331,33 +321,36 @@ class GlobalMenuSchemaAndRegistryTests(unittest.TestCase):
         legacy_sql = schema_sql.replace(
             "    history_cursor TEXT,\n", ""
         ).replace(
-            "    price DECIMAL(10,2) CHECK (price IS NULL OR price >= 0),\n", ""
+            "    -- One-way desktop cache epoch. Catalog cutover is 2; a stored value\n"
+            "    -- below that wipes the §25 projection and re-bootstraps from snapshot.\n"
+            "    cache_epoch INTEGER NOT NULL DEFAULT 2 CHECK (cache_epoch >= 0),\n",
+            "",
         )
         self.assertNotEqual(legacy_sql, schema_sql)
+        self.assertNotIn("cache_epoch", legacy_sql)
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         conn.executescript(legacy_sql)
         self.assertNotIn(
-            "history_cursor",
+            "cache_epoch",
             {row[1] for row in conn.execute("PRAGMA table_info(global_menu_state)")},
         )
 
         apply_analytics_schema(conn)
 
-        self.assertIn(
-            "history_cursor",
-            {row[1] for row in conn.execute("PRAGMA table_info(global_menu_state)")},
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(global_menu_state)")
+        }
+        self.assertIn("history_cursor", columns)
+        self.assertIn("cache_epoch", columns)
+        self.assertEqual(
+            conn.execute(
+                "SELECT cache_epoch FROM global_menu_state WHERE singleton_id=1"
+            ).fetchone()[0],
+            0,
         )
-        self.assertIn(
-            "price",
-            {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(global_menu_mapping_rules)")
-            },
-        )
-        # The dormant projection is still initialized and usable after upgrade.
         update_global_menu_state(conn, history_cursor="cursor-1")
         self.assertEqual(
             conn.execute(
@@ -515,9 +508,20 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
             self.assertEqual(named_contract_fixture(filename, name)["name"], name)
 
     def test_snapshot_and_event_rules_are_restaurant_scoped_and_priceless(self) -> None:
-        snapshot = contract_fixture("global_menu_snapshot_rules")["payload"]["rows"][0]
-        event = contract_fixture("global_menu_events_page")["payload"]["events"][0]
+        rules_page = contract_fixture("global_menu_snapshot_rules")["payload"]
+        self.assertEqual(rules_page["snapshot_watermark"], {"event_seq": 1, "menu_group_revision": 1})
+        snapshot = rules_page["rows"][0]
+        self.assertRegex(snapshot["rule_id"], r"^[0-9a-f]{32}$")
+        events_page = contract_fixture("global_menu_events_page")["payload"]
+        genesis = events_page["events"][0]
+        self.assertEqual(genesis["event_type"], "global_menu.genesis")
+        self.assertEqual(genesis["mutation_id"], "backfill:menu-catalog:genesis")
+        self.assertEqual(genesis["event_seq"], 1)
+        event = next(
+            row for row in events_page["events"] if row["payload"]["mapping_rules"]
+        )
         event_rule = event["payload"]["mapping_rules"][0]
+        self.assertRegex(event_rule["rule_id"], r"^[0-9a-f]{32}$")
         for rule in (snapshot, event_rule):
             self.assertEqual(rule["rule_scope"], "restaurant")
             self.assertEqual(rule["locator_type"], "pos_item")
@@ -525,6 +529,15 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
             self.assertNotIn("price", rule)
 
     def test_history_fixture_fits_the_canonical_cache_and_order(self) -> None:
+        frozen = contract_fixture("global_menu_history_page")["payload"]
+        genesis = next(
+            row for row in frozen["rows"] if row["event_type"] == "global_menu.genesis"
+        )
+        self.assertEqual(genesis["history_id"], "global:1")
+        self.assertFalse(genesis["is_undoable"])
+        self.assertEqual(genesis["mutation_id"], "backfill:menu-catalog:genesis")
+        self.assertEqual(genesis["actor"], "backfill")
+
         payload = contract_fixture("global_menu_history_page")["payload"]
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -545,7 +558,7 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
                     row["source_event_id"],
                     row["source_kind"],
                     row["event_type"],
-                    row["origin_restaurant_id"],
+                    row["origin_restaurant_id"] or None,
                     row["actor"],
                     json.dumps(row["attribution"], sort_keys=True),
                     row["occurred_at"],
@@ -565,7 +578,7 @@ class Revision17ContractFixtureOwnershipTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual(
             [row[0] for row in ordered],
-            ["global:1", "legacy:9zz9zz9zz9:legacy-super-2"],
+            ["global:2", "global:1", "legacy:9zz9zz9zz9:legacy-super-2"],
         )
         conn.close()
 
@@ -652,11 +665,11 @@ class PhaseFCleanRebuildDiagnosticsTests(unittest.TestCase):
             INSERT INTO global_menu_mapping_rules (
                 rule_id, menu_group_id, locator_scope, restaurant_id,
                 locator_kind, locator_value, normalized_locator,
-                target_global_menu_item_id, target_global_variant_id, price,
+                target_global_menu_item_id, target_global_variant_id,
                 provenance, is_verified, lifecycle_state, server_revision
             ) VALUES (
                 'rule-1', 'group-1', 'restaurant', '1c8w7fp500', 'pos-item', 'pos-1', 'pos-1',
-                'item-1', 'variant-1', NULL, 'operator', 1, 'active', 7
+                'item-1', 'variant-1', 'operator', 1, 'active', 7
             )
             """
         )
@@ -965,8 +978,8 @@ class GlobalMenuHistoryTests(unittest.TestCase):
                 {
                     "status": "applied",
                     "pages": 2,
-                    "rows_applied": 2,
-                    "rows_written": 2,
+                    "rows_applied": 3,
+                    "rows_written": 3,
                     "rows_pruned": 0,
                 },
             )
@@ -977,14 +990,14 @@ class GlobalMenuHistoryTests(unittest.TestCase):
                 {
                     "status": "applied",
                     "pages": 2,
-                    "rows_applied": 2,
+                    "rows_applied": 3,
                     "rows_written": 0,
                     "rows_pruned": 0,
                 },
             )
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0],
-                2,
+                3,
             )
             self.assertIsNone(
                 conn.execute(
@@ -1007,7 +1020,7 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         self.assertEqual(digests[0], digests[1])
         self.assertEqual(
             [row[0] for row in digests[0]],
-            ["global:1", "legacy:9zz9zz9zz9:legacy-super-2"],
+            ["global:2", "global:1", "legacy:9zz9zz9zz9:legacy-super-2"],
         )
 
     def _pull_restated_row(self, conn, index: int) -> Dict[str, Any]:
@@ -1054,11 +1067,11 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         return {"result": result, "row": changed["rows"][index]}
 
     def test_a_changed_row_is_applied_from_any_page_of_the_feed(self) -> None:
-        for index, position in ((0, "head page"), (1, "page below the head")):
+        for index, position in ((0, "head page"), (2, "page below the head")):
             with self.subTest(position=position):
                 conn = self._connection()
                 self.addCleanup(conn.close)
-                self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+                self.assertEqual(self._pull_fixture(conn)["rows_written"], 3)
 
                 pulled = self._pull_restated_row(conn, index)
 
@@ -1069,7 +1082,7 @@ class GlobalMenuHistoryTests(unittest.TestCase):
                     {
                         "status": "applied",
                         "pages": 2,
-                        "rows_applied": 2,
+                        "rows_applied": 3,
                         "rows_written": 1,
                         "rows_pruned": 0,
                     },
@@ -1092,7 +1105,7 @@ class GlobalMenuHistoryTests(unittest.TestCase):
     def test_a_complete_drain_retires_rows_the_projection_stopped_serving(self) -> None:
         conn = self._connection()
         self.addCleanup(conn.close)
-        self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+        self.assertEqual(self._pull_fixture(conn)["rows_written"], 3)
         retired = self.payload["rows"][1]["history_id"]
 
         # A member leaving the group takes its legacy rows out of the page.
@@ -1120,7 +1133,7 @@ class GlobalMenuHistoryTests(unittest.TestCase):
                 "pages": 1,
                 "rows_applied": 1,
                 "rows_written": 0,
-                "rows_pruned": 1,
+                "rows_pruned": 2,
             },
         )
         self.assertEqual(
@@ -1165,13 +1178,13 @@ class GlobalMenuHistoryTests(unittest.TestCase):
 
         self.assertEqual(result["rows_pruned"], 0)
         self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 3
         )
 
     def test_a_drain_cut_short_mid_feed_prunes_nothing(self) -> None:
         conn = self._connection()
         self.addCleanup(conn.close)
-        self.assertEqual(self._pull_fixture(conn)["rows_written"], 2)
+        self.assertEqual(self._pull_fixture(conn)["rows_written"], 3)
 
         # Page 1 is served without the row page 2 carries, then the tail fails.
         # The unread tail and a retired row look identical from here, so the
@@ -1202,7 +1215,7 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertNotIn("rows_pruned", result)
         self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 3
         )
 
     def test_a_drain_cut_short_mid_feed_hydrates_the_tail_on_the_next_pull(self) -> None:
@@ -1256,13 +1269,13 @@ class GlobalMenuHistoryTests(unittest.TestCase):
             {
                 "status": "applied",
                 "pages": 2,
-                "rows_applied": 2,
-                "rows_written": 1,
+                "rows_applied": 3,
+                "rows_written": 2,
                 "rows_pruned": 0,
             },
         )
         self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 2
+            conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0], 3
         )
 
     def test_malformed_page_retains_previous_cursor_and_data(self) -> None:
@@ -1338,17 +1351,21 @@ class GlobalMenuHistoryTests(unittest.TestCase):
                 "restaurants",
             },
         )
-        self.assertEqual(history["total"], 2)
-        self.assertEqual(history["unfiltered_total"], 2)
-        global_row, legacy_row = history["entries"]
-        self.assertTrue(global_row["is_undoable"])
+        self.assertEqual(history["total"], 3)
+        self.assertEqual(history["unfiltered_total"], 3)
+        merge_row, genesis_row, legacy_row = history["entries"]
+        self.assertEqual(merge_row["event_type"], "global_item.merge")
+        self.assertTrue(merge_row["is_undoable"])
         self.assertEqual(
-            global_row["global_mutation_id"],
+            merge_row["global_mutation_id"],
             "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
         )
+        self.assertEqual(genesis_row["event_type"], "global_menu.genesis")
+        self.assertTrue(genesis_row["is_system_event"])
+        self.assertFalse(genesis_row["is_undoable"])
         self.assertFalse(legacy_row["is_undoable"])
         self.assertIsNone(legacy_row["global_mutation_id"])
-        self.assertLess(global_row["merge_id"], 2**53)
+        self.assertLess(merge_row["merge_id"], 2**53)
 
         resolution_only = capability(
             group_id="group-1",
@@ -1366,7 +1383,12 @@ class GlobalMenuHistoryTests(unittest.TestCase):
         conn = self._connection()
         self.addCleanup(conn.close)
         payload = json.loads(json.dumps(self.payload))
-        system_row = json.loads(json.dumps(payload["rows"][1]))
+        legacy_template = next(
+            row
+            for row in payload["rows"]
+            if row["source_kind"] == "legacy_restaurant_event"
+        )
+        system_row = json.loads(json.dumps(legacy_template))
         system_row.update(
             {
                 "history_id": "legacy:rest-1:derived-1",
@@ -1408,13 +1430,13 @@ class GlobalMenuHistoryTests(unittest.TestCase):
 
         self.assertEqual(current["total"], 1)
         self.assertEqual(legacy["total"], 2)
-        self.assertEqual(system["total"], 1)
+        self.assertEqual(system["total"], 2)
         self.assertEqual(system["entries"][0]["source_name"], "")
         self.assertTrue(system["entries"][0]["is_system_event"])
         self.assertEqual(undoable["total"], 1)
         self.assertEqual(restaurant["total"], 1)
         self.assertEqual(len(restaurant["entries"]), 1)
-        self.assertEqual(restaurant["unfiltered_total"], 3)
+        self.assertEqual(restaurant["unfiltered_total"], 4)
         self.assertEqual(
             {row["restaurant_id"] for row in restaurant["restaurants"]},
             {"1c8w7fp500", "9zz9zz9zz9", "rest-1"},
@@ -1566,13 +1588,37 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             ).fetchone()
         )
 
+    def test_contract_snapshot_rejects_unordered_rows_and_wrong_page_cursor(self) -> None:
+        unordered = json.loads(
+            json.dumps(contract_fixture("global_menu_snapshot_items")["payload"])
+        )
+        unordered["rows"].reverse()
+        with self.assertRaisesRegex(RuntimeError, "strictly ordered by id"):
+            apply_global_menu_payload_page(
+                self.conn,
+                unordered,
+                stream="snapshot",
+                capability=capability(complete=False, group_id="group-1"),
+            )
+
+        wrong_cursor = contract_fixture("global_menu_snapshot_items")["payload"]
+        wrong_cursor["has_more"] = True
+        wrong_cursor["next_cursor"] = "f" * 32
+        with self.assertRaisesRegex(RuntimeError, "must match the final row id"):
+            apply_global_menu_payload_page(
+                self.conn,
+                wrong_cursor,
+                stream="snapshot",
+                capability=capability(complete=False, group_id="group-1"),
+            )
+
     def test_snapshot_accepts_redirected_item_with_blank_canonical_type(self) -> None:
         item_page = json.loads(
             json.dumps(contract_fixture("global_menu_snapshot_items")["payload"])
         )
         item_page["rows"][0].update(
             {
-                "global_item_id": "redirected-coconut-pineapple",
+                "global_item_id": "0795ed65318544a9907caab6202b9d42",
                 "canonical_name": "Coconut Pineapple (110gm)",
                 "canonical_type": "",
                 "lifecycle_state": "redirected",
@@ -1591,7 +1637,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             """
             SELECT canonical_name, canonical_type, lifecycle_state
             FROM global_menu_items
-            WHERE global_menu_item_id='redirected-coconut-pineapple'
+            WHERE global_menu_item_id='0795ed65318544a9907caab6202b9d42'
             """
         ).fetchone()
         self.assertEqual(
@@ -1628,20 +1674,47 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                                 ),
             ),
         )
-        self.assertEqual(result["rows_applied"], 1)
-        self.assertEqual(result["next_cursor"], "1")
-        event = self.conn.execute(
-            "SELECT event_id, mutation_id, catalog_revision FROM global_menu_events"
-        ).fetchone()
-        self.assertEqual(tuple(event), (
-            "global-event:1",
-            "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
-            1,
-        ))
+        self.assertEqual(result["rows_applied"], 2)
+        self.assertEqual(result["next_cursor"], "2")
+        events = self.conn.execute(
+            "SELECT event_id, mutation_id, catalog_revision FROM global_menu_events "
+            "ORDER BY catalog_revision"
+        ).fetchall()
+        self.assertEqual(
+            [tuple(event) for event in events],
+            [
+                (
+                    "global-event:1",
+                    "backfill:menu-catalog:genesis",
+                    1,
+                ),
+                (
+                    "global-event:2",
+                    "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
+                    2,
+                ),
+            ],
+        )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM global_menu_history").fetchone()[0],
             0,
         )
+
+    def test_contract_event_page_rejects_decreasing_event_sequences(self) -> None:
+        page = json.loads(
+            json.dumps(contract_fixture("global_menu_events_page")["payload"])
+        )
+        page["events"][0]["event_seq"] = 2
+        page["events"][1]["event_seq"] = 1
+        page["next_cursor"] = 1
+
+        with self.assertRaisesRegex(RuntimeError, "strictly increasing"):
+            apply_global_menu_payload_page(
+                self.conn,
+                page,
+                stream="events",
+                capability=capability(complete=False, group_id="group-1"),
+            )
 
     def test_v14_undo_tombstones_remove_redirects_and_rules(self) -> None:
         merge_page = contract_fixture("global_menu_events_page")["payload"]
@@ -1673,15 +1746,15 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         undo_page = {
             "schema_version": 1,
             "menu_group_id": "group-1",
-            "menu_group_revision": 2,
-            "event_head_seq": 2,
+            "menu_group_revision": 3,
+            "event_head_seq": 3,
             "events": [
                 {
-                    "event_seq": 2,
-                    "menu_group_revision": 2,
+                    "event_seq": 3,
+                    "menu_group_revision": 3,
                     "event_type": "global_menu.undo",
                     "entity_type": "",
-                    "mutation_id": "undo-mutation-2",
+                    "mutation_id": "undo-mutation-3",
                     "origin_restaurant_id": "1c8w7fp500",
                     "actor": "ops",
                     "occurred_at": "2026-08-09T08:10:00+00:00",
@@ -1715,12 +1788,14 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                             ],
                             "mapping_rules": [
                                 {
+                                    "rule_id": "3f1c9a04b7d24e6c8a51d0e2f4b67c98",
                                     "rule_scope": "restaurant",
                                     "restaurant_id": "1c8w7fp500",
                                     "locator_type": "pos_item",
                                     "locator_value": "1001",
                                 },
                                 {
+                                    "rule_id": "7b4e0c28daf5406eac73f2a4b6d89e10",
                                     "rule_scope": "group",
                                     "restaurant_id": "",
                                     "locator_type": "itemcode",
@@ -1733,11 +1808,11 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                             "1c8w7fp500",
                             "9zz9zz9zz9",
                         ],
-                        "menu_group_revision": 2,
+                        "menu_group_revision": 3,
                     },
                 }
             ],
-            "next_cursor": 2,
+            "next_cursor": 3,
             "has_more": False,
         }
         apply_global_menu_payload_page(
@@ -1745,7 +1820,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             undo_page,
             stream="events",
             capability=capability(
-                revision=1,
+                revision=2,
                 group_id="group-1",
                 capabilities=(
                     "global_menu_v1",
@@ -1811,10 +1886,10 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         moved_page = {
             **first_page,
             "rows": [],
-            "menu_group_revision": 1,
+            "menu_group_revision": 2,
             "snapshot_watermark": {
-                "event_seq": 1,
-                "menu_group_revision": 1,
+                "event_seq": 2,
+                "menu_group_revision": 2,
             },
             "section": "variants",
         }
@@ -1852,6 +1927,91 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             "WHERE singleton_id=1"
         ).fetchone()
         self.assertEqual(tuple(state), ("error", None))
+
+    def test_pre_cutover_event_cursor_rebuilds_the_catalog_cache(self) -> None:
+        apply_global_menu_payload_page(
+            self.conn,
+            self.fixture,
+            stream="snapshot",
+            capability=capability(complete=False),
+        )
+        update_global_menu_state(
+            self.conn,
+            cache_epoch=0,
+            bootstrap_status="complete",
+            event_cursor="500",
+        )
+        self.assertGreater(
+            self.conn.execute("SELECT COUNT(*) FROM global_menu_items").fetchone()[0],
+            0,
+        )
+        self.assertTrue(
+            global_menu_cache_needs_rebuild(self.conn, latest_event_seq=1)
+        )
+        self.conn.execute(
+            "INSERT INTO system_config (key, value) VALUES ('wipe-canary', '1')"
+        )
+        wipe_global_menu_projection(self.conn)
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT value FROM system_config WHERE key='wipe-canary'"
+            ).fetchone()[0],
+            "1",
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM global_menu_items").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM global_menu_mapping_rules"
+            ).fetchone()[0],
+            0,
+        )
+        state = self.conn.execute(
+            """
+            SELECT cache_epoch, bootstrap_status, event_cursor, snapshot_cursor
+            FROM global_menu_state WHERE singleton_id=1
+            """
+        ).fetchone()
+        self.assertEqual(int(state[0]), GLOBAL_MENU_CACHE_EPOCH)
+        self.assertEqual(state[1], "not_started")
+        self.assertIsNone(state[2])
+        self.assertIsNone(state[3])
+
+        fetched: list[Any] = []
+
+        def fetch(_conn, _endpoint, *, extra_params=None, **_kwargs):
+            fetched.append(dict(extra_params or {}))
+            return {"error": "stop after rebuild"}
+
+        cap = capability(complete=False, group_id="group-desserts")
+        with patch(
+            "src.core.global_menu_sync.require_global_menu_capability",
+            return_value=cap,
+        ), patch(
+            "src.core.global_menu_sync.resolve_global_menu_capability",
+            return_value=cap,
+        ), patch(
+            "src.core.global_menu_sync.pull_global_menu_status",
+            return_value={"status": "applied", "latest_event_seq": 1},
+        ), patch(
+            "src.core.global_menu_sync.get_cloud_sync_config",
+            return_value=("https://cloud", "key"),
+        ), patch(
+            "src.core.global_menu_sync.get_global_menu_snapshot_endpoint",
+            return_value="https://cloud/snapshot",
+        ), patch(
+            "src.core.global_menu_sync.get_global_menu_events_endpoint",
+            return_value="https://cloud/events",
+        ), patch(
+            "src.core.global_menu_sync._fetch_page",
+            side_effect=fetch,
+        ):
+            result = pull_global_menu_state(self.conn)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(fetched[0].get("section"), "items")
+        self.assertNotIn("after", fetched[0])
 
     def test_cycle_rejected_without_advancing_prior_revision_or_cursor(self) -> None:
         payload = dict(self.fixture)
@@ -2097,7 +2257,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
             if conn is not self.conn:
                 conn.close()
 
-    def test_alias_retirement_tombstone_removes_a_cached_historical_rule(self) -> None:
+    def test_explicit_mapping_rule_tombstone_deletes_by_server_rule_id(self) -> None:
         apply_global_menu_payload_page(
             self.conn,
             self.fixture,
@@ -2107,20 +2267,9 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         self.assertEqual(
             self.conn.execute(
                 "SELECT COUNT(*) FROM global_menu_mapping_rules "
-                "WHERE locator_kind='alias'"
+                "WHERE rule_id='rule-rest-1-pos'"
             ).fetchone()[0],
             1,
-        )
-        alias_identity = {
-            "rule_scope": "group",
-            "restaurant_id": "",
-            "locator_type": "alias",
-            "locator_value": "vanilla ice cream",
-        }
-        self.conn.execute(
-            "UPDATE global_menu_mapping_rules SET rule_id=? "
-            "WHERE locator_kind='alias'",
-            (_contract_rule_id(alias_identity, "group-desserts"),),
         )
         event_page = {
             "schema_version": 1,
@@ -2150,11 +2299,17 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                         "tombstones": {
                             "redirects": [],
                             "mapping_rules": [
-                                alias_identity
+                                {
+                                    "rule_id": "rule-rest-1-pos",
+                                    "rule_scope": "restaurant",
+                                    "restaurant_id": "rest-1",
+                                    "locator_type": "pos_item",
+                                    "locator_value": "1001",
+                                }
                             ],
                         },
                         "assignment_snapshot_required": False,
-                        "assignment_restaurants": [],
+                        "assignment_restaurants": ["rest-1"],
                         "menu_group_revision": 8,
                     },
                 }
@@ -2171,7 +2326,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         self.assertEqual(
             self.conn.execute(
                 "SELECT COUNT(*) FROM global_menu_mapping_rules "
-                "WHERE locator_kind='alias'"
+                "WHERE rule_id='rule-rest-1-pos'"
             ).fetchone()[0],
             0,
         )
@@ -2291,7 +2446,7 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         self.assertEqual(int(row[1]), 4)
         self.assertEqual(int(row[2]), 1)
 
-    def test_legacy_blanket_sequence_is_recovered_for_projection_only(self) -> None:
+    def test_older_assignment_sequence_is_not_overwritten_by_a_lower_snapshot_seq(self) -> None:
         apply_global_menu_payload_page(
             self.conn,
             self.fixture,
@@ -2328,38 +2483,22 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         first = apply_global_assignment_rows(
             self.conn, [assignment], server_revision=7
         )
-        projected = self.conn.execute(
+        held = self.conn.execute(
             """
             SELECT menu_item_id, variant_id, price, assignment_seq, pending_local
             FROM menu_item_variants WHERE order_item_id='1001'
             """
         ).fetchone()
-        self.assertEqual(first["rows_applied"], 1)
-        self.assertEqual(first["rows_stale"], 0)
-        self.assertEqual(first["rows_recovered_legacy_watermark"], 1)
-        self.assertEqual(
-            global_ids_for_local(self.conn, projected[0], projected[1]),
-            ("global-vanilla", "global-regular"),
-        )
-        self.assertEqual(float(projected[2]), 299.0)
-        self.assertEqual(int(projected[3]), 668)
-        self.assertEqual(int(projected[4]), 0)
+        self.assertEqual(first["rows_applied"], 0)
+        self.assertEqual(first["rows_stale"], 1)
+        self.assertEqual(tuple(held)[0:2], ("legacy-item", "legacy-variant"))
+        self.assertEqual(int(held[3]), 668)
 
-        # The blanket sequence remains a safe future-event guard, while an
-        # unchanged snapshot recognizes the already-correct projection as a
-        # no-op rather than reporting it stale or recovering it again.
         second = apply_global_assignment_rows(
             self.conn, [assignment], server_revision=7
         )
-        rerun = self.conn.execute(
-            """
-            SELECT menu_item_id, variant_id, price, assignment_seq, pending_local
-            FROM menu_item_variants WHERE order_item_id='1001'
-            """
-        ).fetchone()
-        self.assertEqual(second["rows_stale"], 0)
-        self.assertEqual(second["rows_recovered_legacy_watermark"], 0)
-        self.assertEqual(tuple(rerun), tuple(projected))
+        self.assertEqual(second["rows_stale"], 1)
+        self.assertEqual(second["rows_applied"], 0)
 
     def test_reviewed_pos_rule_moves_an_older_global_projection(self) -> None:
         apply_global_menu_payload_page(
@@ -2579,7 +2718,6 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(result["rows_applied"], 0)
         self.assertEqual(result["rows_stale"], 1)
-        self.assertEqual(result["rows_recovered_legacy_watermark"], 0)
         self.assertEqual(tuple(row), ("pending-item", "pending-variant", 668, 1))
 
     def test_newer_semantic_assignment_remains_sequence_protected(self) -> None:
@@ -2629,7 +2767,6 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(result["rows_applied"], 0)
         self.assertEqual(result["rows_stale"], 1)
-        self.assertEqual(result["rows_recovered_legacy_watermark"], 0)
         self.assertEqual(tuple(row), ("newer-item", "newer-variant"))
 
     def test_assignment_snapshot_reconciles_linked_rows_back_to_unlinked(self) -> None:
@@ -2892,13 +3029,11 @@ class GlobalMenuProjectionTests(unittest.TestCase):
                 "rows_applied": 4,
                 "rows_missing": 2,
                 "rows_stale": 3,
-                "rows_recovered_legacy_watermark": 1,
             },
             {
                 "rows_applied": 5,
                 "rows_missing": 6,
                 "rows_stale": 7,
-                "rows_recovered_legacy_watermark": 8,
             },
         ]
         with patch(
@@ -2924,7 +3059,6 @@ class GlobalMenuProjectionTests(unittest.TestCase):
         self.assertEqual(result["rows_applied"], 9)
         self.assertEqual(result["rows_missing"], 8)
         self.assertEqual(result["rows_stale"], 10)
-        self.assertEqual(result["rows_recovered_legacy_watermark"], 9)
 
     def test_global_merge_and_undo_recompute_stats_and_clear_forecasts(self) -> None:
         snapshot = json.loads(json.dumps(self.fixture))
@@ -3830,7 +3964,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         response = fixture["payload"]
         with patch(
             "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=capability(revision=0, group_id="group-1"),
+            return_value=capability(revision=1, group_id="group-1"),
         ), patch(
             "src.core.global_menu_mutation._urls",
             return_value=("https://cloud/mutations", "sync-key"),
@@ -3868,7 +4002,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         }
         with patch(
             "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=capability(revision=0, group_id="group-1"),
+            return_value=capability(revision=1, group_id="group-1"),
         ), patch(
             "src.core.global_menu_mutation._urls",
             return_value=("https://cloud/mutations", "sync-key"),
@@ -3903,7 +4037,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
             "mutation_id": mutation_id,
             "mutation_type": "global_variant.create",
             "menu_group_id": "group-1",
-            "menu_group_revision": 0,
+            "menu_group_revision": 1,
             "coverage_complete": False,
             "conflicts": [],
             "preview_digest": "variant-create-digest",
@@ -3917,7 +4051,7 @@ class GlobalMenuAggregationAndMutationTests(unittest.TestCase):
         accepted = {"status": "accepted", "mutation_id": mutation_id}
         with patch(
             "src.core.global_menu_mutation.require_global_menu_capability",
-            return_value=capability(revision=0, group_id="group-1"),
+            return_value=capability(revision=1, group_id="group-1"),
         ), patch(
             "src.core.global_menu_mutation._urls",
             return_value=("https://cloud/mutations", "sync-key"),

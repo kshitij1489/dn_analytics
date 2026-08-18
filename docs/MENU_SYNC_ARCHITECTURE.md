@@ -552,6 +552,41 @@ The frozen revision 1.10 payloads are in
 `contracts/fixtures/1/global_menu_fixtures.json` and are byte-identical to the
 central-repository copy.
 
+### 17.8 Catalog cutover (desktop wire cache)
+
+Central §25 now reads the singleton PostgreSQL `menu_catalog` (one item
+namespace, one revision, one event sequence). Desktop SQLite stays a **wire
+cache** of that catalog — it does not port the server schema. `menu_group_id`
+on the wire is the restaurant's settings membership; it does not select a
+catalog.
+
+Concrete client rules:
+
+- **Snapshot cursors are 32-character lowercase hex ids** in every §25.5
+  section, including `rules`. `rule_id` is the server-issued id; the client
+  never synthesizes `contract-rule:` hashes or sends a numeric rules `after`.
+- **§25.6 is the only integer cursor.** Event `after` stays an integer
+  `event_seq`. The catalog event sequence **restarts at cutover**: genesis is
+  `global_menu.genesis` / `backfill:menu-catalog:genesis` at `event_seq` 1 and
+  revision 1. After backfill the snapshot watermark is `{event_seq: 1,
+  menu_group_revision: 1}`, not a null/zero "no events yet" state.
+- **Do not tail a held pre-cutover `event_seq` against the new sequence.**
+  `global_menu_state.cache_epoch` is a one-way local epoch (currently 2). If
+  the stored epoch is older, local `rule_id`s are not 32-char lowercase hex,
+  or a held event cursor cannot prefix the live `latest_event_seq`, the client
+  deletes the `global_menu_*` projection (and history cache), sets bootstrap
+  incomplete, and re-runs status → four snapshot sections → event tail →
+  assignment snapshot. There is no translator from integer rule ids or hashed
+  `contract-rule:` ids.
+- Events are applied by **payload**. An unrecognized `event_type`, including
+  genesis, is applied, not skipped. Mapping-rule deletion still requires an
+  explicit `tombstones.mapping_rules` row with the server `rule_id`; snapshot
+  omission is never deletion.
+- Group History shows genesis as a non-undoable system/backfill row
+  (`history_id` `global:1` in the frozen fixture). `source_kind:
+  legacy_restaurant_event` remains the contract name for old restaurant audit
+  rows. `derived_assignment_v1` stays excluded.
+
 ### 17.1 Invariants that govern any change here
 
 1. **Stable identity** — a global item/variant ID is server-issued and never

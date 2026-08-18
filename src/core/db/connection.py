@@ -137,10 +137,14 @@ def apply_analytics_schema(conn) -> None:
         "item_backtest_cache": (("uploaded_at", "TEXT"),),
         "volume_backtest_cache": (("uploaded_at", "TEXT"),),
         # history_cursor was added after the first global-menu profiles shipped.
-        # price remains unused on mapping rules; keep the column so older
-        # profiles still satisfy the projection validator.
-        "global_menu_state": (("history_cursor", "TEXT"),),
-        "global_menu_mapping_rules": (("price", "DECIMAL(10,2)"),),
+        # cache_epoch 0 marks a pre-catalog-cutover projection; first §25 pull
+        # wipes and rebuilds. Mapping-rule `price` is no longer on the wire or
+        # in CREATE TABLE; leftover columns on old profiles are ignored until
+        # that wipe drops and recreates the cache tables.
+        "global_menu_state": (
+            ("history_cursor", "TEXT"),
+            ("cache_epoch", "INTEGER NOT NULL DEFAULT 0"),
+        ),
     }
     for table, columns in additive_columns.items():
         existing = {

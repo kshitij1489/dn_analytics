@@ -62,19 +62,6 @@
       "provenance": "reviewed-pos",
       "is_verified": true,
       "server_revision": 7
-    },
-    {
-      "rule_id": "rule-group-alias",
-      "locator_scope": "group",
-      "restaurant_id": null,
-      "locator_kind": "alias",
-      "locator_value": "vanilla ice cream",
-      "normalized_locator": "vanilla ice cream",
-      "target_global_menu_item_id": "global-vanilla",
-      "target_global_variant_id": "global-regular",
-      "provenance": "approved-alias",
-      "is_verified": true,
-      "server_revision": 7
     }
   ]
 }

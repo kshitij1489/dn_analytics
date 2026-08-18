@@ -44,7 +44,12 @@ _RESOLUTION_UNDO_EVENT_TYPES = frozenset(
 GLOBAL_MENU_HISTORY_FILTERS = frozenset(
     {"all", "global", "legacy", "system", "undoable"}
 )
-_SYSTEM_EVENT_TYPES = frozenset({"global_catalog.verification_backfill"})
+_SYSTEM_EVENT_TYPES = frozenset(
+    {
+        "global_catalog.verification_backfill",
+        "global_menu.genesis",
+    }
+)
 
 
 class GlobalMenuHistoryError(RuntimeError):
@@ -66,6 +71,8 @@ def _nonblank_text(value: Any, field: str) -> str:
 
 def _optional_text(value: Any, field: str) -> Optional[str]:
     if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
         return None
     return _nonblank_text(value, field)
 
@@ -487,6 +494,8 @@ def _current_undo_permission(
     cached_is_undoable: bool,
     mutation_id: Optional[str],
 ) -> bool:
+    if event_type == "global_menu.genesis":
+        return False
     if not cached_is_undoable or not mutation_id:
         return False
     if capability.mutation_ready:
@@ -503,9 +512,9 @@ def _is_system_history_entry(
     target: Dict[str, Any],
 ) -> bool:
     """Classify non-human audit noise without changing the stored projection."""
-    if actor and actor.startswith("system:"):
-        return True
     if event_type in _SYSTEM_EVENT_TYPES or event_type.endswith(".backfill"):
+        return True
+    if actor in {"backfill"} or (actor and actor.startswith("system:")):
         return True
     # Older derived-assignment rows were projected without their merge kind.
     # Both snapshots are blank, which is also why the old UI rendered

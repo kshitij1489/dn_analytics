@@ -48,20 +48,20 @@ def fetch_global_menu_diagnostics(conn) -> Dict[str, Any]:
     )
 
     if menu_group_id is None:
-        mapping_count = price_count = history_count = 0
+        mapping_count = history_count = 0
         catalog_sections: list[Any] = []
         matrix_rows: list[Any] = []
         history_rows: list[Any] = []
     else:
-        mapping_count, price_count = conn.execute(
+        mapping_count = conn.execute(
             """
-            SELECT COUNT(*), COUNT(price)
+            SELECT COUNT(*)
             FROM global_menu_mapping_rules
             WHERE menu_group_id=?
               AND lifecycle_state='active'
             """,
             (menu_group_id,),
-        ).fetchone()
+        ).fetchone()[0]
         history_count = conn.execute(
             "SELECT COUNT(*) FROM global_menu_history WHERE menu_group_id=?",
             (menu_group_id,),
@@ -145,7 +145,7 @@ def fetch_global_menu_diagnostics(conn) -> Dict[str, Any]:
         "bootstrap_state": bootstrap_status,
         "catalog_revision": int(state_values.get("catalog_revision") or 0),
         "mapping_count": int(mapping_count),
-        "price_count": int(price_count),
+        "price_count": 0,
         "assignment_coverage": {
             "linked": linked,
             "total": total,

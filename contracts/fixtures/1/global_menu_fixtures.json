@@ -3,7 +3,7 @@
   "fixtures": [
     {
       "name": "global_menu_snapshot_redirects_empty",
-      "description": "A section that is legitimately empty. `items` never can be: a group that owns no canonical item is a deployment error and every /global-menu/ route refuses it (§25.1). `redirects` is empty until the group's first merge, and the snapshot watermark is null because no global event has been appended (§25.5).",
+      "description": "A section that is legitimately empty. `items` never can be: a group that owns no canonical item is a deployment error and every /global-menu/ route refuses it (§25.1). `redirects` is empty until the group's first merge. After backfill the snapshot watermark is genesis (revision 1, event 1) rather than null (§25.5–§25.6).",
       "endpoint": "GET /desktop-analytics-sync/global-menu/snapshot?section=redirects",
       "request_headers": {
         "Authorization": "Bearer <SYNC_API_KEY>",
@@ -13,10 +13,10 @@
       "payload": {
         "schema_version": 1,
         "menu_group_id": "group-1",
-        "menu_group_revision": 0,
+        "menu_group_revision": 1,
         "snapshot_watermark": {
-          "event_seq": null,
-          "menu_group_revision": 0
+          "event_seq": 1,
+          "menu_group_revision": 1
         },
         "section": "redirects",
         "rows": [],
@@ -36,24 +36,24 @@
       "payload": {
         "schema_version": 1,
         "menu_group_id": "group-1",
-        "menu_group_revision": 0,
+        "menu_group_revision": 1,
         "snapshot_watermark": {
-          "event_seq": null,
-          "menu_group_revision": 0
+          "event_seq": 1,
+          "menu_group_revision": 1
         },
         "section": "items",
         "rows": [
           {
-            "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
-            "canonical_name": "Eggless Vanilla Ice Cream",
+            "global_item_id": "1795ed65318544a9907caab6202b9d42",
+            "canonical_name": "Vanilla Ice Cream",
             "canonical_type": "Dessert",
             "is_verified": false,
             "lifecycle_state": "active",
             "updated_at": "2026-08-09T08:08:55.056714+00:00"
           },
           {
-            "global_item_id": "1795ed65318544a9907caab6202b9d42",
-            "canonical_name": "Vanilla Ice Cream",
+            "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
+            "canonical_name": "Eggless Vanilla Ice Cream",
             "canonical_type": "Dessert",
             "is_verified": false,
             "lifecycle_state": "active",
@@ -76,15 +76,15 @@
       "payload": {
         "schema_version": 1,
         "menu_group_id": "group-1",
-        "menu_group_revision": 0,
+        "menu_group_revision": 1,
         "snapshot_watermark": {
-          "event_seq": null,
-          "menu_group_revision": 0
+          "event_seq": 1,
+          "menu_group_revision": 1
         },
         "section": "rules",
         "rows": [
           {
-            "rule_id": 1,
+            "rule_id": "3f1c9a04b7d24e6c8a51d0e2f4b67c98",
             "rule_scope": "restaurant",
             "restaurant_id": "1c8w7fp500",
             "locator_type": "pos_item",
@@ -95,7 +95,7 @@
             "menu_group_revision": 0
           },
           {
-            "rule_id": 2,
+            "rule_id": "5a2d8b16c9e34f7d9b62e1f3a5c78d09",
             "rule_scope": "restaurant",
             "restaurant_id": "1c8w7fp500",
             "locator_type": "pos_item",
@@ -106,7 +106,7 @@
             "menu_group_revision": 0
           },
           {
-            "rule_id": 4,
+            "rule_id": "7b4e0c28daf5406eac73f2a4b6d89e10",
             "rule_scope": "group",
             "restaurant_id": "",
             "locator_type": "itemcode",
@@ -133,12 +133,42 @@
       "payload": {
         "schema_version": 1,
         "menu_group_id": "group-1",
-        "menu_group_revision": 1,
-        "event_head_seq": 1,
+        "menu_group_revision": 2,
+        "event_head_seq": 2,
         "events": [
           {
             "event_seq": 1,
             "menu_group_revision": 1,
+            "event_type": "global_menu.genesis",
+            "entity_type": "",
+            "mutation_id": "backfill:menu-catalog:genesis",
+            "origin_restaurant_id": "",
+            "actor": "backfill",
+            "occurred_at": "2026-08-09T08:00:00+00:00",
+            "server_ingested_at": "2026-08-09T08:00:00.000001+00:00",
+            "payload": {
+              "action": {
+                "mutation_type": "global_menu.genesis"
+              },
+              "items": [],
+              "variants": [],
+              "redirects": [],
+              "mapping_rules": [],
+              "tombstones": {
+                "redirects": [],
+                "mapping_rules": []
+              },
+              "assignment_snapshot_required": true,
+              "assignment_restaurants": [
+                "1c8w7fp500",
+                "9zz9zz9zz9"
+              ],
+              "menu_group_revision": 1
+            }
+          },
+          {
+            "event_seq": 2,
+            "menu_group_revision": 2,
             "event_type": "global_item.merge",
             "entity_type": "item",
             "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
@@ -181,12 +211,12 @@
                   "entity_type": "item",
                   "source_global_id": "1795ed65318544a9907caab6202b9d42",
                   "target_global_id": "9c6cc3eed9eb410b8540cfae2318fc10",
-                  "menu_group_revision": 1
+                  "menu_group_revision": 2
                 }
               ],
               "mapping_rules": [
                 {
-                  "rule_id": 1,
+                  "rule_id": "3f1c9a04b7d24e6c8a51d0e2f4b67c98",
                   "rule_scope": "restaurant",
                   "restaurant_id": "1c8w7fp500",
                   "locator_type": "pos_item",
@@ -194,10 +224,10 @@
                   "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
                   "global_variant_id": "",
                   "provenance": "backfill",
-                  "menu_group_revision": 1
+                  "menu_group_revision": 2
                 },
                 {
-                  "rule_id": 4,
+                  "rule_id": "7b4e0c28daf5406eac73f2a4b6d89e10",
                   "rule_scope": "group",
                   "restaurant_id": "",
                   "locator_type": "itemcode",
@@ -205,7 +235,7 @@
                   "global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10",
                   "global_variant_id": "",
                   "provenance": "backfill",
-                  "menu_group_revision": 1
+                  "menu_group_revision": 2
                 }
               ],
               "tombstones": {
@@ -217,11 +247,11 @@
                 "1c8w7fp500",
                 "9zz9zz9zz9"
               ],
-              "menu_group_revision": 1
+              "menu_group_revision": 2
             }
           }
         ],
-        "next_cursor": 1,
+        "next_cursor": 2,
         "has_more": false
       }
     },
@@ -243,8 +273,8 @@
           "global_menu_aggregation_v1",
           "global_menu_mutations_v1"
         ],
-        "menu_group_revision": 0,
-        "latest_event_seq": null,
+        "menu_group_revision": 1,
+        "latest_event_seq": 1,
         "catalog": {
           "items": 2,
           "variants": 0,
@@ -287,8 +317,8 @@
         "menu_group_id": "group-1",
         "rows": [
           {
-            "history_id": "global:1",
-            "source_event_id": "1",
+            "history_id": "global:2",
+            "source_event_id": "2",
             "source_kind": "global_menu_event",
             "event_type": "global_item.merge",
             "origin_restaurant_id": "1c8w7fp500",
@@ -313,6 +343,22 @@
             "detail": {
               "assignments_moved": 2
             }
+          },
+          {
+            "history_id": "global:1",
+            "source_event_id": "1",
+            "source_kind": "global_menu_event",
+            "event_type": "global_menu.genesis",
+            "origin_restaurant_id": "",
+            "actor": "backfill",
+            "attribution": null,
+            "occurred_at": "2026-08-09T08:00:00+00:00",
+            "server_ingested_at": "2026-08-09T08:00:00.000001+00:00",
+            "source": null,
+            "target": null,
+            "mutation_id": "backfill:menu-catalog:genesis",
+            "is_undoable": false,
+            "detail": {}
           },
           {
             "history_id": "legacy:9zz9zz9zz9:legacy-super-2",
@@ -361,7 +407,7 @@
       "request": {
         "schema_version": 1,
         "mutation_type": "global_item.merge",
-        "expected_menu_group_revision": 0,
+        "expected_menu_group_revision": 1,
         "payload": {
           "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
           "target_global_item_id": "9c6cc3eed9eb410b8540cfae2318fc10"
@@ -371,7 +417,7 @@
       "payload": {
         "status": "preview",
         "menu_group_id": "group-1",
-        "menu_group_revision": 0,
+        "menu_group_revision": 1,
         "mutation_type": "global_item.merge",
         "payload": {
           "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
@@ -417,7 +463,7 @@
         "conflicts": [],
         "commit_allowed": true,
         "preview_digest": "<preview_digest from §25.8.1>",
-        "expected_menu_group_revision": 0,
+        "expected_menu_group_revision": 1,
         "revision_current": true,
         "schema_version": 1
       }
@@ -434,7 +480,7 @@
       "request": {
         "schema_version": 1,
         "mutation_type": "global_locator.map",
-        "expected_menu_group_revision": 0,
+        "expected_menu_group_revision": 1,
         "payload": {
           "locator_type": "pos_item",
           "locator_value": "8442",
@@ -446,7 +492,7 @@
       "payload": {
         "status": "preview",
         "menu_group_id": "group-1",
-        "menu_group_revision": 0,
+        "menu_group_revision": 1,
         "mutation_type": "global_locator.map",
         "payload": {
           "locator_type": "pos_item",
@@ -495,8 +541,8 @@
         },
         "conflicts": [],
         "commit_allowed": true,
-        "preview_digest": "e5927579f7fc87ddc76886c4e7059ba2784219c41226ecd60a3cbc09c5bcff75",
-        "expected_menu_group_revision": 0,
+        "preview_digest": "aea2d18d12ab6863e7787c0229acf9b88613e9fa13699735f2f8640685077d38",
+        "expected_menu_group_revision": 1,
         "revision_current": true,
         "schema_version": 1
       }
@@ -514,7 +560,7 @@
         "schema_version": 1,
         "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
         "mutation_type": "global_item.merge",
-        "expected_menu_group_revision": 0,
+        "expected_menu_group_revision": 1,
         "preview_digest": "<preview_digest from §25.8.1>",
         "payload": {
           "source_global_item_id": "1795ed65318544a9907caab6202b9d42",
@@ -528,10 +574,10 @@
         "mutation_id": "cd1e814c-ff28-4af2-9c82-d4e5226c26b2",
         "mutation_type": "global_item.merge",
         "menu_group_id": "group-1",
-        "menu_group_revision": 1,
+        "menu_group_revision": 2,
         "origin_restaurant_id": "1c8w7fp500",
         "actor": "ops",
-        "event_seq": 1,
+        "event_seq": 2,
         "accepted_at": "2026-08-09T08:08:55.056714+00:00",
         "impact": {
           "restaurants": [
@@ -671,8 +717,8 @@
         "schema_version": 1,
         "mutation_id": "3a2f8a1e-7d64-4a2c-9f10-5b6a8d0e1c34",
         "mutation_type": "global_locator.map",
-        "expected_menu_group_revision": 0,
-        "preview_digest": "e5927579f7fc87ddc76886c4e7059ba2784219c41226ecd60a3cbc09c5bcff75",
+        "expected_menu_group_revision": 1,
+        "preview_digest": "aea2d18d12ab6863e7787c0229acf9b88613e9fa13699735f2f8640685077d38",
         "payload": {
           "locator_type": "pos_item",
           "locator_value": "8442",
@@ -687,10 +733,10 @@
         "mutation_id": "3a2f8a1e-7d64-4a2c-9f10-5b6a8d0e1c34",
         "mutation_type": "global_locator.map",
         "menu_group_id": "group-1",
-        "menu_group_revision": 1,
+        "menu_group_revision": 2,
         "origin_restaurant_id": "9zz9zz9zz9",
         "actor": "ops",
-        "event_seq": 1,
+        "event_seq": 2,
         "accepted_at": "2026-08-09T08:08:55.056714+00:00",
         "impact": {
           "restaurants": [
@@ -729,7 +775,7 @@
           }
         },
         "applied": {
-          "rule_id": 1,
+          "rule_id": "3f1c9a04b7d24e6c8a51d0e2f4b67c98",
           "restaurant_id": "9zz9zz9zz9",
           "prior_state": null,
           "assignments_repointed": {
@@ -813,8 +859,8 @@
         "status": "conflict",
         "code": "global_menu_revision_conflict",
         "error": "The menu group changed on the server. Pull the latest global menu state, re-preview and confirm again.",
-        "expected_menu_group_revision": 0,
-        "current_menu_group_revision": 1,
+        "expected_menu_group_revision": 1,
+        "current_menu_group_revision": 2,
         "recommended_action": "pull_latest_global_menu_state"
       }
     },
@@ -911,7 +957,7 @@
       "request_payload": {
         "schema_version": 1,
         "mutation_type": "global_menu.undo",
-        "expected_menu_group_revision": 2,
+        "expected_menu_group_revision": 3,
         "mutation_id": "3f0d1b1e-6a4f-4f4d-9f5a-2b8c1d0e7a91",
         "preview_digest": "<preview_digest from §25.8.1>",
         "payload": {

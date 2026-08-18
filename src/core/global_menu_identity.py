@@ -590,8 +590,9 @@ def _rule_resolution(
     restaurant_id: Optional[str] = None,
 ) -> Optional[GlobalIdentityResolution]:
     if locator_kind == "alias":
-        # Kept parseable in historical cache/event rows until the server's
-        # retirement tombstone arrives, but never consulted as authority.
+        # Display-name aliases are not mapping authority. Historical cache
+        # rows are removed only by an explicit tombstone or the catalog-cutover
+        # cache wipe; they are never consulted here.
         return None
     normalized = normalize_locator(locator_kind, locator_value)
     if not normalized:
